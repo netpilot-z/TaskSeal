@@ -10,7 +10,7 @@ import {
 import {
   getLinearCoordinates,
   readProjectConfiguration
-} from "../config/project-config.js";
+} from "../config/project-config.ts";
 
 const DEFAULT_SOURCE =
   "docs/tickets/0002-codex-runner-milestone.md";

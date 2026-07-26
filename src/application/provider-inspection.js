@@ -2,7 +2,7 @@ import {
   getGitHubCoordinates,
   getLinearCoordinates,
   readProjectConfiguration
-} from "../config/project-config.js";
+} from "../config/project-config.ts";
 import {
   normalizeGitHubCheck,
   normalizeGitHubIssue,
