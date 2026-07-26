@@ -59,7 +59,7 @@ journal unchanged: true
 
 这次外部创建是一次有明确目标和范围的操作者授权动作，不是 `inspect` 的隐式副作用。`inspect github-issue` 本身仍只发送 GET。
 
-操作者随后授权完成 PR/Check 联调。空仓库先以已验证项目状态建立 `main` 基线，再从 `feature/github-delivery-smoke` 创建 Draft PR `#2`。CI 只授予 `contents: read`，官方 Action 固定到完整 commit SHA，checkout 不持久化 GitHub 凭证，唯一 job/check 名称为 `tests`。
+操作者随后授权完成 PR/Check 联调。空仓库先以已验证项目状态建立基线，并从 `feature/github-delivery-smoke` 创建 Draft PR `#2`；操作者之后要求将默认主线重命名为 `master`，GitHub 自动迁移 PR base。CI 只授予 `contents: read`，官方 Action 固定到完整 commit SHA，checkout 不持久化 GitHub 凭证，唯一 job/check 名称为 `tests`。
 
 首次 CI 正确触发，但暴露了一个真实跨平台问题：通用 doctor 测试硬编码断言 Windows 的 `codex-path.exe`，Linux runner 实际正确使用 `codex`。测试改为按 `process.platform` 精确断言后，本地 114 项测试和 GitHub `tests` Check 均通过。完整 GitHub inspection 结果为：
 
