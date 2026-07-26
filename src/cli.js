@@ -18,6 +18,8 @@ import { CodexRunner } from "./runners/codex-runner.js";
 import { createTaskSealServer } from "./server.js";
 import { FileEventJournal } from "./storage/event-journal.js";
 
+const MINIMUM_NODE_VERSION = [24, 12, 0];
+const MINIMUM_NODE_VERSION_LABEL = "24.12.0";
 const USAGE = `Usage:
   taskseal init
   taskseal doctor
@@ -35,6 +37,7 @@ export async function runCli({
   output = process.stdout,
   now = () => new Date(),
   commandRunner = runCommand,
+  nodeVersion = process.versions.node,
   startControlRoom = startPersistentControlRoom,
   runWorkItem,
   inspectGitHubIssue,
@@ -55,7 +58,11 @@ export async function runCli({
   }
 
   if (command === "doctor") {
-    const diagnostics = await collectDiagnostics({ cwd, commandRunner });
+    const diagnostics = await collectDiagnostics({
+      cwd,
+      commandRunner,
+      nodeVersion
+    });
     output.write(renderDiagnostics(diagnostics));
     return diagnostics.ready ? 0 : 1;
   }
@@ -296,11 +303,25 @@ export async function initializeProject({ cwd, now = () => new Date() }) {
   };
 }
 
-export async function collectDiagnostics({ cwd, commandRunner = runCommand }) {
-  const nodeMajor = Number(process.versions.node.split(".")[0]);
+export async function collectDiagnostics({
+  cwd,
+  commandRunner = runCommand,
+  nodeVersion = process.versions.node
+}) {
+  const parsedNodeVersion = parseNodeVersion(nodeVersion);
   const node = {
-    ready: Number.isInteger(nodeMajor) && nodeMajor >= 24,
-    version: process.version
+    ready:
+      parsedNodeVersion !== null &&
+      compareVersions(
+        parsedNodeVersion,
+        MINIMUM_NODE_VERSION
+      ) >= 0,
+    version:
+      typeof nodeVersion === "string"
+        ? nodeVersion.startsWith("v")
+          ? nodeVersion
+          : `v${nodeVersion}`
+        : String(nodeVersion)
   };
   const project = await inspectProjectConfiguration(cwd);
   let codex;
@@ -498,6 +519,15 @@ function parseCodexVersion(value) {
   return match ? match.slice(1).map(Number) : null;
 }
 
+function parseNodeVersion(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(value);
+  return match ? match.slice(1).map(Number) : null;
+}
+
 function compareVersions(left, right) {
   for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
     const difference = (left[index] ?? 0) - (right[index] ?? 0);
@@ -558,7 +588,7 @@ function renderDiagnostics(diagnostics) {
     formatDiagnostic(
       diagnostics.node.ready,
       `Node ${diagnostics.node.version}`,
-      "requires Node 24 or newer"
+      `requires Node ${MINIMUM_NODE_VERSION_LABEL} or newer`
     ),
     formatDiagnostic(
       diagnostics.project.ready,

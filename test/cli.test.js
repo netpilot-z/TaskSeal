@@ -88,6 +88,68 @@ test("doctor reports project and Codex readiness without command stderr", async 
   assert.equal(commands.includes(expectedCodexCommand), true);
 });
 
+test("doctor enforces the Node 24.12.0 runtime minimum", async (t) => {
+  const cwd = await createTemporaryDirectory(t);
+  await mkdir(join(cwd, "config"), { recursive: true });
+  await writeFile(
+    join(cwd, "config", "project.json"),
+    JSON.stringify({ project: "TaskSeal" })
+  );
+  const commandRunner = async (command, args) => {
+    if (command === "where.exe") {
+      return {
+        exitCode: 0,
+        stdout: "codex-path.exe\n",
+        stderr: ""
+      };
+    }
+
+    if (args[0] === "--version") {
+      return {
+        exitCode: 0,
+        stdout: "codex-cli 0.135.0\n",
+        stderr: ""
+      };
+    }
+
+    return {
+      exitCode: 0,
+      stdout: "Logged in using ChatGPT\n",
+      stderr: ""
+    };
+  };
+  const unsupportedOutput = createOutput();
+
+  assert.equal(
+    await runCli({
+      args: ["doctor"],
+      cwd,
+      output: unsupportedOutput,
+      commandRunner,
+      nodeVersion: "24.11.9"
+    }),
+    1
+  );
+  assert.match(
+    unsupportedOutput.text(),
+    /Node v24\.11\.9 .*requires Node 24\.12\.0 or newer/
+  );
+
+  const supportedOutput = createOutput();
+
+  assert.equal(
+    await runCli({
+      args: ["doctor"],
+      cwd,
+      output: supportedOutput,
+      commandRunner,
+      nodeVersion: "24.12.0"
+    }),
+    0
+  );
+  assert.match(supportedOutput.text(), /Node v24\.12\.0 .*ready/);
+});
+
 test("doctor fails clearly when Codex is unavailable", async (t) => {
   const cwd = await createTemporaryDirectory(t);
   const output = createOutput();

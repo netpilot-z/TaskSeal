@@ -20,14 +20,18 @@ TaskSeal 是一个 AI Delivery Control Plane 技术验证项目。它把外部�
 ## 原型边界
 
 - 零生产依赖，基于 Node.js 内置能力。
+- 服务端代码按切片迁移到 TypeScript；Node.js 原生执行，`tsc --noEmit` 负责类型门禁。
+- 当前保持单 package 和 framework-free core；NestJS 与 monorepo 只在出现独立部署或远程平台后端需求时引入。
 - 默认不访问真实凭证，不向外部系统写入数据。
 - 当前结果用于验证技术和产品假设，不代表生产就绪。
 
 ## 本地运行
 
-要求 Node.js 24 或兼容版本。
+要求 Node.js 24.12 或更高版本。首次检出后安装锁定的开发工具：
 
 ```bash
+npm ci
+npm run typecheck
 npm test
 node src/cli.js init
 node src/cli.js doctor
@@ -121,4 +125,6 @@ test-support/  fake App Server
 test/          领域、连接器、集成和 HTTP 测试
 ```
 
-实验结果见 `docs/experiments/`，Runner 设计见 `docs/architecture/codex-runner.md`，连接器演进方向见 `docs/architecture/connectors.md`，Provider 契约与当前真实阻塞见 `docs/research/0001-github-linear-read-contracts.md`。
+服务端目录允许 `.js` 与 `.ts` 在迁移期共存；浏览器原生脚本 `public/` 暂不进入 TypeScript 构建。TypeScript、NestJS 与 monorepo 的取舍见 `docs/adr/0002-typescript-repository-strategy.md`，迁移规格见 `docs/specs/0005-typescript-migration.md`。
+
+实验结果见 `docs/experiments/`，Runner 设计见 `docs/architecture/codex-runner.md`，连接器演进方向见 `docs/architecture/connectors.md`，Provider 契约见 `docs/research/0001-github-linear-read-contracts.md`。

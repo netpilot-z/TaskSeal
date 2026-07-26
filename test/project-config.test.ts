@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 
 import {
   getGitHubCoordinates,
   getLinearCoordinates,
   readProjectConfiguration
-} from "../src/config/project-config.js";
+} from "../src/config/project-config.ts";
 
 test("project configuration exposes validated non-secret provider coordinates", async (t) => {
   const cwd = await createTemporaryDirectory(t);
@@ -59,7 +59,10 @@ test("project configuration reports invalid JSON and provider coordinates safely
   );
 });
 
-async function writeConfiguration(cwd, value) {
+async function writeConfiguration(
+  cwd: string,
+  value: unknown
+): Promise<void> {
   await mkdir(join(cwd, "config"), { recursive: true });
   await writeFile(
     join(cwd, "config", "project.json"),
@@ -67,16 +70,21 @@ async function writeConfiguration(cwd, value) {
   );
 }
 
-async function createTemporaryDirectory(t) {
+async function createTemporaryDirectory(
+  t: TestContext
+): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "taskseal-config-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   return directory;
 }
 
-function hasCode(code) {
-  return (error) => error?.code === code;
+function hasCode(code: string): (error: unknown) => boolean {
+  return (error) =>
+    error instanceof Error &&
+    "code" in error &&
+    error.code === code;
 }
 
-function escapeRegExp(value) {
+function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
