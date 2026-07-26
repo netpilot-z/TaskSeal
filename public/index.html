@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="TaskSeal evidence-driven AI delivery control room prototype"
+    />
+    <title>TaskSeal Control Room</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="TaskSeal home">
+          <span class="brand-mark" aria-hidden="true">
+            <span>TS</span>
+          </span>
+          <span>
+            <strong>TaskSeal</strong>
+            <small>Control Room</small>
+          </span>
+        </a>
+
+        <div class="topbar-meta">
+          <span class="environment-badge">
+            <span class="pulse-dot" aria-hidden="true"></span>
+            <span id="environment-label">Local experiment</span>
+          </span>
+          <span class="snapshot-time" id="snapshot-time">Loading snapshot…</span>
+        </div>
+      </header>
+
+      <main>
+        <section class="hero">
+          <div>
+            <p class="eyebrow">AI DELIVERY CONTROL PLANE</p>
+            <h1>Proof before done.</h1>
+            <p class="hero-copy">
+              One accountable view across work, agents, artifacts, evidence,
+              and human acceptance.
+            </p>
+          </div>
+
+          <div
+            class="demo-controls"
+            id="demo-controls"
+            aria-label="Demo controls"
+          >
+            <button class="button button-secondary" id="reset-button" type="button">
+              Reset
+            </button>
+            <button class="button button-secondary" id="next-button" type="button">
+              Next event
+            </button>
+            <button class="button button-primary" id="run-button" type="button">
+              Run full loop
+            </button>
+          </div>
+
+          <div
+            class="runner-controls"
+            id="runner-controls"
+            aria-label="Codex runner controls"
+            hidden
+          >
+            <label class="prompt-field" for="runner-prompt">
+              <span>Codex assignment</span>
+              <textarea
+                id="runner-prompt"
+                rows="3"
+                placeholder="Describe the bounded work for this attempt…"
+              ></textarea>
+            </label>
+            <div class="runner-actions">
+              <label class="safety-toggle">
+                <input id="read-only-input" type="checkbox" checked />
+                <span>Read-only validation</span>
+              </label>
+              <button
+                class="button button-primary"
+                id="codex-run-button"
+                type="button"
+              >
+                Run Codex
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="summary-grid" aria-label="Workflow summary">
+          <article class="summary-card summary-total">
+            <span>Total work</span>
+            <strong id="summary-total">—</strong>
+            <small>Unified work items</small>
+          </article>
+          <article class="summary-card summary-agent">
+            <span>Active agents</span>
+            <strong id="summary-agents">—</strong>
+            <small>Attempts in progress</small>
+          </article>
+          <article class="summary-card summary-review">
+            <span>Awaiting review</span>
+            <strong id="summary-reviewing">—</strong>
+            <small>Evidence gate open</small>
+          </article>
+          <article class="summary-card summary-accepted">
+            <span>Accepted</span>
+            <strong id="summary-accepted">—</strong>
+            <small>Verified outcomes</small>
+          </article>
+        </section>
+
+        <section class="workspace-grid">
+          <div class="panel work-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="section-kicker">WORKSTREAM</p>
+                <h2>Delivery queue</h2>
+              </div>
+              <span class="step-counter" id="step-counter">Step — / —</span>
+            </div>
+            <div id="work-items" class="work-items"></div>
+          </div>
+
+          <aside class="panel timeline-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="section-kicker">LIVE TRACE</p>
+                <h2>Evidence chain</h2>
+              </div>
+            </div>
+            <ol class="timeline" id="timeline"></ol>
+          </aside>
+        </section>
+
+        <section class="principle-strip" aria-label="TaskSeal operating principle">
+          <div class="principle-mark" aria-hidden="true">✓</div>
+          <div>
+            <strong>An agent completion is a claim, not a decision.</strong>
+            <p>
+              TaskSeal accepts work only when the current artifact revision has
+              the required evidence and an accountable owner approves it.
+            </p>
+          </div>
+        </section>
+        <p
+          class="visually-hidden"
+          id="live-status"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        ></p>
+      </main>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

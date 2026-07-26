@@ -1,0 +1,5 @@
+.env
+.taskseal/
+coverage/
+node_modules/
+tmp/

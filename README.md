@@ -1,0 +1,124 @@
+# TaskSeal
+
+> Proof before done.
+
+TaskSeal 是一个 AI Delivery Control Plane 技术验证项目。它把外部任务、Agent 执行、交付物、验证证据和最终验收归一到一条可复核的工作流中。
+
+当前原型已验证两条互补链路：
+
+- fixture 证据链：`Linear → Codex → GitHub → Acceptance`
+- 真实运行链：`Local WorkItem → Codex App Server → Attempt terminal state → Control Room`
+- provider 只读链：`GitHub/Linear API → explicit mapping → canonical snapshot`
+
+## 项目坐标
+
+- GitHub：`netpilot-z/TaskSeal`
+- Linear workspace：`netpilot-z`
+- Linear team：`netpilot`
+- Linear project：`TaskSeal`
+
+## 原型边界
+
+- 零生产依赖，基于 Node.js 内置能力。
+- 默认不访问真实凭证，不向外部系统写入数据。
+- 当前结果用于验证技术和产品假设，不代表生产就绪。
+
+## 本地运行
+
+要求 Node.js 24 或兼容版本。
+
+```bash
+npm test
+node src/cli.js init
+node src/cli.js doctor
+node src/cli.js run TS-1 --read-only --prompt "Reply with a short status."
+node src/cli.js sync linear --dry-run
+npm start
+```
+
+`doctor` 会检查项目配置、Codex 可执行文件和登录状态。在 Windows 上，TaskSeal 会比较 PATH 与本机 Codex App 的可用版本并选择较新的版本；也可通过 `TASKSEAL_CODEX_BIN` 显式指定。
+
+启动后访问 `http://127.0.0.1:4317`。Control Room 会读取 `.taskseal/events.jsonl` 的持久状态，并可从界面派发一个 Codex Attempt。
+
+当前 HTTP 控制面只允许 loopback；远程团队访问需要后续先补认证、TLS、租户权限与审计，不能通过修改 `HOST` 直接暴露。
+
+如只想验证 fixture 证据链，可运行：
+
+```bash
+npm test
+```
+
+## Provider 只读检查
+
+TaskSeal 可以预览 GitHub 与 Linear 的真实只读事实，但不会把 snapshot 写入 journal：
+
+```bash
+node src/cli.js inspect github-issue \
+  --issue 1 \
+  --work-item TS-1 \
+  --criterion tests
+
+node src/cli.js inspect github \
+  --issue 1 \
+  --pr 1 \
+  --check tests \
+  --work-item TS-1 \
+  --attempt run-1 \
+  --criterion tests
+
+node src/cli.js inspect linear \
+  --issue NP-1 \
+  --work-item TS-1 \
+  --criterion tests
+```
+
+GitHub 公开仓库可以匿名读取，也可通过 `GITHUB_TOKEN` 或 `GH_TOKEN` 提供只读 Token。Linear 使用 `LINEAR_API_KEY`，或使用 `LINEAR_ACCESS_TOKEN` 提供 OAuth access token；两者不能同时配置。
+
+`inspect github-issue` 用于先验证单个 Issue 到 WorkItem 的映射；`inspect github` 用于验证完整 Issue → PR → Check 交付链。两者都要求显式映射，不通过标题或时间猜测关联。成功时只输出裁剪后的 provider scope、source reference 和 canonical events，不输出 Token、原始响应、本地路径，也不修改 `.taskseal/events.jsonl`。
+
+当前 Linear 真实只读链已用 `NP-1` 验证成功：Workspace `netpilot-z`、Team `netpilot (NP)`、Project `TaskSeal`。GitHub Issue `#1` 已在操作者明确授权下创建，并已通过 `inspect github-issue` 生成一个 `work_item.created` snapshot；两次真实 smoke 都确认 journal 未变化。完整 `inspect github` 仍等待与 Issue `#1` 关联的 PR 和 PR head 上的 completed Check。
+
+## Linear ticket dry-run
+
+以下命令把仓库 tickets 转为可审查草案：
+
+```bash
+node src/cli.js sync linear --dry-run
+```
+
+输出明确标记 `mutationReady: false`、`networkRequests: 0` 和 `externalWrites: 0`。它不会连接 Linear，更不会创建、更新或关闭 Issue。真实同步需要先修正 scope、完成 UUID/幂等对账设计，并由操作者另行明确授权。
+
+## 当前可验证结果
+
+1. 本地 canonical events 被追加到 JSONL journal，重启后可确定性恢复。
+2. Codex App Server 完成 `initialize → thread/start → turn/start → turn/completed`。
+3. Codex completed 只让 WorkItem 进入 `reviewing`，不会绕过 Artifact、Evidence 和 Owner acceptance。
+4. 失败或中断的 Attempt 会保持 `blocked`；晚到的 Artifact/Evidence 只能归档，不能隐式重新开启评审或验收。
+5. Control Room 可观察 running/reviewing/blocked、活跃 Agent 和历史 Attempt。
+6. GitHub REST 与 Linear GraphQL 只读客户端使用固定契约、精确 scope 和显式映射；mocked-real snapshot 可以内存重放。
+7. Linear `NP-1` 与 GitHub Issue `#1` 的真实只读 snapshot 已成功；完整 GitHub 交付 smoke 仍明确等待 PR/Check，不把部分成功误判为验收通过。
+8. Linear ticket dry-run 对相同输入确定性输出八个草案，网络请求与外部写入均为零。
+9. Linear、GitHub、Gitee 与飞书仍无真实写入；仓库 tickets 不会自动同步到 Linear。
+10. fixture 仍验证 revision-bound Artifact/Evidence 与幂等验收规则。
+
+## 项目结构
+
+```text
+config/        非敏感项目坐标
+docs/          实验、架构和后续接入说明
+fixtures/      匿名外部系统夹具
+public/        本地 Control Room
+src/
+  application/ TaskSeal 写入与重放服务
+  config/      非敏感项目配置读取与校验
+  connectors/  平台事件归一
+  dashboard/   只读总览投影
+  demo/        可重复演示编排
+  domain/      状态与验收不变量
+  runners/     Codex App Server transport 与生命周期
+  storage/     本地 append-only journal
+test-support/  fake App Server
+test/          领域、连接器、集成和 HTTP 测试
+```
+
+实验结果见 `docs/experiments/`，Runner 设计见 `docs/architecture/codex-runner.md`，连接器演进方向见 `docs/architecture/connectors.md`，Provider 契约与当前真实阻塞见 `docs/research/0001-github-linear-read-contracts.md`。

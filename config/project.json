@@ -1,0 +1,11 @@
+{
+  "project": "TaskSeal",
+  "github": {
+    "repository": "netpilot-z/TaskSeal"
+  },
+  "linear": {
+    "workspace": "netpilot-z",
+    "team": "netpilot"
+  },
+  "mode": "persistent"
+}

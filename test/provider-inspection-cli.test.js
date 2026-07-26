@@ -1,0 +1,268 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { runCli } from "../src/cli.js";
+
+test("inspect github-issue parses one explicit issue mapping", async () => {
+  const output = createOutput();
+  const calls = [];
+
+  const exitCode = await runCli({
+    args: [
+      "inspect",
+      "github-issue",
+      "--issue",
+      "7",
+      "--work-item",
+      "TS-7",
+      "--criterion",
+      "tests"
+    ],
+    cwd: "project-root",
+    output,
+    inspectGitHubIssue: async (options) => {
+      calls.push(options);
+      return {
+        schemaVersion: 1,
+        mode: "read-only",
+        provider: "github",
+        events: []
+      };
+    }
+  });
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(calls, [
+    {
+      cwd: "project-root",
+      issueNumber: 7,
+      workItemId: "TS-7",
+      requiredEvidence: ["tests"]
+    }
+  ]);
+  assert.equal(JSON.parse(output.text()).provider, "github");
+});
+
+test("inspect github-issue rejects invalid or delivery-chain arguments", async () => {
+  const invalidArguments = [
+    [
+      "inspect",
+      "github-issue",
+      "--issue",
+      "0",
+      "--work-item",
+      "TS-7",
+      "--criterion",
+      "tests"
+    ],
+    [
+      "inspect",
+      "github-issue",
+      "--issue",
+      "7",
+      "--work-item",
+      "TS-7"
+    ],
+    [
+      "inspect",
+      "github-issue",
+      "--issue",
+      "7",
+      "--work-item",
+      "TS-7",
+      "--criterion",
+      "tests",
+      "--pr",
+      "9"
+    ]
+  ];
+
+  for (const args of invalidArguments) {
+    const output = createOutput();
+    let invoked = false;
+    const exitCode = await runCli({
+      args,
+      output,
+      inspectGitHubIssue: async () => {
+        invoked = true;
+      }
+    });
+
+    assert.equal(exitCode, 2);
+    assert.equal(invoked, false);
+    assert.match(output.text(), /Usage:/);
+  }
+});
+
+test("inspect github parses explicit mappings and renders JSON", async () => {
+  const output = createOutput();
+  const calls = [];
+  const snapshot = {
+    schemaVersion: 1,
+    mode: "read-only",
+    provider: "github",
+    events: []
+  };
+
+  const exitCode = await runCli({
+    args: [
+      "inspect",
+      "github",
+      "--issue",
+      "7",
+      "--pr",
+      "9",
+      "--check",
+      "tests",
+      "--work-item",
+      "TS-7",
+      "--attempt",
+      "attempt-9",
+      "--criterion",
+      "tests"
+    ],
+    cwd: "project-root",
+    output,
+    inspectGitHub: async (options) => {
+      calls.push(options);
+      return snapshot;
+    }
+  });
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(calls, [
+    {
+      cwd: "project-root",
+      issueNumber: 7,
+      pullRequestNumber: 9,
+      checkName: "tests",
+      workItemId: "TS-7",
+      attemptId: "attempt-9",
+      criterionKey: "tests"
+    }
+  ]);
+  assert.deepEqual(JSON.parse(output.text()), snapshot);
+});
+
+test("inspect linear parses one explicit issue mapping", async () => {
+  const output = createOutput();
+  const calls = [];
+
+  const exitCode = await runCli({
+    args: [
+      "inspect",
+      "linear",
+      "--issue",
+      "NET-7",
+      "--work-item",
+      "TS-7",
+      "--criterion",
+      "tests"
+    ],
+    cwd: "project-root",
+    output,
+    inspectLinear: async (options) => {
+      calls.push(options);
+      return {
+        schemaVersion: 1,
+        mode: "read-only",
+        provider: "linear",
+        events: []
+      };
+    }
+  });
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(calls, [
+    {
+      cwd: "project-root",
+      issueReference: "NET-7",
+      workItemId: "TS-7",
+      requiredEvidence: ["tests"]
+    }
+  ]);
+  assert.equal(JSON.parse(output.text()).provider, "linear");
+});
+
+test("inspect rejects incomplete arguments and renders safe provider errors", async () => {
+  const usageOutput = createOutput();
+  let invoked = false;
+
+  assert.equal(
+    await runCli({
+      args: ["inspect", "github", "--issue", "1"],
+      output: usageOutput,
+      inspectGitHub: async () => {
+        invoked = true;
+      }
+    }),
+    2
+  );
+  assert.equal(invoked, false);
+  assert.match(usageOutput.text(), /taskseal inspect github/);
+
+  const errorOutput = createOutput();
+  const error = new Error("The configured workspace does not match.");
+  error.code = "LINEAR_WORKSPACE_MISMATCH";
+
+  assert.equal(
+    await runCli({
+      args: [
+        "inspect",
+        "linear",
+        "--issue",
+        "NET-7",
+        "--work-item",
+        "TS-7",
+        "--criterion",
+        "tests"
+      ],
+      output: errorOutput,
+      inspectLinear: async () => {
+        throw error;
+      }
+    }),
+    1
+  );
+  assert.match(errorOutput.text(), /\[LINEAR_WORKSPACE_MISMATCH\]/);
+  assert.match(errorOutput.text(), /does not match/);
+});
+
+test("inspect linear rejects an invalid issue reference before execution", async () => {
+  const output = createOutput();
+  let invoked = false;
+
+  const exitCode = await runCli({
+    args: [
+      "inspect",
+      "linear",
+      "--issue",
+      "not-valid",
+      "--work-item",
+      "TS-7",
+      "--criterion",
+      "tests"
+    ],
+    output,
+    inspectLinear: async () => {
+      invoked = true;
+    }
+  });
+
+  assert.equal(exitCode, 2);
+  assert.equal(invoked, false);
+  assert.match(output.text(), /Usage:/);
+});
+
+function createOutput() {
+  const chunks = [];
+
+  return {
+    write(value) {
+      chunks.push(String(value));
+    },
+    text() {
+      return chunks.join("");
+    }
+  };
+}
