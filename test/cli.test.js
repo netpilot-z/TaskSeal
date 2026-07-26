@@ -83,7 +83,9 @@ test("doctor reports project and Codex readiness without command stderr", async 
   assert.match(output.text(), /Codex codex-cli 0\.135\.0/);
   assert.match(output.text(), /Codex login .*ready/);
   assert.doesNotMatch(output.text(), /private diagnostic/);
-  assert.equal(commands.includes("codex-path.exe"), true);
+  const expectedCodexCommand =
+    process.platform === "win32" ? "codex-path.exe" : "codex";
+  assert.equal(commands.includes(expectedCodexCommand), true);
 });
 
 test("doctor fails clearly when Codex is unavailable", async (t) => {

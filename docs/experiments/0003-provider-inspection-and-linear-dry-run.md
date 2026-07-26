@@ -59,11 +59,32 @@ journal unchanged: true
 
 这次外部创建是一次有明确目标和范围的操作者授权动作，不是 `inspect` 的隐式副作用。`inspect github-issue` 本身仍只发送 GET。
 
+操作者随后授权完成 PR/Check 联调。空仓库先以已验证项目状态建立基线，并从 `feature/github-delivery-smoke` 创建 Draft PR `#2`；操作者之后要求将默认主线重命名为 `master`，GitHub 自动迁移 PR base。CI 只授予 `contents: read`，官方 Action 固定到完整 commit SHA，checkout 不持久化 GitHub 凭证，唯一 job/check 名称为 `tests`。
+
+首次 CI 正确触发，但暴露了一个真实跨平台问题：通用 doctor 测试硬编码断言 Windows 的 `codex-path.exe`，Linux runner 实际正确使用 `codex`。测试改为按 `process.platform` 精确断言后，本地 114 项测试和 GitHub `tests` Check 均通过。完整 GitHub inspection 结果为：
+
+```text
+provider: github
+mode: read-only
+issue: #1
+pullRequest: #2
+verified PR head revision: f7a3d90da46b6f28d4a95137f54f64af2acd1e5b
+verified Check head_sha: f7a3d90da46b6f28d4a95137f54f64af2acd1e5b
+check: tests
+check id: 89805420797
+check conclusion: success
+mapping: TS-1 / github-live-2 / tests
+events: work_item.created, artifact.linked, evidence.recorded
+journal unchanged: true
+```
+
+上述完整 SHA 是首次成功完整 smoke 的不可变 revision 证据；后续文档提交不会改写这次历史结果。真实 snapshot 与显式 completed Attempt 在内存重放后得到 `reviewing`、Evidence passed、AcceptanceDecision null。这证明成功的 CI 证据仍不会绕过 Owner acceptance。PR 保持 Draft，Issue 保持 open；没有 merge、自动关闭或 snapshot import。
+
 ## 得到的结论
 
-Provider contract、显式映射和离线 dry-run 假设在 mocked-real 契约范围内成立。TaskSeal 已经具备首个插件式边界的雏形：provider client 只负责读取事实，normalizer 接受独立映射，领域只接收 canonical events。
+Provider contract、显式映射和离线 dry-run 假设已在 mocked-real 与真实 GitHub/Linear 样本中成立。TaskSeal 已经具备首个插件式边界的雏形：provider client 只负责读取事实，normalizer 接受独立映射，领域只接收 canonical events。
 
-T05 的 Linear 真实成功样本与 GitHub Issue-only 成功样本已经完成；GitHub 的空仓库阻塞已缩小为关联 PR/Check 样本缺失。现在仍不应进入 Linear 自动创建、GitHub 自动关闭或 snapshot import。下一步是为 Issue `#1` 准备并确认关联 PR，以及 PR head 上唯一同名的 completed Check。
+T05/T07 的 Linear 与 GitHub 真实成功样本已经完成。现在仍不应直接进入 Linear 自动创建、GitHub 自动关闭或无人审批 import；下一步是规格化 snapshot import 的 ExternalLink、update、冲突、幂等、审计和 preview/apply 边界。
 
 ## 已知风险
 

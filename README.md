@@ -76,7 +76,7 @@ GitHub 公开仓库可以匿名读取，也可通过 `GITHUB_TOKEN` 或 `GH_TOKE
 
 `inspect github-issue` 用于先验证单个 Issue 到 WorkItem 的映射；`inspect github` 用于验证完整 Issue → PR → Check 交付链。两者都要求显式映射，不通过标题或时间猜测关联。成功时只输出裁剪后的 provider scope、source reference 和 canonical events，不输出 Token、原始响应、本地路径，也不修改 `.taskseal/events.jsonl`。
 
-当前 Linear 真实只读链已用 `NP-1` 验证成功：Workspace `netpilot-z`、Team `netpilot (NP)`、Project `TaskSeal`。GitHub Issue `#1` 已在操作者明确授权下创建，并已通过 `inspect github-issue` 生成一个 `work_item.created` snapshot；两次真实 smoke 都确认 journal 未变化。完整 `inspect github` 仍等待与 Issue `#1` 关联的 PR 和 PR head 上的 completed Check。
+当前 Linear 真实只读链已用 `NP-1` 验证成功：Workspace `netpilot-z`、Team `netpilot (NP)`、Project `TaskSeal`。GitHub 真实链已用获授权的 Issue `#1`、Draft PR `#2` 和 PR head 上成功完成的 `tests` Check 验证：完整 snapshot 生成 `work_item.created`、`artifact.linked` 与 `evidence.recorded`，真实内存重放进入 `reviewing`，且 journal 未变化。
 
 ## Linear ticket dry-run
 
@@ -96,7 +96,7 @@ node src/cli.js sync linear --dry-run
 4. 失败或中断的 Attempt 会保持 `blocked`；晚到的 Artifact/Evidence 只能归档，不能隐式重新开启评审或验收。
 5. Control Room 可观察 running/reviewing/blocked、活跃 Agent 和历史 Attempt。
 6. GitHub REST 与 Linear GraphQL 只读客户端使用固定契约、精确 scope 和显式映射；mocked-real snapshot 可以内存重放。
-7. Linear `NP-1` 与 GitHub Issue `#1` 的真实只读 snapshot 已成功；完整 GitHub 交付 smoke 仍明确等待 PR/Check，不把部分成功误判为验收通过。
+7. Linear `NP-1` 与 GitHub Issue `#1` → Draft PR `#2` → `tests` Check 的真实只读 snapshot 均已成功；GitHub 实际 Evidence 为 passed，但没有 Owner acceptance 时仍保持 `reviewing`。
 8. Linear ticket dry-run 对相同输入确定性输出八个草案，网络请求与外部写入均为零。
 9. Linear、GitHub、Gitee 与飞书仍无真实写入；仓库 tickets 不会自动同步到 Linear。
 10. fixture 仍验证 revision-bound Artifact/Evidence 与幂等验收规则。
