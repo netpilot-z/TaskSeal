@@ -37,7 +37,7 @@
 
 ## T08 — 设计并实现 snapshot import
 
-- 状态：待规格化。
+- 状态：已拆分为 GitHub Issue `#3`（契约与 ADR）、`#4`（preview）和 `#5`（atomic apply）；`#3` 的本地规格与独立审查已完成，待发布。
 - 目的：把经过操作者确认的 provider snapshot 安全导入 TaskSeal journal。
 - 范围：`external_link.linked` 或等价模型、provider object mapping、WorkItem update 语义、event revision、preview/apply 两阶段、本地审计和冲突恢复。
 - 不包含：外部系统写回、多租户、Webhook 自动消费。
@@ -45,6 +45,7 @@
 - 验收标准：同一 snapshot 重复导入幂等；provider 编辑不会触发 `WORK_ITEM_ALREADY_EXISTS` 或同 ID 不同内容冲突；一个 WorkItem 可关联 Linear 与 GitHub。
 - 验证：TDD 覆盖首次 import、重复、update、冲突、乱序、journal 失败和重启重放。
 - 风险与回退：必须保留 preview-only 模式；import 失败不得留下部分 journal 状态。
+- 契约：`docs/specs/0004-snapshot-import.md`；决策：`docs/adr/0001-snapshot-import-contract.md`；审查：`docs/reviews/0001-snapshot-import-contract.md`。
 
 ## T09 — 实现受控 Linear Issue 创建
 

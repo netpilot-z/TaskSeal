@@ -71,12 +71,16 @@ External provider
 
 Linear 真实环境已用 `NP-1` 完成成功 snapshot，并确认 journal 未变化。GitHub 已用 Issue `#1`、Draft PR `#2` 和 PR head 上成功完成的 `tests` Check 完成完整 snapshot；三事件与显式 Attempt 在内存重放后进入 `reviewing`，Evidence passed，journal 未变化。
 
-## 下一阶段：成功样本、导入与受控写回
+## 下一阶段：Snapshot import 与受控写回
 
-接下来先完成：
+Snapshot import 契约已由 `docs/specs/0004-snapshot-import.md` 与 `docs/adr/0001-snapshot-import-contract.md` 决定，但尚未实现：
 
-- 决定是否新增 `external_link.linked`，解决一个 WorkItem 同时关联 Linear 与 GitHub Issue。
-- 设计 snapshot import 的冲突、update 语义和审计记录。
+- 用 `ProviderObjectKey` 和 `external_link.linked` 支持一个 WorkItem 关联 Linear 与 GitHub Issue。
+- 用显式 `managedFields` 决定 canonical 字段归属，禁止按 provider 类型或导入顺序覆盖。
+- 用 `SourceRevision`、`external_link.observed` 和严格限定的 `work_item.updated` 表达 provider 编辑。
+- 先生成零写入 ImportPlan，再把 canonical events 与 ImportReceipt 作为一个 journal batch 原子提交。
+
+在 atomic apply 通过故障注入和重启验证前，系统继续保持 inspection/preview-only。
 
 只有成功样本与 import 语义验证后才考虑：
 
