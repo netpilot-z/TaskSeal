@@ -69,13 +69,12 @@ External provider
 
 这个阶段只需要匿名公开读取、只读 Token 或 OAuth。不得把 Token 写入项目文件、snapshot 或日志。
 
-Linear 真实环境已用 `NP-1` 完成成功 snapshot，并确认 journal 未变化。GitHub Issue `#1` 已在操作者明确授权下创建，Issue-only snapshot 也已成功并确认 journal 未变化；完整 Issue/PR/Check 验收仍缺少关联 PR 与 PR head 上的 completed Check。
+Linear 真实环境已用 `NP-1` 完成成功 snapshot，并确认 journal 未变化。GitHub 已用 Issue `#1`、Draft PR `#2` 和 PR head 上成功完成的 `tests` Check 完成完整 snapshot；三事件与显式 Attempt 在内存重放后进入 `reviewing`，Evidence passed，journal 未变化。
 
 ## 下一阶段：成功样本、导入与受控写回
 
-先完成：
+接下来先完成：
 
-- 为 GitHub Issue `#1` 准备并确认一个关联 PR，以及 PR head 上唯一同名的 completed Check。
 - 决定是否新增 `external_link.linked`，解决一个 WorkItem 同时关联 Linear 与 GitHub Issue。
 - 设计 snapshot import 的冲突、update 语义和审计记录。
 

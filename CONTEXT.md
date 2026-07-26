@@ -14,7 +14,7 @@ TaskSeal 让人类和 AI Agent 的“已完成”变成有证据、可验收、�
 
 本阶段不构建通用 Agent 市场、多租户权限、计费、生产数据库或真实外部写入。Linear workspace `netpilot-z`、team `netpilot` 与 project `TaskSeal` 是已只读验证的真实坐标；仓库 tickets 默认不自动同步。
 
-当前真实环境中，Linear Issue `NP-1` 已完成成功 snapshot；GitHub Issue `#1` 已在操作者明确授权下创建并完成 Issue-only snapshot。关联 PR 与 completed Check 尚未就绪，因此完整 GitHub 交付 snapshot 仍受样本不完整阻塞。TaskSeal 不会从只读检查隐式创建、更新或关闭外部对象。
+当前真实环境中，Linear Issue `NP-1` 已完成成功 snapshot；GitHub Issue `#1`、Draft PR `#2` 与 PR head 上的 `tests` Check 已完成完整只读 snapshot 和真实内存重放。结果进入 `reviewing`，Evidence passed，AcceptanceDecision 仍为空，journal 未变化。Issue、PR 与 CI 的创建均来自操作者明确授权；TaskSeal 不会从只读检查隐式创建、更新、合并或关闭外部对象。
 
 ## 统一语言
 

@@ -50,14 +50,14 @@
 
 ## T05.1 — 实现 GitHub 只读交付 snapshot
 
-- 状态：实现与自动化契约已完成；真实 Issue-only snapshot 已成功，完整交付样本仍缺关联 PR/Check。
+- 状态：已完成；自动化契约、真实 Issue-only 和 Issue `#1` → Draft PR `#2` → `tests` Check 完整 snapshot 均已验证。
 - 目的：验证真实 GitHub Issue、PR 与 Check Run payload 可以生成 revision-bound canonical events。
 - 范围：固定 REST 版本、匿名或环境 Token、显式 Issue/PR/Check 映射、head SHA、同源分页和安全错误。
 - 不包含：自动发现 linked PR、创建或更新 Issue、评论、关闭、merge。
 - 依赖：T04、规格 0003。
 - 验收标准：fake REST contract 可生成 `work_item.created`、`artifact.linked` 与 `evidence.recorded`，并拒绝歧义或 revision 不一致。
 - 验证：GitHub normalizer、read client 与 provider inspection 测试；真实公开仓库 read-only smoke。
-- 风险与回退：完整 PR/Check 样本缺失时返回明确诊断，Issue-only 与 fixture 模式继续可用。
+- 风险与回退：PR/Check 样本缺失或失败时返回明确诊断，Issue-only 与 fixture 模式继续可用。
 
 ## T05.2 — 实现 Linear 只读 Issue snapshot
 
@@ -72,7 +72,7 @@
 
 ## T05.3 — 提供 provider inspect CLI 与契约重放
 
-- 状态：已完成；mocked-real snapshot 可重放，Linear 与 GitHub Issue-only 真实 snapshot 成功，完整 GitHub 样本缺失可稳定诊断。
+- 状态：已完成；mocked-real 与真实 GitHub 完整 snapshot 均可内存重放，Linear 与 GitHub 真实只读 smoke 成功。
 - 目的：让操作者在写入 journal 前审查 provider scope、显式映射和 canonical events。
 - 范围：`inspect github-issue`、`inspect github`、`inspect linear`、JSON snapshot、退出码、错误裁剪和 mocked-real 内存重放。
 - 不包含：snapshot import、缓存、后台轮询或 Control Room provider 面板。

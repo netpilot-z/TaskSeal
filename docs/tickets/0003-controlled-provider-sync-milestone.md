@@ -15,18 +15,18 @@
 
 ## T07.2 — 选择一个真实 GitHub 交付样本
 
-- 状态：进行中；已创建获授权的 GitHub Issue `#1` 并完成 Issue-only snapshot，仍需准备并确认关联 PR、PR head SHA 上唯一同名的 completed Check，以及 Attempt/criterion 映射。
-- 目的：为 GitHub Issue/PR/Check 链提供一个近期、已完成且可公开只读验证的真实对象。
+- 状态：已完成；真实样本为 Issue `#1`、Draft PR `#2`、PR head 上唯一完成且成功的 `tests` Check，映射为 `TS-1` / `github-live-2` / `tests`。
+- 目的：为 GitHub Issue/PR/Check 链提供一个近期且可公开只读验证的真实对象。
 - 范围：确定 Issue 编号、PR 编号、Check 名称、对应 WorkItem/Attempt 和 criterion。
 - 不包含：TaskSeal 自动创建 PR、Push、触发 CI、评论、关闭或 merge；本次 Issue `#1` 创建是单次、明确授权的联调动作。
 - 依赖：T05.1、操作者提供已有样本或单独授权外部写入。
 - 验收标准：指定 PR 的 `head.sha` 上存在唯一同名 completed Check；Issue 与 PR 的业务关联由操作者确认。
-- 验证：`inspect github` 成功输出三个 canonical events，并能在内存契约测试中重放。
+- 验证：`inspect github --issue 1 --pr 2 --check tests --work-item TS-1 --attempt github-live-2 --criterion tests` 成功输出三个 canonical events；与 completed Attempt 在内存重放后为 `reviewing`、Evidence passed、AcceptanceDecision null，journal 哈希不变。
 - 风险与回退：如果目标仓库继续为空，可切换到操作者指定的另一个测试仓库，但不得模糊搜索或擅自创建对象。
 
 ## T07.3 — 完成真实 provider 成功 smoke
 
-- 状态：部分完成；Linear 与 GitHub Issue-only 成功 smoke 已完成，完整 GitHub smoke 仍等待关联 PR/Check 样本。
+- 状态：已完成；Linear 与 GitHub 完整成功 smoke、脱敏输出、内存重放和 journal 不变检查均已完成。
 - 目的：把 T05 从“适配器通过、外部样本阻塞”升级为真实成功样本验证完成。
 - 范围：分别运行一次 GitHub 与 Linear read-only inspect，保存脱敏的实验结论，不保存 raw payload。
 - 不包含：journal import、缓存、轮询、Webhook 或外部写回。

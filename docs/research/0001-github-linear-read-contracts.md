@@ -97,4 +97,4 @@ Project: TaskSeal
 Issue: NP-1
 ```
 
-在操作者确认后，`config/project.json` 的 workspace 修正为 `netpilot-z`，Linear 真实只读 snapshot 成功且 journal 未变化。操作者另行明确授权创建 GitHub 联调 Issue `#1`，其 Issue-only snapshot 也已成功且 journal 未变化；完整 GitHub 交付 snapshot 当前仍缺关联 PR 与 PR head 上的 completed Check。
+在操作者确认后，`config/project.json` 的 workspace 修正为 `netpilot-z`，Linear 真实只读 snapshot 成功且 journal 未变化。操作者另行明确授权创建 GitHub 联调 Issue `#1`、分支 `feature/github-delivery-smoke` 和 Draft PR `#2`；PR head 上的 `tests` Check 成功完成，完整 GitHub 三事件 snapshot 与真实内存重放均成功，journal 未变化。
