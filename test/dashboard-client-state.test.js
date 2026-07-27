@@ -24,6 +24,24 @@ test("dashboard ignores an older response after a newer request starts", () => {
   assert.equal(gate.isLatest(newer), true);
 });
 
+test("dashboard and Provider request gates do not invalidate each other", () => {
+  const dashboardGate = new DashboardRequestGate();
+  const providerGate = new DashboardRequestGate();
+  const dashboardSequence = dashboardGate.issue();
+  const providerSequence = providerGate.issue();
+
+  providerGate.issue();
+
+  assert.equal(
+    dashboardGate.isLatest(dashboardSequence),
+    true
+  );
+  assert.equal(
+    providerGate.isLatest(providerSequence),
+    false
+  );
+});
+
 test("semantic snapshot keys change only with rendered state", () => {
   const workItems = [{ id: "TS-1", status: "running" }];
 

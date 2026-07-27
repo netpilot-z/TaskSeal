@@ -42,7 +42,7 @@ npm start
 
 `doctor` 会检查项目配置、Codex 可执行文件和登录状态。在 Windows 上，TaskSeal 会比较 PATH 与本机 Codex App 的可用版本并选择较新的版本；也可通过 `TASKSEAL_CODEX_BIN` 显式指定。
 
-启动后访问 `http://127.0.0.1:4317`。Control Room 会读取 `.taskseal/events.jsonl` 的持久交付状态，并可从界面派发一个 Codex Attempt。`GET /api/providers` 会从独立的 `.taskseal/provider-observations.json` 返回脱敏 Provider 状态；两种存储不会互相重放。
+启动后访问 `http://127.0.0.1:4317`。Control Room 会读取 `.taskseal/events.jsonl` 的持久交付状态，并可从界面派发一个 Codex Attempt。Provider 面板独立轮询 `GET /api/providers`，从 `.taskseal/provider-observations.json` 展示脱敏的配置、scope、snapshot、mapping、缺失证据和诊断状态；刷新失败时保留最后一次已知结果并明确标记 stale。两种存储不会互相重放，浏览器也不会据此推断审批或触发外部写入。
 
 当前 HTTP 控制面只允许 loopback；远程团队访问需要后续先补认证、TLS、租户权限与审计，不能通过修改 `HOST` 直接暴露。
 
@@ -117,6 +117,7 @@ node src/cli.ts sync linear --dry-run
 10. fixture 仍验证 revision-bound Artifact/Evidence 与幂等验收规则。
 11. Gitee 内置 AdapterManifest v1、`provider.health` 与 `work-item.read` 已实现，并用公共 `oschina/git-osc#I4` 完成匿名 smoke；Gitee preview、apply 与 candidate direct append 均失败关闭，飞书保留为后续异构压力测试。
 12. Provider Observation v1 已建立独立、有界、原子替换的 JSON 读模型；按 operation start freshness 拒绝乱序覆盖，通过 observed snapshot-import façade 组合真实 preview/apply，并以 persistent-only `GET /api/providers` 暴露 `configured`、`scope_mismatch`、`sample_missing`、`snapshot_ready` 与 `sync_failed`。
+13. Control Room 已具备 Provider 五态卡片、最新 observation 列表、手动刷新、独立轮询、乱序响应防护和 stale 保留视图；完整审批、提交未知与对账时间线仍由受控写 operation journal 提供。
 
 ## 项目结构
 

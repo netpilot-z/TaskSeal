@@ -38,6 +38,20 @@ test("the local API exposes the workflow and can run the demo to acceptance", as
 
   assert.equal(pageResponse.status, 200);
   assert.match(page, /TaskSeal Control Room/);
+  assert.match(page, /Provider operations/);
+
+  const providerStateResponse = await fetch(
+    `${baseUrl}/provider-state.js`
+  );
+  assert.equal(providerStateResponse.status, 200);
+  assert.match(
+    providerStateResponse.headers.get("content-type") ?? "",
+    /text\/javascript/
+  );
+  assert.match(
+    await providerStateResponse.text(),
+    /createProviderPanelModel/
+  );
 
   const initialResponse = await fetch(`${baseUrl}/api/dashboard`);
   const initial: unknown = await initialResponse.json();
