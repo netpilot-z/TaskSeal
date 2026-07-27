@@ -2,7 +2,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 
-import { projectDashboard } from "./dashboard/projection.js";
+import { projectDashboard } from "./dashboard/projection.ts";
 import { replayDemoSteps } from "./demo/scenario.js";
 
 const STATIC_FILES = new Map([

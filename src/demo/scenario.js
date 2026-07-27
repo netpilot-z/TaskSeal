@@ -6,7 +6,7 @@ import {
   normalizeGitHubPullRequest
 } from "../connectors/github.js";
 import { normalizeLinearIssue } from "../connectors/linear.js";
-import { applyEvent, createWorkflow } from "../domain/workflow.js";
+import { applyEvent, createWorkflow } from "../domain/workflow.ts";
 
 export async function loadDemoSteps() {
   const [

@@ -1,5 +1,5 @@
-import { projectDashboard } from "../dashboard/projection.js";
-import { applyEvent, createWorkflow } from "../domain/workflow.js";
+import { projectDashboard } from "../dashboard/projection.ts";
+import { applyEvent, createWorkflow } from "../domain/workflow.ts";
 import {
   createImportBatchRecord,
   validateImportBatchRecord,

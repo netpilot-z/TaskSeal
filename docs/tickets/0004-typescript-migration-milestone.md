@@ -14,13 +14,13 @@
 
 ## T12.2 — 迁移领域工作流与总览投影
 
-- 状态：GitHub Issue `#13`，snapshot atomic apply `#5` 已完成，可作为下一项执行。
+- 状态：已完成；GitHub Issue `#13`，领域与 dashboard 已进入 strict TypeScript 门禁。
 - 目的：让 WorkItem、Attempt、Artifact、Evidence 和 Acceptance 的核心契约进入 strict 类型检查。
 - 范围：workflow、dashboard projection、对应 fixture 和测试类型。
 - 不包含：改变领域状态、不变量或事件 schema。
 - 依赖：T12.1；与 snapshot import 分支合并后重新核对领域事件。
 - 验收标准：canonical event 使用可辨识联合类型；外部 snapshot 仍先运行时校验；全部领域回归通过。
-- 验证：领域与 dashboard 定向测试、全量测试。
+- 验证：类型检查通过；领域与 dashboard 直接测试 25/25、snapshot domain/preview/apply 回归 51/51、全量测试 212/212 通过；两轮独立代码审查无剩余 P0–P3 问题。
 
 ## T12.3 — 迁移 application 与 storage
 

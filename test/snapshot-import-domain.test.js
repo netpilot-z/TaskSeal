@@ -5,7 +5,7 @@ import {
   applyEvent,
   classifyProcessedEvent,
   createWorkflow
-} from "../src/domain/workflow.js";
+} from "../src/domain/workflow.ts";
 
 test("the domain exposes the single processed-event classification contract", () => {
   const event = createLegacyWorkItemEvent();

@@ -16,7 +16,7 @@ import {
 import {
   applyEvent,
   createWorkflow
-} from "../src/domain/workflow.js";
+} from "../src/domain/workflow.ts";
 import {
   FileEventJournal
 } from "../src/storage/event-journal.js";

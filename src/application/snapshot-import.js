@@ -1,7 +1,7 @@
 import {
   applyEvent,
   classifyProcessedEvent
-} from "../domain/workflow.js";
+} from "../domain/workflow.ts";
 import {
   canonicalizeJson,
   digestCanonicalJson

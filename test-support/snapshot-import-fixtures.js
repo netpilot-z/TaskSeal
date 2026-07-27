@@ -3,7 +3,7 @@ import {
 } from "../src/application/snapshot-import.js";
 import {
   createWorkflow
-} from "../src/domain/workflow.js";
+} from "../src/domain/workflow.ts";
 import {
   digestProviderFactContent
 } from "../src/lib/provider-snapshot.js";

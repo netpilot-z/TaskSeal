@@ -10,7 +10,7 @@ import {
   inspectLinearProvider
 } from "../src/application/provider-inspection.js";
 import { normalizeCodexRun } from "../src/connectors/codex.js";
-import { applyEvent, createWorkflow } from "../src/domain/workflow.js";
+import { applyEvent, createWorkflow } from "../src/domain/workflow.ts";
 import {
   digestProviderFactContent
 } from "../src/lib/provider-snapshot.js";

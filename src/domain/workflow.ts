@@ -1,6 +1,303 @@
 import { createHash } from "node:crypto";
 
-export function createWorkflow() {
+export type WorkItemStatus =
+  | "planned"
+  | "running"
+  | "reviewing"
+  | "blocked"
+  | "accepted";
+
+export type AttemptTerminalOutcome =
+  | "completed"
+  | "failed"
+  | "interrupted";
+
+export type AttemptStatus =
+  | "running"
+  | "superseded"
+  | AttemptTerminalOutcome;
+
+export interface Attempt {
+  id: string;
+  agentId: string;
+  status: AttemptStatus;
+  startedAt: string;
+  completedAt?: string;
+  runtimeOutcome?: AttemptTerminalOutcome;
+  threadId?: string | undefined;
+  turnId?: string | undefined;
+  summary?: string | undefined;
+}
+
+export interface Artifact {
+  id: string;
+  attemptId: string;
+  kind: string;
+  revision: string;
+  url: string;
+  linkedAt: string;
+}
+
+export interface Evidence {
+  id: string;
+  attemptId: string;
+  artifactId: string;
+  revision: string;
+  criterionKey: string;
+  outcome: "passed" | "failed";
+  url: string;
+  recordedAt: string;
+}
+
+export interface AcceptanceDecision {
+  decision: "accepted" | "rejected";
+  actor: string;
+  reason: string;
+  decidedAt: string;
+}
+
+export interface ActiveArtifact {
+  artifactId: string;
+  revision: string;
+  linkedAt: string;
+}
+
+export interface ScopeRef {
+  kind: string;
+  key: string;
+  parentKey?: string;
+}
+
+export interface ExternalObservation {
+  revisionId: string;
+  occurredAt: string;
+  contentDigest: string;
+  title: string;
+  url?: string;
+}
+
+export type ManagedField = "title";
+
+export interface RichExternalLink {
+  providerObjectKey: string;
+  provider: string;
+  objectType: string;
+  externalId: string;
+  scopeRef: ScopeRef;
+  url: string;
+  managedFields: ManagedField[];
+  lastObservation: ExternalObservation;
+  legacy?: never;
+}
+
+export interface LegacyExternalLink {
+  providerObjectKey: string;
+  provider: string;
+  objectType: "issue" | null;
+  externalId: string;
+  scopeRef: null;
+  url: string;
+  managedFields: null;
+  lastObservation: null;
+  legacy: true;
+}
+
+export type ExternalLink = RichExternalLink | LegacyExternalLink;
+
+export interface WorkItem {
+  id: string;
+  title: string;
+  status: WorkItemStatus;
+  requiredEvidence: string[];
+  activeAttemptId: string | null;
+  activeArtifact: ActiveArtifact | null;
+  attempts: Attempt[];
+  artifacts: Artifact[];
+  evidence: Evidence[];
+  acceptanceDecision: AcceptanceDecision | null;
+  externalLinks: ExternalLink[];
+}
+
+export interface Workflow {
+  processedEvents: Record<string, string>;
+  processedEventIds: string[];
+  workItems: Record<string, WorkItem>;
+}
+
+interface LegacyCreatedExternalLink {
+  providerObjectKey?: never;
+  provider: string;
+  externalId: string;
+  url: string;
+}
+
+interface WorkItemCreatedPayload {
+  title: string;
+  requiredEvidence: string[];
+  externalLink: LegacyCreatedExternalLink | RichExternalLink;
+}
+
+interface ExternalLinkLinkedPayload {
+  link: RichExternalLink;
+}
+
+export interface ExternalLinkBaseline {
+  providerObjectKey: string;
+  objectType: "issue";
+  scopeRef: ScopeRef;
+  managedFields: ManagedField[];
+}
+
+interface ExternalLinkObservedBaselinePayload {
+  providerObjectKey: string;
+  expectedRevisionId: null;
+  observation: ExternalObservation;
+  baseline: ExternalLinkBaseline;
+}
+
+interface ExternalLinkObservedRevisionPayload {
+  providerObjectKey: string;
+  expectedRevisionId: string;
+  observation: ExternalObservation;
+  baseline?: never;
+}
+
+type ExternalLinkObservedPayload =
+  | ExternalLinkObservedBaselinePayload
+  | ExternalLinkObservedRevisionPayload;
+
+export interface UpdateSource {
+  providerObjectKey: string;
+  revisionId: string;
+  contentDigest: string;
+}
+
+export interface TitleChanges {
+  title: {
+    before: string;
+    after: string;
+  };
+}
+
+interface WorkItemUpdatedPayload {
+  source: UpdateSource;
+  changes: TitleChanges;
+}
+
+interface AttemptStartedPayload {
+  attemptId: string;
+  agentId: string;
+}
+
+interface AttemptFinishedPayload {
+  attemptId: string;
+  outcome: AttemptTerminalOutcome;
+  threadId?: string;
+  turnId?: string;
+  summary?: string;
+}
+
+interface ArtifactLinkedPayload {
+  artifactId: string;
+  attemptId: string;
+  kind: string;
+  revision: string;
+  url: string;
+}
+
+interface EvidenceRecordedPayload {
+  evidenceId: string;
+  attemptId: string;
+  artifactId: string;
+  revision: string;
+  criterionKey: string;
+  outcome: "passed" | "failed";
+  url: string;
+}
+
+interface AcceptanceDecidedPayload {
+  decision: "accepted" | "rejected";
+  actor: string;
+  reason: string;
+}
+
+interface CanonicalEventOf<
+  Type extends string,
+  Payload
+> {
+  eventId: string;
+  workItemId: string;
+  type: Type;
+  occurredAt: string;
+  payload: Payload;
+}
+
+export type WorkItemCreatedEvent = CanonicalEventOf<
+  "work_item.created",
+  WorkItemCreatedPayload
+>;
+export type ExternalLinkLinkedEvent = CanonicalEventOf<
+  "external_link.linked",
+  ExternalLinkLinkedPayload
+>;
+export type ExternalLinkObservedEvent = CanonicalEventOf<
+  "external_link.observed",
+  ExternalLinkObservedPayload
+>;
+export type WorkItemUpdatedEvent = CanonicalEventOf<
+  "work_item.updated",
+  WorkItemUpdatedPayload
+>;
+export type AttemptStartedEvent = CanonicalEventOf<
+  "attempt.started",
+  AttemptStartedPayload
+>;
+export type AttemptFinishedEvent = CanonicalEventOf<
+  "attempt.finished",
+  AttemptFinishedPayload
+>;
+export type ArtifactLinkedEvent = CanonicalEventOf<
+  "artifact.linked",
+  ArtifactLinkedPayload
+>;
+export type EvidenceRecordedEvent = CanonicalEventOf<
+  "evidence.recorded",
+  EvidenceRecordedPayload
+>;
+export type AcceptanceDecidedEvent = CanonicalEventOf<
+  "acceptance.decided",
+  AcceptanceDecidedPayload
+>;
+
+export type CanonicalEvent =
+  | WorkItemCreatedEvent
+  | ExternalLinkLinkedEvent
+  | ExternalLinkObservedEvent
+  | WorkItemUpdatedEvent
+  | AttemptStartedEvent
+  | AttemptFinishedEvent
+  | ArtifactLinkedEvent
+  | EvidenceRecordedEvent
+  | AcceptanceDecidedEvent;
+
+interface EventEnvelope {
+  eventId: string;
+  workItemId: string;
+  type: string;
+  occurredAt: string;
+  payload: object;
+}
+
+type AcceptanceDecisionEventCandidate = CanonicalEventOf<
+  "acceptance.decided",
+  object
+>;
+
+type ValidatedEvent =
+  | Exclude<CanonicalEvent, AcceptanceDecidedEvent>
+  | AcceptanceDecisionEventCandidate;
+
+export function createWorkflow(): Workflow {
   return {
     processedEvents: {},
     processedEventIds: [],
@@ -8,9 +305,12 @@ export function createWorkflow() {
   };
 }
 
-export function applyEvent(workflow, event) {
+export function applyEvent(
+  workflow: Workflow,
+  event: unknown
+): Workflow {
   validateEventEnvelope(event);
-  validateEventPayload(event);
+  const validatedEvent = validateEventPayload(event);
 
   const processedDecision = classifyProcessedEvent(
     workflow,
@@ -28,46 +328,53 @@ export function applyEvent(workflow, event) {
     );
   }
 
-  if (event.type === "work_item.created") {
-    return createWorkItem(workflow, event);
+  if (!validatedEvent) {
+    throw new Error(`Unsupported event type: ${event.type}`);
   }
 
-  if (event.type === "external_link.linked") {
-    return linkExternalObject(workflow, event);
+  if (validatedEvent.type === "work_item.created") {
+    return createWorkItem(workflow, validatedEvent);
   }
 
-  if (event.type === "external_link.observed") {
-    return observeExternalObject(workflow, event);
+  if (validatedEvent.type === "external_link.linked") {
+    return linkExternalObject(workflow, validatedEvent);
   }
 
-  if (event.type === "work_item.updated") {
-    return updateWorkItem(workflow, event);
+  if (validatedEvent.type === "external_link.observed") {
+    return observeExternalObject(workflow, validatedEvent);
   }
 
-  if (event.type === "attempt.started") {
-    return startAttempt(workflow, event);
+  if (validatedEvent.type === "work_item.updated") {
+    return updateWorkItem(workflow, validatedEvent);
   }
 
-  if (event.type === "attempt.finished") {
-    return finishAttempt(workflow, event);
+  if (validatedEvent.type === "attempt.started") {
+    return startAttempt(workflow, validatedEvent);
   }
 
-  if (event.type === "artifact.linked") {
-    return linkArtifact(workflow, event);
+  if (validatedEvent.type === "attempt.finished") {
+    return finishAttempt(workflow, validatedEvent);
   }
 
-  if (event.type === "evidence.recorded") {
-    return recordEvidence(workflow, event);
+  if (validatedEvent.type === "artifact.linked") {
+    return linkArtifact(workflow, validatedEvent);
   }
 
-  if (event.type === "acceptance.decided") {
-    return decideAcceptance(workflow, event);
+  if (validatedEvent.type === "evidence.recorded") {
+    return recordEvidence(workflow, validatedEvent);
   }
 
-  throw new Error(`Unsupported event type: ${event.type}`);
+  if (validatedEvent.type === "acceptance.decided") {
+    return decideAcceptance(workflow, validatedEvent);
+  }
+
+  return assertNever(validatedEvent);
 }
 
-function createWorkItem(workflow, event) {
+function createWorkItem(
+  workflow: Workflow,
+  event: WorkItemCreatedEvent
+): Workflow {
   if (workflow.workItems[event.workItemId]) {
     throw new DomainError(
       "WORK_ITEM_ALREADY_EXISTS",
@@ -117,8 +424,10 @@ function createWorkItem(workflow, event) {
   };
 }
 
-function normalizeCreatedExternalLink(externalLink) {
-  if (isNonEmptyString(externalLink.providerObjectKey)) {
+function normalizeCreatedExternalLink(
+  externalLink: WorkItemCreatedPayload["externalLink"]
+): ExternalLink {
+  if (isRichExternalLink(externalLink)) {
     return cloneExternalLink(externalLink);
   }
 
@@ -141,7 +450,10 @@ function normalizeCreatedExternalLink(externalLink) {
   };
 }
 
-function linkExternalObject(workflow, event) {
+function linkExternalObject(
+  workflow: Workflow,
+  event: ExternalLinkLinkedEvent
+): Workflow {
   const workItem = requireWorkItem(workflow, event.workItemId);
   const link = event.payload.link;
   const existingOwner = findExternalLinkOwner(
@@ -179,7 +491,10 @@ function linkExternalObject(workflow, event) {
   });
 }
 
-function observeExternalObject(workflow, event) {
+function observeExternalObject(
+  workflow: Workflow,
+  event: ExternalLinkObservedEvent
+): Workflow {
   const workItem = requireWorkItem(workflow, event.workItemId);
   const linkIndex = workItem.externalLinks.findIndex(
     (link) =>
@@ -194,6 +509,14 @@ function observeExternalObject(workflow, event) {
   }
 
   const link = workItem.externalLinks[linkIndex];
+
+  if (!link) {
+    throw new DomainError(
+      "EXTERNAL_LINK_NOT_FOUND",
+      "An observation must reference a linked provider object."
+    );
+  }
+
   const currentObservation = link.lastObservation;
 
   if (event.payload.expectedRevisionId === null) {
@@ -202,7 +525,9 @@ function observeExternalObject(workflow, event) {
       event,
       workItem,
       linkIndex,
-      link
+      link,
+      baseline: event.payload.baseline,
+      observation: event.payload.observation
     });
   }
 
@@ -253,15 +578,12 @@ function observeExternalObject(workflow, event) {
     );
   }
 
-  const externalLinks = workItem.externalLinks.map((item, index) =>
-    index === linkIndex
-      ? {
-          ...item,
-          url: observation.url ?? item.url,
-          lastObservation: { ...observation }
-        }
-      : item
-  );
+  const externalLinks = [...workItem.externalLinks];
+  externalLinks[linkIndex] = {
+    ...link,
+    url: observation.url ?? link.url,
+    lastObservation: { ...observation }
+  };
 
   return withWorkItem(workflow, event, {
     ...workItem,
@@ -274,9 +596,18 @@ function baselineLegacyExternalLink({
   event,
   workItem,
   linkIndex,
-  link
-}) {
-  const baseline = event.payload.baseline;
+  link,
+  baseline,
+  observation
+}: {
+  workflow: Workflow;
+  event: ExternalLinkObservedEvent;
+  workItem: WorkItem;
+  linkIndex: number;
+  link: ExternalLink;
+  baseline: ExternalLinkBaseline;
+  observation: ExternalObservation;
+}): Workflow {
   const hasConflictingOwner = Object.values(
     workflow.workItems
   ).some(
@@ -328,8 +659,7 @@ function baselineLegacyExternalLink({
     );
   }
 
-  const observation = event.payload.observation;
-  const externalLinks = workItem.externalLinks.map(
+  const externalLinks: ExternalLink[] = workItem.externalLinks.map(
     (item, index) => {
       if (index !== linkIndex) {
         return item;
@@ -354,7 +684,10 @@ function baselineLegacyExternalLink({
   });
 }
 
-function updateWorkItem(workflow, event) {
+function updateWorkItem(
+  workflow: Workflow,
+  event: WorkItemUpdatedEvent
+): Workflow {
   const workItem = requireWorkItem(workflow, event.workItemId);
   const source = event.payload.source;
   const titleChange = event.payload.changes.title;
@@ -404,7 +737,13 @@ function updateWorkItem(workflow, event) {
   });
 }
 
-function findExternalLinkOwner(workflow, providerObjectKey) {
+function findExternalLinkOwner(
+  workflow: Workflow,
+  providerObjectKey: string
+): {
+  workItemId: string;
+  link: ExternalLink;
+} | null {
   for (const workItem of Object.values(workflow.workItems)) {
     const link = workItem.externalLinks.find(
       (item) => item.providerObjectKey === providerObjectKey
@@ -418,8 +757,10 @@ function findExternalLinkOwner(workflow, providerObjectKey) {
   return null;
 }
 
-function cloneExternalLink(link) {
-  const scopeRef = {
+function cloneExternalLink(
+  link: RichExternalLink
+): RichExternalLink {
+  const scopeRef: ScopeRef = {
     kind: link.scopeRef.kind,
     key: link.scopeRef.key
   };
@@ -428,7 +769,7 @@ function cloneExternalLink(link) {
     scopeRef.parentKey = link.scopeRef.parentKey;
   }
 
-  const lastObservation = {
+  const lastObservation: ExternalObservation = {
     revisionId: link.lastObservation.revisionId,
     occurredAt: link.lastObservation.occurredAt,
     contentDigest: link.lastObservation.contentDigest,
@@ -451,7 +792,10 @@ function cloneExternalLink(link) {
   };
 }
 
-function startAttempt(workflow, event) {
+function startAttempt(
+  workflow: Workflow,
+  event: AttemptStartedEvent
+): Workflow {
   const workItem = requireWorkItem(workflow, event.workItemId);
 
   if (
@@ -494,7 +838,7 @@ function startAttempt(workflow, event) {
     });
   }
 
-  const previousAttempts = workItem.attempts.map((attempt) =>
+  const previousAttempts: Attempt[] = workItem.attempts.map((attempt) =>
     attempt.id === workItem.activeAttemptId && attempt.status === "running"
       ? {
           ...attempt,
@@ -503,7 +847,7 @@ function startAttempt(workflow, event) {
         }
       : attempt
   );
-  const nextWorkItem = {
+  const nextWorkItem: WorkItem = {
     ...workItem,
     status: "running",
     activeAttemptId: event.payload.attemptId,
@@ -523,7 +867,10 @@ function startAttempt(workflow, event) {
   return withWorkItem(workflow, event, nextWorkItem);
 }
 
-function finishAttempt(workflow, event) {
+function finishAttempt(
+  workflow: Workflow,
+  event: AttemptFinishedEvent
+): Workflow {
   const workItem = requireWorkItem(workflow, event.workItemId);
   const attempt = workItem.attempts.find(
     (item) => item.id === event.payload.attemptId
@@ -546,7 +893,7 @@ function finishAttempt(workflow, event) {
   const changesActiveState =
     workItem.activeAttemptId === attempt.id &&
     attempt.status === "running";
-  const attempts = workItem.attempts.map((item) =>
+  const attempts: Attempt[] = workItem.attempts.map((item) =>
     item.id === attempt.id
       ? {
           ...item,
@@ -574,13 +921,16 @@ function finishAttempt(workflow, event) {
   });
 }
 
-function linkArtifact(workflow, event) {
+function linkArtifact(
+  workflow: Workflow,
+  event: ArtifactLinkedEvent
+): Workflow {
   const workItem = requireWorkItem(workflow, event.workItemId);
-  requireActiveAttempt(workItem, event.payload.attemptId);
-  const activeAttempt = workItem.attempts.find(
-    (attempt) => attempt.id === event.payload.attemptId
+  const activeAttempt = requireActiveAttempt(
+    workItem,
+    event.payload.attemptId
   );
-  const artifact = {
+  const artifact: Artifact = {
     id: event.payload.artifactId,
     attemptId: event.payload.attemptId,
     kind: event.payload.kind,
@@ -604,7 +954,7 @@ function linkArtifact(workflow, event) {
       event,
       activeAttempt
     );
-  const nextArtifacts = isSameRevision
+  const nextArtifacts: Artifact[] = isSameRevision
     ? workItem.artifacts.map((item) =>
         item.id === artifact.id &&
         item.attemptId === artifact.attemptId &&
@@ -630,7 +980,7 @@ function linkArtifact(workflow, event) {
     );
   }
 
-  const nextWorkItem = {
+  const nextWorkItem: WorkItem = {
     ...workItem,
     status: preservesCurrentState
       ? workItem.status
@@ -659,11 +1009,14 @@ function linkArtifact(workflow, event) {
   return withWorkItem(workflow, event, nextWorkItem);
 }
 
-function recordEvidence(workflow, event) {
+function recordEvidence(
+  workflow: Workflow,
+  event: EvidenceRecordedEvent
+): Workflow {
   const workItem = requireWorkItem(workflow, event.workItemId);
-  requireActiveAttempt(workItem, event.payload.attemptId);
-  const activeAttempt = workItem.attempts.find(
-    (attempt) => attempt.id === event.payload.attemptId
+  const activeAttempt = requireActiveAttempt(
+    workItem,
+    event.payload.attemptId
   );
 
   const artifactExists = workItem.artifacts.some(
@@ -697,7 +1050,7 @@ function recordEvidence(workflow, event) {
     );
   }
 
-  const evidence = {
+  const evidence: Evidence = {
     id: event.payload.evidenceId,
     attemptId: event.payload.attemptId,
     artifactId: event.payload.artifactId,
@@ -743,7 +1096,7 @@ function recordEvidence(workflow, event) {
   const hasFailedRequirement = workItem.requiredEvidence.some(
     (criterion) => latestEvidence.get(criterion)?.outcome === "failed"
   );
-  const nextWorkItem = {
+  const nextWorkItem: WorkItem = {
     ...workItem,
     status:
       activeAttempt.status === "failed" ||
@@ -765,8 +1118,12 @@ function recordEvidence(workflow, event) {
   return withWorkItem(workflow, event, nextWorkItem);
 }
 
-function decideAcceptance(workflow, event) {
+function decideAcceptance(
+  workflow: Workflow,
+  event: AcceptanceDecisionEventCandidate
+): Workflow {
   const workItem = requireWorkItem(workflow, event.workItemId);
+  validateAcceptanceDecisionEvent(event);
   const validDecision =
     event.payload.decision === "accepted" ||
     event.payload.decision === "rejected";
@@ -807,7 +1164,7 @@ function decideAcceptance(workflow, event) {
     }
   }
 
-  const nextWorkItem = {
+  const nextWorkItem: WorkItem = {
     ...workItem,
     status: event.payload.decision === "accepted" ? "accepted" : "blocked",
     acceptanceDecision: {
@@ -822,10 +1179,10 @@ function decideAcceptance(workflow, event) {
 }
 
 function shouldPreserveDecisionForExternalFact(
-  workItem,
-  event,
-  activeAttempt
-) {
+  workItem: WorkItem,
+  event: ArtifactLinkedEvent | EvidenceRecordedEvent,
+  activeAttempt: Attempt
+): boolean {
   if (!workItem.acceptanceDecision) {
     return false;
   }
@@ -843,8 +1200,10 @@ function shouldPreserveDecisionForExternalFact(
   );
 }
 
-function getLatestEvidenceByCriterion(workItem) {
-  const latestEvidence = new Map();
+function getLatestEvidenceByCriterion(
+  workItem: WorkItem
+): Map<string, Evidence> {
+  const latestEvidence = new Map<string, Evidence>();
   const activeArtifact = workItem.activeArtifact;
 
   for (const item of workItem.evidence) {
@@ -873,20 +1232,28 @@ function getLatestEvidenceByCriterion(workItem) {
   return latestEvidence;
 }
 
-function requireActiveAttempt(workItem, attemptId) {
-  const attemptExists = workItem.attempts.some(
+function requireActiveAttempt(
+  workItem: WorkItem,
+  attemptId: string
+): Attempt {
+  const attempt = workItem.attempts.find(
     (attempt) => attempt.id === attemptId
   );
 
-  if (!attemptExists || workItem.activeAttemptId !== attemptId) {
+  if (!attempt || workItem.activeAttemptId !== attemptId) {
     throw new DomainError(
       "ATTEMPT_RELATION_INVALID",
       "The event must reference the active attempt."
     );
   }
+
+  return attempt;
 }
 
-function requireWorkItem(workflow, workItemId) {
+function requireWorkItem(
+  workflow: Workflow,
+  workItemId: string
+): WorkItem {
   const workItem = workflow.workItems[workItemId];
 
   if (!workItem) {
@@ -896,7 +1263,11 @@ function requireWorkItem(workflow, workItemId) {
   return workItem;
 }
 
-function withWorkItem(workflow, event, workItem) {
+function withWorkItem(
+  workflow: Workflow,
+  event: CanonicalEvent,
+  workItem: WorkItem
+): Workflow {
   return {
     processedEvents: {
       ...workflow.processedEvents,
@@ -910,20 +1281,16 @@ function withWorkItem(workflow, event, workItem) {
   };
 }
 
-function validateEventEnvelope(event) {
-  const hasValidPayload =
-    event?.payload &&
-    typeof event.payload === "object" &&
-    !Array.isArray(event.payload);
-  const occurredAt = Date.parse(event?.occurredAt);
-
+function validateEventEnvelope(
+  event: unknown
+): asserts event is EventEnvelope {
   if (
-    !isNonEmptyString(event?.eventId) ||
-    !isNonEmptyString(event?.workItemId) ||
-    !isNonEmptyString(event?.type) ||
-    !isNonEmptyString(event?.occurredAt) ||
-    !Number.isFinite(occurredAt) ||
-    !hasValidPayload
+    !isRecord(event) ||
+    !isNonEmptyString(event.eventId) ||
+    !isNonEmptyString(event.workItemId) ||
+    !isNonEmptyString(event.type) ||
+    !isValidTimestamp(event.occurredAt) ||
+    !isRecord(event.payload)
   ) {
     throw new DomainError(
       "EVENT_ENVELOPE_INVALID",
@@ -932,139 +1299,280 @@ function validateEventEnvelope(event) {
   }
 }
 
-function validateEventPayload(event) {
-  const payload = event.payload;
-
+function validateEventPayload(
+  event: EventEnvelope
+): ValidatedEvent | null {
   if (event.type === "work_item.created") {
-    const externalLink = payload.externalLink;
-    const isRichCreate =
-      externalLink?.providerObjectKey !== undefined;
-    const titleIsValid = isRichCreate
-      ? isTitle(payload.title)
-      : isNonEmptyString(payload.title);
-    const evidenceIsValid =
-      Array.isArray(payload.requiredEvidence) &&
-      payload.requiredEvidence.length > 0 &&
-      payload.requiredEvidence.every(isNonEmptyString);
-
-    if (
-      !titleIsValid ||
-      !evidenceIsValid ||
-      !externalLink ||
-      !isNonEmptyString(externalLink.provider) ||
-      !isNonEmptyString(externalLink.externalId) ||
-      !isHttpUrl(externalLink.url)
-    ) {
+    if (!isWorkItemCreatedEvent(event)) {
       throw invalidPayload(event.type);
     }
+    return event;
+  }
 
-    if (
-      isRichCreate &&
-      (!hasOnlyKeys(payload, [
+  if (event.type === "external_link.linked") {
+    if (!isExternalLinkLinkedEvent(event)) {
+      throw invalidPayload(event.type);
+    }
+    return event;
+  }
+
+  if (event.type === "external_link.observed") {
+    if (!isExternalLinkObservedEvent(event)) {
+      throw invalidPayload(event.type);
+    }
+    return event;
+  }
+
+  if (event.type === "work_item.updated") {
+    if (!isWorkItemUpdatedEvent(event)) {
+      throw invalidPayload(event.type);
+    }
+    return event;
+  }
+
+  if (event.type === "attempt.started") {
+    if (!isAttemptStartedEvent(event)) {
+      throw invalidPayload(event.type);
+    }
+    return event;
+  }
+
+  if (event.type === "attempt.finished") {
+    if (!isAttemptFinishedEvent(event)) {
+      throw invalidPayload(event.type);
+    }
+    return event;
+  }
+
+  if (event.type === "artifact.linked") {
+    if (!isArtifactLinkedEvent(event)) {
+      throw invalidPayload(event.type);
+    }
+    return event;
+  }
+
+  if (event.type === "evidence.recorded") {
+    if (!isEvidenceRecordedEvent(event)) {
+      throw invalidPayload(event.type);
+    }
+    return event;
+  }
+
+  if (event.type === "acceptance.decided") {
+    if (!isAcceptanceDecisionEventCandidate(event)) {
+      return null;
+    }
+    return event;
+  }
+
+  return null;
+}
+
+function isWorkItemCreatedEvent(
+  event: EventEnvelope
+): event is WorkItemCreatedEvent {
+  if (event.type !== "work_item.created" || !isRecord(event.payload)) {
+    return false;
+  }
+
+  const payload = event.payload;
+  const externalLink = payload.externalLink;
+
+  if (!isRecord(externalLink)) {
+    return false;
+  }
+
+  const isRichCreate =
+    externalLink.providerObjectKey !== undefined;
+  const titleIsValid = isRichCreate
+    ? isTitle(payload.title)
+    : isNonEmptyString(payload.title);
+  const evidenceIsValid =
+    Array.isArray(payload.requiredEvidence) &&
+    payload.requiredEvidence.length > 0 &&
+    payload.requiredEvidence.every(isNonEmptyString);
+  const commonFieldsAreValid =
+    titleIsValid &&
+    evidenceIsValid &&
+    isNonEmptyString(externalLink.provider) &&
+    isNonEmptyString(externalLink.externalId) &&
+    isHttpUrl(externalLink.url);
+
+  if (!commonFieldsAreValid) {
+    return false;
+  }
+
+  return isRichCreate
+    ? hasOnlyKeys(payload, [
         "title",
         "requiredEvidence",
         "externalLink"
-      ]) ||
-        !isRichExternalLink(externalLink))
-    ) {
-      throw invalidPayload(event.type);
-    }
-  }
+      ]) && isRichExternalLink(externalLink)
+    : isLegacyCreatedExternalLink(externalLink);
+}
 
-  if (
+function isLegacyCreatedExternalLink(
+  value: Record<string, unknown>
+): value is Record<string, unknown> & LegacyCreatedExternalLink {
+  return (
+    value.providerObjectKey === undefined &&
+    isNonEmptyString(value.provider) &&
+    isNonEmptyString(value.externalId) &&
+    isHttpUrl(value.url)
+  );
+}
+
+function isExternalLinkLinkedEvent(
+  event: EventEnvelope
+): event is ExternalLinkLinkedEvent {
+  return (
     event.type === "external_link.linked" &&
-    (!hasOnlyKeys(payload, ["link"]) ||
-      !isRichExternalLink(payload.link))
-  ) {
-    throw invalidPayload(event.type);
-  }
+    isRecord(event.payload) &&
+    hasOnlyKeys(event.payload, ["link"]) &&
+    isRichExternalLink(event.payload.link)
+  );
+}
 
+function isExternalLinkObservedEvent(
+  event: EventEnvelope
+): event is ExternalLinkObservedEvent {
   if (
-    event.type === "external_link.observed" &&
-    (!hasOnlyKeys(payload, [
+    event.type !== "external_link.observed" ||
+    !isRecord(event.payload) ||
+    !hasOnlyKeys(event.payload, [
       "providerObjectKey",
       "expectedRevisionId",
       "observation",
       "baseline"
     ]) ||
-      !isNonEmptyString(payload.providerObjectKey) ||
-      (payload.expectedRevisionId !== null &&
-        !isNonEmptyString(payload.expectedRevisionId)) ||
-      !isObservation(payload.observation) ||
-      (payload.expectedRevisionId === null
-        ? !isExternalLinkBaseline(payload.baseline)
-        : payload.baseline !== undefined))
+    !isNonEmptyString(event.payload.providerObjectKey) ||
+    !isObservation(event.payload.observation)
   ) {
-    throw invalidPayload(event.type);
+    return false;
   }
 
-  if (
+  if (event.payload.expectedRevisionId === null) {
+    return isExternalLinkBaseline(event.payload.baseline);
+  }
+
+  return (
+    isNonEmptyString(event.payload.expectedRevisionId) &&
+    event.payload.baseline === undefined
+  );
+}
+
+function isWorkItemUpdatedEvent(
+  event: EventEnvelope
+): event is WorkItemUpdatedEvent {
+  return (
     event.type === "work_item.updated" &&
-    (!hasOnlyKeys(payload, ["source", "changes"]) ||
-      !isUpdateSource(payload.source) ||
-      !isTitleChanges(payload.changes))
-  ) {
-    throw invalidPayload(event.type);
-  }
+    isRecord(event.payload) &&
+    hasOnlyKeys(event.payload, ["source", "changes"]) &&
+    isUpdateSource(event.payload.source) &&
+    isTitleChanges(event.payload.changes)
+  );
+}
 
-  if (
+function isAttemptStartedEvent(
+  event: EventEnvelope
+): event is AttemptStartedEvent {
+  return (
     event.type === "attempt.started" &&
-    (!isNonEmptyString(payload.attemptId) ||
-      !isNonEmptyString(payload.agentId))
-  ) {
-    throw invalidPayload(event.type);
+    isRecord(event.payload) &&
+    isNonEmptyString(event.payload.attemptId) &&
+    isNonEmptyString(event.payload.agentId)
+  );
+}
+
+function isAttemptFinishedEvent(
+  event: EventEnvelope
+): event is AttemptFinishedEvent {
+  if (event.type !== "attempt.finished" || !isRecord(event.payload)) {
+    return false;
   }
 
-  if (event.type === "attempt.finished") {
-    const validOutcome =
-      payload.outcome === "completed" ||
-      payload.outcome === "failed" ||
-      payload.outcome === "interrupted";
-    const validOptionalFields = ["threadId", "turnId", "summary"].every(
-      (field) =>
-        payload[field] === undefined ||
-        (isNonEmptyString(payload[field]) && payload[field].length <= 2000)
-    );
+  const payload = event.payload;
+  const validOutcome =
+    payload.outcome === "completed" ||
+    payload.outcome === "failed" ||
+    payload.outcome === "interrupted";
+  const validOptionalFields = ["threadId", "turnId", "summary"].every(
+    (field) =>
+      payload[field] === undefined ||
+      (isNonEmptyString(payload[field]) && payload[field].length <= 2000)
+  );
 
-    if (
-      !isNonEmptyString(payload.attemptId) ||
-      !validOutcome ||
-      !validOptionalFields
-    ) {
-      throw invalidPayload(event.type);
-    }
-  }
+  return (
+    isNonEmptyString(payload.attemptId) &&
+    validOutcome &&
+    validOptionalFields
+  );
+}
 
-  if (
+function isArtifactLinkedEvent(
+  event: EventEnvelope
+): event is ArtifactLinkedEvent {
+  return (
     event.type === "artifact.linked" &&
-    (!isNonEmptyString(payload.artifactId) ||
-      !isNonEmptyString(payload.attemptId) ||
-      !isNonEmptyString(payload.kind) ||
-      !isNonEmptyString(payload.revision) ||
-      !isHttpUrl(payload.url))
-  ) {
-    throw invalidPayload(event.type);
-  }
+    isRecord(event.payload) &&
+    isNonEmptyString(event.payload.artifactId) &&
+    isNonEmptyString(event.payload.attemptId) &&
+    isNonEmptyString(event.payload.kind) &&
+    isNonEmptyString(event.payload.revision) &&
+    isHttpUrl(event.payload.url)
+  );
+}
+
+function isEvidenceRecordedEvent(
+  event: EventEnvelope
+): event is EvidenceRecordedEvent {
+  return (
+    event.type === "evidence.recorded" &&
+    isRecord(event.payload) &&
+    isNonEmptyString(event.payload.evidenceId) &&
+    isNonEmptyString(event.payload.attemptId) &&
+    isNonEmptyString(event.payload.artifactId) &&
+    isNonEmptyString(event.payload.revision) &&
+    isNonEmptyString(event.payload.criterionKey) &&
+    (event.payload.outcome === "passed" ||
+      event.payload.outcome === "failed") &&
+    isHttpUrl(event.payload.url)
+  );
+}
+
+function isAcceptanceDecisionEventCandidate(
+  event: EventEnvelope
+): event is AcceptanceDecisionEventCandidate {
+  return (
+    event.type === "acceptance.decided" &&
+    isRecord(event.payload)
+  );
+}
+
+function validateAcceptanceDecisionEvent(
+  event: AcceptanceDecisionEventCandidate
+): asserts event is AcceptanceDecidedEvent {
+  const payload = event.payload;
 
   if (
-    event.type === "evidence.recorded" &&
-    (!isNonEmptyString(payload.evidenceId) ||
-      !isNonEmptyString(payload.attemptId) ||
-      !isNonEmptyString(payload.artifactId) ||
-      !isNonEmptyString(payload.revision) ||
-      !isNonEmptyString(payload.criterionKey) ||
-      (payload.outcome !== "passed" && payload.outcome !== "failed") ||
-      !isHttpUrl(payload.url))
+    !isRecord(payload) ||
+    (payload.decision !== "accepted" &&
+      payload.decision !== "rejected") ||
+    !isNonEmptyString(payload.actor) ||
+    !isNonEmptyString(payload.reason)
   ) {
-    throw invalidPayload(event.type);
+    throw new DomainError(
+      "ACCEPTANCE_DECISION_INVALID",
+      "Acceptance decisions require accepted/rejected, actor, and reason fields."
+    );
   }
 }
 
-function isRichExternalLink(value) {
+function isRichExternalLink(
+  value: unknown
+): value is RichExternalLink {
   return (
-    value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
+    isRecord(value) &&
     hasOnlyKeys(value, [
       "providerObjectKey",
       "provider",
@@ -1087,11 +1595,11 @@ function isRichExternalLink(value) {
   );
 }
 
-function isUpdateSource(value) {
+function isUpdateSource(
+  value: unknown
+): value is UpdateSource {
   return (
-    value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
+    isRecord(value) &&
     hasOnlyKeys(value, [
       "providerObjectKey",
       "revisionId",
@@ -1103,11 +1611,11 @@ function isUpdateSource(value) {
   );
 }
 
-function isExternalLinkBaseline(value) {
+function isExternalLinkBaseline(
+  value: unknown
+): value is ExternalLinkBaseline {
   return (
-    value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
+    isRecord(value) &&
     hasOnlyKeys(value, [
       "providerObjectKey",
       "objectType",
@@ -1121,11 +1629,11 @@ function isExternalLinkBaseline(value) {
   );
 }
 
-function isTitleChanges(value) {
+function isTitleChanges(
+  value: unknown
+): value is TitleChanges {
   if (
-    !value ||
-    typeof value !== "object" ||
-    Array.isArray(value) ||
+    !isRecord(value) ||
     !hasOnlyKeys(value, ["title"])
   ) {
     return false;
@@ -1133,9 +1641,7 @@ function isTitleChanges(value) {
 
   const title = value.title;
   return (
-    title &&
-    typeof title === "object" &&
-    !Array.isArray(title) &&
+    isRecord(title) &&
     hasOnlyKeys(title, ["before", "after"]) &&
     isNonEmptyString(title.before) &&
     isNonEmptyString(title.after) &&
@@ -1144,11 +1650,9 @@ function isTitleChanges(value) {
   );
 }
 
-function isScopeRef(value) {
+function isScopeRef(value: unknown): value is ScopeRef {
   return (
-    value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
+    isRecord(value) &&
     hasOnlyKeys(value, ["kind", "key", "parentKey"]) &&
     isNonEmptyString(value.kind) &&
     isNonEmptyString(value.key) &&
@@ -1157,7 +1661,9 @@ function isScopeRef(value) {
   );
 }
 
-function isManagedFields(value) {
+function isManagedFields(
+  value: unknown
+): value is ManagedField[] {
   return (
     Array.isArray(value) &&
     value.length <= 8 &&
@@ -1166,7 +1672,10 @@ function isManagedFields(value) {
   );
 }
 
-function isProviderScopeRef(provider, value) {
+function isProviderScopeRef(
+  provider: string,
+  value: unknown
+): value is ScopeRef {
   if (!isScopeRef(value)) {
     return false;
   }
@@ -1196,7 +1705,10 @@ function isProviderScopeRef(provider, value) {
   return false;
 }
 
-function isScopedUuid(value, prefix) {
+function isScopedUuid(
+  value: unknown,
+  prefix: string
+): boolean {
   const uuid =
     isNonEmptyString(value) && value.startsWith(prefix)
       ? value.slice(prefix.length)
@@ -1207,11 +1719,11 @@ function isScopedUuid(value, prefix) {
   );
 }
 
-function isObservation(value) {
+function isObservation(
+  value: unknown
+): value is ExternalObservation {
   return (
-    value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
+    isRecord(value) &&
     hasOnlyKeys(value, [
       "revisionId",
       "occurredAt",
@@ -1227,37 +1739,38 @@ function isObservation(value) {
   );
 }
 
-function hasOnlyKeys(value, allowedKeys) {
+function hasOnlyKeys(
+  value: unknown,
+  allowedKeys: readonly string[]
+): value is Record<string, unknown> {
   return (
-    value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
+    isRecord(value) &&
     Object.keys(value).every((key) => allowedKeys.includes(key))
   );
 }
 
-function isValidTimestamp(value) {
+function isValidTimestamp(value: unknown): value is string {
   return (
     isNonEmptyString(value) &&
     Number.isFinite(Date.parse(value))
   );
 }
 
-function isSha256Digest(value) {
+function isSha256Digest(value: unknown): value is string {
   return (
     typeof value === "string" &&
     /^sha256:[0-9a-f]{64}$/.test(value)
   );
 }
 
-function invalidPayload(type) {
+function invalidPayload(type: string): DomainError {
   return new DomainError(
     "EVENT_PAYLOAD_INVALID",
     `Event ${type} has an invalid or incomplete payload.`
   );
 }
 
-function isHttpUrl(value) {
+function isHttpUrl(value: unknown): value is string {
   if (!isNonEmptyString(value)) {
     return false;
   }
@@ -1270,11 +1783,21 @@ function isHttpUrl(value) {
   }
 }
 
-export function digestCanonicalEvent(event) {
+export function digestCanonicalEvent(event: object): string {
   return createHash("sha256").update(stableStringify(event)).digest("hex");
 }
 
-export function classifyProcessedEvent(workflow, event) {
+export type ProcessedEventDecision =
+  | "EXACT_EVENT_DUPLICATE"
+  | "EVENT_ID_CONFLICT"
+  | null;
+
+export function classifyProcessedEvent(
+  workflow: Workflow,
+  event: {
+    eventId: string;
+  }
+): ProcessedEventDecision {
   const processedDigest =
     workflow.processedEvents[event.eventId];
 
@@ -1287,13 +1810,15 @@ export function classifyProcessedEvent(workflow, event) {
     : "EVENT_ID_CONFLICT";
 }
 
-function stableStringify(value) {
+function stableStringify(value: object): string;
+function stableStringify(value: unknown): string | undefined;
+function stableStringify(value: unknown): string | undefined {
   if (Array.isArray(value)) {
     return `[${value.map(stableStringify).join(",")}]`;
   }
 
-  if (value && typeof value === "object") {
-    const entries = Object.keys(value)
+  if (isRecord(value)) {
+    const entries: string[] = Object.keys(value)
       .sort()
       .map(
         (key) =>
@@ -1305,25 +1830,41 @@ function stableStringify(value) {
   return JSON.stringify(value);
 }
 
-function isNonEmptyString(value) {
+function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function isTitle(value) {
+function isTitle(value: unknown): value is string {
   return (
     isNonEmptyString(value) &&
     codePointLength(value) <= 512
   );
 }
 
-function codePointLength(value) {
+function codePointLength(value: string): number {
   return [...value].length;
 }
 
 class DomainError extends Error {
-  constructor(code, message) {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
     super(message);
     this.name = "DomainError";
     this.code = code;
   }
+}
+
+function isRecord(
+  value: unknown
+): value is Record<string, unknown> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+  );
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unsupported event: ${String(value)}`);
 }

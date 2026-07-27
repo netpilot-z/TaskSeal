@@ -1,4 +1,47 @@
-const PROGRESS_BY_STATUS = {
+import type {
+  AcceptanceDecision,
+  Artifact,
+  Attempt,
+  Evidence,
+  ExternalLink,
+  Workflow,
+  WorkItem,
+  WorkItemStatus
+} from "../domain/workflow.ts";
+
+export interface DashboardSummary {
+  total: number;
+  planned: number;
+  running: number;
+  reviewing: number;
+  blocked: number;
+  accepted: number;
+  activeAgents: number;
+}
+
+export interface DashboardWorkItem {
+  id: string;
+  title: string;
+  status: WorkItemStatus;
+  progress: number;
+  requiredEvidence: string[];
+  activeAttempt: Attempt | null;
+  activeArtifact: Artifact | null;
+  currentEvidence: Evidence[];
+  attempts: Attempt[];
+  artifacts: Artifact[];
+  evidence: Evidence[];
+  acceptanceDecision: AcceptanceDecision | null;
+  externalLinks: ExternalLink[];
+}
+
+export interface DashboardProjection {
+  generatedAt: string;
+  summary: DashboardSummary;
+  workItems: DashboardWorkItem[];
+}
+
+const PROGRESS_BY_STATUS: Readonly<Record<WorkItemStatus, number>> = {
   planned: 20,
   running: 45,
   reviewing: 80,
@@ -6,12 +49,14 @@ const PROGRESS_BY_STATUS = {
   accepted: 100
 };
 
-export function projectDashboard(workflow) {
+export function projectDashboard(
+  workflow: Workflow
+): DashboardProjection {
   const workItems = Object.values(workflow.workItems)
     .sort((left, right) => left.id.localeCompare(right.id))
     .map(projectWorkItem);
 
-  const summary = {
+  const summary: DashboardSummary = {
     total: workItems.length,
     planned: 0,
     running: 0,
@@ -35,16 +80,19 @@ export function projectDashboard(workflow) {
   };
 }
 
-function projectWorkItem(workItem) {
+function projectWorkItem(
+  workItem: WorkItem
+): DashboardWorkItem {
   const activeAttempt =
     workItem.attempts.find(
       (attempt) => attempt.id === workItem.activeAttemptId
     ) ?? null;
-  const activeArtifact = workItem.activeArtifact
+  const activeArtifactRef = workItem.activeArtifact;
+  const activeArtifact = activeArtifactRef
     ? (workItem.artifacts.find(
         (artifact) =>
-          artifact.id === workItem.activeArtifact.artifactId &&
-          artifact.revision === workItem.activeArtifact.revision &&
+          artifact.id === activeArtifactRef.artifactId &&
+          artifact.revision === activeArtifactRef.revision &&
           artifact.attemptId === workItem.activeAttemptId
       ) ?? null)
     : null;
