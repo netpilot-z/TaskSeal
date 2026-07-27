@@ -20,7 +20,7 @@ import {
 import {
   createActor,
   createPreviewPlan
-} from "../test-support/snapshot-import-fixtures.js";
+} from "../test-support/snapshot-import-fixtures.ts";
 
 const CHILD_PATH = fileURLToPath(
   new URL(

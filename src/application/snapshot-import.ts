@@ -2,6 +2,17 @@ import {
   applyEvent,
   classifyProcessedEvent
 } from "../domain/workflow.ts";
+import type {
+  ArtifactLinkedEvent,
+  EvidenceRecordedEvent,
+  ExternalLink,
+  ExternalObservation,
+  ManagedField,
+  RichExternalLink,
+  ScopeRef,
+  Workflow,
+  WorkItemCreatedEvent
+} from "../domain/workflow.ts";
 import {
   canonicalizeJson,
   digestCanonicalJson
@@ -9,8 +20,25 @@ import {
 import {
   digestProviderFactContent
 } from "../lib/provider-snapshot.ts";
+import type {
+  ProviderCheckFact,
+  ProviderCheckObservation,
+  ProviderFact,
+  ProviderIssueFact,
+  ProviderIssueObservation,
+  ProviderName,
+  ProviderObjectType,
+  ProviderPullRequestFact,
+  ProviderPullRequestObservation,
+  ProviderRevision,
+  ProviderSnapshotMapping,
+  ProviderSourceObject
+} from "../lib/provider-snapshot.ts";
 import {
   buildPolicyBinding
+} from "./import-policy.ts";
+import type {
+  ProviderScopeRef
 } from "./import-policy.ts";
 import {
   compareImportActions,
@@ -21,6 +49,81 @@ import {
   deriveImportActionId,
   deriveImportEventId
 } from "./import-plan.ts";
+import type {
+  ImportAction,
+  ImportConflict,
+  ImportEventType,
+  ImportPlan,
+  ImportPlanEvent,
+  ImportPlanSummary,
+  ImportWarning
+} from "./import-plan.ts";
+
+interface UnboundNormalizedSnapshot {
+  schemaVersion: 2;
+  provider: ProviderName;
+  scope: unknown;
+  mapping: ProviderSnapshotMapping;
+  facts: ProviderFact[];
+}
+
+interface AuthorizedSnapshot
+  extends Omit<UnboundNormalizedSnapshot, "scope"> {
+  scope: ProviderScopeRef;
+}
+
+interface PlanningResult {
+  actions: ImportAction[];
+  events: ImportPlanEvent[];
+}
+
+interface SimulationResult extends PlanningResult {
+  domainCodes: Map<string, string>;
+}
+
+interface WalkSnapshotOptions {
+  depth: number;
+  ancestors: Set<object>;
+}
+
+interface NormalizeUniqueStringsOptions {
+  maximumItems: number;
+  maximumLength: number;
+  allowedValues: ReadonlySet<string> | null;
+  allowEmpty?: boolean | undefined;
+}
+
+interface CandidateEventEnvelope {
+  eventId: string;
+  workItemId: string;
+  type:
+    | "work_item.created"
+    | "artifact.linked"
+    | "evidence.recorded";
+  occurredAt: string;
+  payload: unknown;
+}
+
+interface OwnedProviderEntry {
+  kind: "owned";
+  workItemId: string;
+  link: ExternalLink;
+}
+
+interface AmbiguousProviderEntry {
+  kind: "ambiguous";
+}
+
+type ProviderIndexEntry =
+  | OwnedProviderEntry
+  | AmbiguousProviderEntry;
+
+type ProviderIndex = Map<string, ProviderIndexEntry>;
+
+interface CreatedActionAndEvent {
+  action: ImportAction;
+  event: ImportPlanEvent;
+}
 
 const SNAPSHOT_BYTE_LIMIT = 1024 * 1024;
 const SNAPSHOT_DEPTH_LIMIT = 16;
@@ -34,12 +137,14 @@ const ID_LIMIT = 256;
 const EVIDENCE_LIMIT = 64;
 const EVIDENCE_KEY_LIMIT = 128;
 const MANAGED_FIELD_LIMIT = 8;
-const CANDIDATE_EVENT_TYPES = new Set([
+const CANDIDATE_EVENT_TYPES = new Set<
+  CandidateEventEnvelope["type"]
+>([
   "work_item.created",
   "artifact.linked",
   "evidence.recorded"
 ]);
-const DIRECT_DOMAIN_CONFLICTS = new Set([
+const DIRECT_DOMAIN_CONFLICTS: ReadonlySet<string> = new Set([
   "EVENT_ID_CONFLICT",
   "FIELD_AUTHORITY_CONFLICT",
   "PROVIDER_OBJECT_ALREADY_LINKED",
@@ -47,7 +152,9 @@ const DIRECT_DOMAIN_CONFLICTS = new Set([
   "SOURCE_REVISION_ORDER_AMBIGUOUS"
 ]);
 
-export function parseProviderSnapshotJson(rawSnapshot) {
+export function parseProviderSnapshotJson(
+  rawSnapshot: unknown
+): unknown {
   if (typeof rawSnapshot !== "string") {
     throw snapshotInvalid();
   }
@@ -70,7 +177,11 @@ export function previewSnapshotImport({
   snapshot,
   workflow,
   importPolicy
-}) {
+}: {
+  snapshot: unknown;
+  workflow: Workflow;
+  importPolicy: unknown;
+}): ImportPlan {
   const normalizedInput = normalizeProviderSnapshot(snapshot);
   const requiredObjectTypes = [
     ...new Set(
@@ -88,7 +199,7 @@ export function previewSnapshotImport({
     scopeRef: normalizedInput.scope,
     requiredObjectTypes
   });
-  const normalizedSnapshot = {
+  const normalizedSnapshot: AuthorizedSnapshot = {
     ...normalizedInput,
     scope: policyBinding.scopeRef
   };
@@ -116,7 +227,7 @@ export function previewSnapshotImport({
   const events = [...simulated.events].sort(
     compareImportEvents
   );
-  const eventTypeById = new Map(
+  const eventTypeById = new Map<string, ImportEventType>(
     events.map((event) => [event.eventId, event.type])
   );
   const actions = [...simulated.actions].sort(
@@ -130,7 +241,7 @@ export function previewSnapshotImport({
   const conflicts = actions
     .filter((action) => action.kind === "conflict")
     .map((action) => {
-      const conflict = {
+      const conflict: ImportConflict = {
         actionId: action.actionId,
         code: action.reasonCode
       };
@@ -145,7 +256,7 @@ export function previewSnapshotImport({
       return conflict;
     })
     .sort(compareImportCodeProjections);
-  const warnings = actions
+  const warnings: ImportWarning[] = actions
     .filter(
       (action) =>
         action.kind === "skip" &&
@@ -186,8 +297,14 @@ export function previewSnapshotImport({
   };
 }
 
-function normalizeProviderSnapshot(snapshot) {
+function normalizeProviderSnapshot(
+  snapshot: unknown
+): UnboundNormalizedSnapshot {
   validateSnapshotTree(snapshot);
+
+  if (!isPlainRecord(snapshot)) {
+    throw snapshotInvalid();
+  }
 
   if (snapshot.schemaVersion !== 2) {
     throw new SnapshotImportError(
@@ -197,7 +314,6 @@ function normalizeProviderSnapshot(snapshot) {
   }
 
   if (
-    !isPlainRecord(snapshot) ||
     !hasExactKeys(snapshot, [
       "schemaVersion",
       "mode",
@@ -208,7 +324,7 @@ function normalizeProviderSnapshot(snapshot) {
       "facts"
     ]) ||
     snapshot.mode !== "read-only" ||
-    !["github", "linear"].includes(snapshot.provider) ||
+    !isProviderName(snapshot.provider) ||
     !isTimestamp(snapshot.capturedAt) ||
     codePointLength(snapshot.capturedAt) > ID_LIMIT ||
     !Array.isArray(snapshot.facts) ||
@@ -221,16 +337,18 @@ function normalizeProviderSnapshot(snapshot) {
     throw snapshotLimit("facts", SNAPSHOT_FACT_LIMIT);
   }
 
+  const provider =
+    normalizeProviderName(snapshot.provider);
   const mapping = normalizeMapping(snapshot.mapping);
   const facts = snapshot.facts.map((fact) =>
     normalizeFact({
       fact,
-      provider: snapshot.provider,
+      provider,
       scope: snapshot.scope,
       mapping
     })
   );
-  const seenObjects = new Set();
+  const seenObjects = new Set<string>();
 
   for (const fact of facts) {
     const objectKey = fact.sourceObject.providerObjectKey;
@@ -246,29 +364,32 @@ function normalizeProviderSnapshot(snapshot) {
 
   return {
     schemaVersion: 2,
-    provider: snapshot.provider,
-    scope: cloneRecord(snapshot.scope),
+    provider,
+    scope: snapshot.scope,
     mapping,
     facts
   };
 }
 
-function validateSnapshotTree(snapshot) {
-  const ancestors = new Set();
+function validateSnapshotTree(snapshot: unknown): void {
+  const ancestors = new Set<object>();
 
   walkSnapshotValue(snapshot, {
     depth: 0,
     ancestors
   });
 
-  let canonicalSnapshot;
+  let canonicalSnapshot: string;
 
   try {
     canonicalSnapshot = canonicalizeJson(snapshot, {
       maxDepth: SNAPSHOT_DEPTH_LIMIT
     });
   } catch (error) {
-    if (error?.code === "CANONICAL_JSON_DEPTH_EXCEEDED") {
+    if (
+      getErrorCode(error) ===
+      "CANONICAL_JSON_DEPTH_EXCEEDED"
+    ) {
       throw snapshotLimit("snapshot depth", SNAPSHOT_DEPTH_LIMIT);
     }
 
@@ -283,10 +404,10 @@ function validateSnapshotTree(snapshot) {
   }
 }
 
-function walkSnapshotValue(value, {
+function walkSnapshotValue(value: unknown, {
   depth,
   ancestors
-}) {
+}: WalkSnapshotOptions): void {
   if (typeof value === "string") {
     if (codePointLength(value) > GENERAL_STRING_LIMIT) {
       throw snapshotLimit(
@@ -323,10 +444,10 @@ function walkSnapshotValue(value, {
   const keys = Reflect.ownKeys(value);
   const isArray = Array.isArray(value);
 
-  if (
-    keys.some((key) => typeof key !== "string")
-  ) {
-    throw snapshotInvalid();
+  for (const key of keys) {
+    if (typeof key !== "string") {
+      throw snapshotInvalid();
+    }
   }
 
   if (isArray && value.length > ARRAY_ITEM_LIMIT) {
@@ -355,13 +476,16 @@ function walkSnapshotValue(value, {
     throw snapshotInvalid();
   }
 
-  const descriptors = Object.getOwnPropertyDescriptors(value);
   ancestors.add(value);
 
   try {
     for (const key of keys) {
       if (isArray && key === "length") {
         continue;
+      }
+
+      if (typeof key !== "string") {
+        throw snapshotInvalid();
       }
 
       if (codePointLength(key) > GENERAL_STRING_LIMIT) {
@@ -371,9 +495,11 @@ function walkSnapshotValue(value, {
         );
       }
 
-      const descriptor = descriptors[key];
+      const descriptor =
+        Object.getOwnPropertyDescriptor(value, key);
 
       if (
+        !descriptor ||
         !descriptor.enumerable ||
         !("value" in descriptor)
       ) {
@@ -390,7 +516,9 @@ function walkSnapshotValue(value, {
   }
 }
 
-function normalizeMapping(mapping) {
+function normalizeMapping(
+  mapping: unknown
+): ProviderSnapshotMapping {
   if (
     !isPlainRecord(mapping) ||
     !hasAllowedAndRequiredKeys(
@@ -416,16 +544,9 @@ function normalizeMapping(mapping) {
       allowedValues: null
     }
   );
-  const managedFields = normalizeUniqueStrings(
-    mapping.managedFields,
-    {
-      maximumItems: MANAGED_FIELD_LIMIT,
-      maximumLength: ID_LIMIT,
-      allowedValues: new Set(["title"]),
-      allowEmpty: true
-    }
-  );
-  const normalized = {
+  const managedFields =
+    normalizeManagedFields(mapping.managedFields);
+  const normalized: ProviderSnapshotMapping = {
     workItemId: mapping.workItemId,
     requiredEvidence,
     managedFields
@@ -439,35 +560,54 @@ function normalizeMapping(mapping) {
     throw snapshotInvalid();
   }
 
-  for (const field of [
-    "attemptId",
-    "artifactId",
-    "artifactRevision",
-    "criterionKey"
-  ]) {
-    if (mapping[field] !== undefined) {
-      const maximumLength =
-        field === "criterionKey"
-          ? EVIDENCE_KEY_LIMIT
-          : ID_LIMIT;
-
-      if (!isBoundedString(mapping[field], maximumLength)) {
-        throw snapshotInvalid();
-      }
-
-      normalized[field] = mapping[field];
+  if (mapping.attemptId !== undefined) {
+    if (!isBoundedString(mapping.attemptId, ID_LIMIT)) {
+      throw snapshotInvalid();
     }
+    normalized.attemptId = mapping.attemptId;
+  }
+
+  if (mapping.artifactId !== undefined) {
+    if (!isBoundedString(mapping.artifactId, ID_LIMIT)) {
+      throw snapshotInvalid();
+    }
+    normalized.artifactId = mapping.artifactId;
+  }
+
+  if (mapping.artifactRevision !== undefined) {
+    if (
+      !isBoundedString(
+        mapping.artifactRevision,
+        ID_LIMIT
+      )
+    ) {
+      throw snapshotInvalid();
+    }
+    normalized.artifactRevision =
+      mapping.artifactRevision;
+  }
+
+  if (mapping.criterionKey !== undefined) {
+    if (
+      !isBoundedString(
+        mapping.criterionKey,
+        EVIDENCE_KEY_LIMIT
+      )
+    ) {
+      throw snapshotInvalid();
+    }
+    normalized.criterionKey = mapping.criterionKey;
   }
 
   return normalized;
 }
 
-function normalizeUniqueStrings(value, {
+function normalizeUniqueStrings(value: unknown, {
   maximumItems,
   maximumLength,
   allowedValues,
   allowEmpty = false
-}) {
+}: NormalizeUniqueStringsOptions): string[] {
   if (
     !Array.isArray(value) ||
     (!allowEmpty && value.length === 0) ||
@@ -485,12 +625,34 @@ function normalizeUniqueStrings(value, {
   return [...value].sort();
 }
 
+function normalizeManagedFields(
+  value: unknown
+): ManagedField[] {
+  const fields = normalizeUniqueStrings(value, {
+    maximumItems: MANAGED_FIELD_LIMIT,
+    maximumLength: ID_LIMIT,
+    allowedValues: new Set(["title"]),
+    allowEmpty: true
+  });
+
+  if (!fields.every(isManagedField)) {
+    throw snapshotInvalid();
+  }
+
+  return fields;
+}
+
 function normalizeFact({
   fact,
   provider,
   scope,
   mapping
-}) {
+}: {
+  fact: unknown;
+  provider: ProviderName;
+  scope: unknown;
+  mapping: ProviderSnapshotMapping;
+}): ProviderFact {
   if (
     !isPlainRecord(fact) ||
     !hasExactKeys(fact, [
@@ -509,39 +671,104 @@ function normalizeFact({
     scope
   });
   const revision = normalizeRevision(fact.revision);
-  const observed = normalizeObserved(
-    fact.observed,
-    sourceObject.objectType
-  );
-  const candidateEvent = normalizeCandidateEvent({
-    event: fact.candidateEvent,
-    sourceObject,
-    revision,
-    observed,
-    mapping
-  });
-  const normalized = {
-    sourceObject,
-    revision,
-    observed,
-    candidateEvent
-  };
+
+  if (sourceObject.objectType === "issue") {
+    const issueSource: ProviderIssueFact["sourceObject"] = {
+      ...sourceObject,
+      objectType: "issue"
+    };
+    const observed =
+      normalizeIssueObservation(fact.observed);
+    return verifyFactDigest({
+      sourceObject: issueSource,
+      revision,
+      observed,
+      candidateEvent: normalizeWorkItemCandidate({
+        event: fact.candidateEvent,
+        sourceObject: issueSource,
+        observed,
+        mapping
+      })
+    });
+  }
 
   if (
-    digestProviderFactContent(normalized) !==
-    revision.contentDigest
+    sourceObject.provider === "github" &&
+    sourceObject.objectType === "pull_request"
+  ) {
+    const pullRequestSource:
+      ProviderPullRequestFact["sourceObject"] = {
+      ...sourceObject,
+      provider: "github",
+      objectType: "pull_request"
+    };
+    const observed =
+      normalizePullRequestObservation(fact.observed);
+    return verifyFactDigest({
+      sourceObject: pullRequestSource,
+      revision,
+      observed,
+      candidateEvent: normalizeArtifactCandidate({
+        event: fact.candidateEvent,
+        sourceObject: pullRequestSource,
+        revision,
+        observed,
+        mapping
+      })
+    });
+  }
+
+  if (
+    sourceObject.provider === "github" &&
+    sourceObject.objectType === "check"
+  ) {
+    const checkSource:
+      ProviderCheckFact["sourceObject"] = {
+      ...sourceObject,
+      provider: "github",
+      objectType: "check"
+    };
+    const observed =
+      normalizeCheckObservation(fact.observed);
+    return verifyFactDigest({
+      sourceObject: checkSource,
+      revision,
+      observed,
+      candidateEvent: normalizeEvidenceCandidate({
+        event: fact.candidateEvent,
+        sourceObject: checkSource,
+        revision,
+        observed,
+        mapping
+      })
+    });
+  }
+
+  throw snapshotInvalid();
+}
+
+function verifyFactDigest<T extends ProviderFact>(
+  fact: T
+): T {
+  if (
+    digestProviderFactContent(fact) !==
+    fact.revision.contentDigest
   ) {
     throw snapshotInvalid();
   }
 
-  return normalized;
+  return fact;
 }
 
 function normalizeSourceObject({
   value,
   provider,
   scope
-}) {
+}: {
+  value: unknown;
+  provider: ProviderName;
+  scope: unknown;
+}): ProviderSourceObject {
   if (
     !isPlainRecord(value) ||
     !hasExactKeys(value, [
@@ -554,7 +781,7 @@ function normalizeSourceObject({
     value.provider !== provider ||
     !isBoundedString(value.providerObjectKey, ID_LIMIT) ||
     !isBoundedString(value.externalId, ID_LIMIT) ||
-    !isBoundedString(value.objectType, ID_LIMIT) ||
+    !isProviderObjectType(value.objectType) ||
     !isBoundedString(value.url, URL_LIMIT)
   ) {
     throw snapshotInvalid();
@@ -562,45 +789,53 @@ function normalizeSourceObject({
 
   if (provider === "github") {
     if (
-      !["issue", "pull_request", "check"].includes(
-        value.objectType
-      ) ||
       !/^\d+$/.test(value.externalId) ||
       value.providerObjectKey !==
         `github:${value.objectType}:${value.externalId}`
     ) {
       throw snapshotInvalid();
     }
-  } else if (
-    provider === "linear" &&
-    (value.objectType !== "issue" ||
+    return {
+      providerObjectKey:
+        value.providerObjectKey.toLowerCase(),
+      provider: "github",
+      objectType: value.objectType,
+      externalId: value.externalId,
+      url: normalizeProviderUrl({
+        provider: "github",
+        objectType: value.objectType,
+        url: value.url,
+        scope
+      })
+    };
+  }
+
+  if (
+    value.objectType !== "issue" ||
       !isUuid(value.externalId) ||
       value.providerObjectKey !==
-        `linear:issue:${value.externalId.toLowerCase()}`)
+        `linear:issue:${value.externalId.toLowerCase()}`
   ) {
     throw snapshotInvalid();
   }
 
-  const url = normalizeProviderUrl({
-    provider,
-    objectType: value.objectType,
-    url: value.url,
-    scope
-  });
-
   return {
     providerObjectKey: value.providerObjectKey.toLowerCase(),
-    provider,
-    objectType: value.objectType,
-    externalId:
-      provider === "linear"
-        ? value.externalId.toLowerCase()
-        : value.externalId,
-    url
+    provider: "linear",
+    objectType: "issue",
+    externalId: value.externalId.toLowerCase(),
+    url: normalizeProviderUrl({
+      provider: "linear",
+      objectType: "issue",
+      url: value.url,
+      scope
+    })
   };
 }
 
-function normalizeRevision(value) {
+function normalizeRevision(
+  value: unknown
+): ProviderRevision {
   if (
     !isPlainRecord(value) ||
     !hasExactKeys(value, [
@@ -611,7 +846,7 @@ function normalizeRevision(value) {
     !isBoundedString(value.id, ID_LIMIT) ||
     !isTimestamp(value.occurredAt) ||
     codePointLength(value.occurredAt) > ID_LIMIT ||
-    !/^sha256:[0-9a-f]{64}$/.test(value.contentDigest)
+    !isDigest(value.contentDigest)
   ) {
     throw snapshotInvalid();
   }
@@ -623,9 +858,10 @@ function normalizeRevision(value) {
   };
 }
 
-function normalizeObserved(value, objectType) {
+function normalizeIssueObservation(
+  value: unknown
+): ProviderIssueObservation {
   if (
-    objectType === "issue" &&
     isPlainRecord(value) &&
     hasExactKeys(value, ["title", "createdAt"]) &&
     isBoundedString(value.title, TITLE_LIMIT) &&
@@ -638,8 +874,13 @@ function normalizeObserved(value, objectType) {
     };
   }
 
+  throw snapshotInvalid();
+}
+
+function normalizePullRequestObservation(
+  value: unknown
+): ProviderPullRequestObservation {
   if (
-    objectType === "pull_request" &&
     isPlainRecord(value) &&
     hasExactKeys(value, ["headRevision"]) &&
     isBoundedString(value.headRevision, ID_LIMIT)
@@ -649,12 +890,17 @@ function normalizeObserved(value, objectType) {
     };
   }
 
+  throw snapshotInvalid();
+}
+
+function normalizeCheckObservation(
+  value: unknown
+): ProviderCheckObservation {
   if (
-    objectType === "check" &&
     isPlainRecord(value) &&
     hasExactKeys(value, ["headRevision", "outcome"]) &&
     isBoundedString(value.headRevision, ID_LIMIT) &&
-    ["passed", "failed"].includes(value.outcome)
+    isEvidenceOutcome(value.outcome)
   ) {
     return {
       headRevision: value.headRevision,
@@ -665,23 +911,19 @@ function normalizeObserved(value, objectType) {
   throw snapshotInvalid();
 }
 
-function normalizeCandidateEvent({
+function normalizeCandidateEventEnvelope({
   event,
-  sourceObject,
-  revision,
-  observed,
-  mapping
-}) {
-  const expectedOccurredAt =
-    sourceObject.objectType === "issue"
-      ? observed.createdAt
-      : revision.occurredAt;
-  const expectedEventId = deriveProviderCandidateEventId({
-    sourceObject,
-    revision,
-    observed
-  });
-
+  mapping,
+  expectedType,
+  expectedOccurredAt,
+  expectedEventId
+}: {
+  event: unknown;
+  mapping: ProviderSnapshotMapping;
+  expectedType: CandidateEventEnvelope["type"];
+  expectedOccurredAt: string;
+  expectedEventId: string;
+}): CandidateEventEnvelope {
   if (
     !isPlainRecord(event) ||
     !hasExactKeys(event, [
@@ -693,7 +935,8 @@ function normalizeCandidateEvent({
     ]) ||
     !isBoundedString(event.eventId, ID_LIMIT) ||
     event.workItemId !== mapping.workItemId ||
-    !CANDIDATE_EVENT_TYPES.has(event.type) ||
+    event.type !== expectedType ||
+    !CANDIDATE_EVENT_TYPES.has(expectedType) ||
     !isTimestamp(event.occurredAt) ||
     codePointLength(event.occurredAt) > ID_LIMIT ||
     event.occurredAt !== expectedOccurredAt ||
@@ -702,70 +945,13 @@ function normalizeCandidateEvent({
     throw snapshotInvalid();
   }
 
-  if (
-    sourceObject.objectType === "issue" &&
-    event.type === "work_item.created"
-  ) {
-    return normalizeWorkItemCandidate({
-      event,
-      sourceObject,
-      observed,
-      mapping
-    });
-  }
-
-  if (
-    sourceObject.objectType === "pull_request" &&
-    event.type === "artifact.linked"
-  ) {
-    return normalizeArtifactCandidate({
-      event,
-      sourceObject,
-      observed,
-      mapping
-    });
-  }
-
-  if (
-    sourceObject.objectType === "check" &&
-    event.type === "evidence.recorded"
-  ) {
-    return normalizeEvidenceCandidate({
-      event,
-      sourceObject,
-      observed,
-      mapping
-    });
-  }
-
-  throw snapshotInvalid();
-}
-
-function deriveProviderCandidateEventId({
-  sourceObject,
-  revision,
-  observed
-}) {
-  if (sourceObject.objectType === "issue") {
-    return sourceObject.provider === "github"
-      ? `github:issue-${sourceObject.externalId}:created`
-      : `linear:${sourceObject.externalId}:created`;
-  }
-
-  if (sourceObject.objectType === "pull_request") {
-    return [
-      "github",
-      `pr-${sourceObject.externalId}`,
-      observed.headRevision,
-      revision.occurredAt
-    ].join(":");
-  }
-
-  return [
-    "github",
-    `check-${sourceObject.externalId}`,
-    observed.headRevision
-  ].join(":");
+  return {
+    eventId: event.eventId,
+    workItemId: mapping.workItemId,
+    type: expectedType,
+    occurredAt: event.occurredAt,
+    payload: event.payload
+  };
 }
 
 function normalizeWorkItemCandidate({
@@ -773,8 +959,23 @@ function normalizeWorkItemCandidate({
   sourceObject,
   observed,
   mapping
-}) {
-  const payload = event.payload;
+}: {
+  event: unknown;
+  sourceObject: ProviderIssueFact["sourceObject"];
+  observed: ProviderIssueObservation;
+  mapping: ProviderSnapshotMapping;
+}): WorkItemCreatedEvent {
+  const candidate = normalizeCandidateEventEnvelope({
+    event,
+    mapping,
+    expectedType: "work_item.created",
+    expectedOccurredAt: observed.createdAt,
+    expectedEventId:
+      sourceObject.provider === "github"
+        ? `github:issue-${sourceObject.externalId}:created`
+        : `linear:${sourceObject.externalId}:created`
+  });
+  const payload = candidate.payload;
 
   if (
     !isPlainRecord(payload) ||
@@ -803,10 +1004,10 @@ function normalizeWorkItemCandidate({
   }
 
   return {
-    eventId: event.eventId,
-    workItemId: event.workItemId,
-    type: event.type,
-    occurredAt: event.occurredAt,
+    eventId: candidate.eventId,
+    workItemId: candidate.workItemId,
+    type: "work_item.created",
+    occurredAt: candidate.occurredAt,
     payload: {
       title: observed.title,
       requiredEvidence: [...mapping.requiredEvidence],
@@ -822,10 +1023,29 @@ function normalizeWorkItemCandidate({
 function normalizeArtifactCandidate({
   event,
   sourceObject,
+  revision,
   observed,
   mapping
-}) {
-  const payload = event.payload;
+}: {
+  event: unknown;
+  sourceObject: ProviderPullRequestFact["sourceObject"];
+  revision: ProviderRevision;
+  observed: ProviderPullRequestObservation;
+  mapping: ProviderSnapshotMapping;
+}): ArtifactLinkedEvent {
+  const candidate = normalizeCandidateEventEnvelope({
+    event,
+    mapping,
+    expectedType: "artifact.linked",
+    expectedOccurredAt: revision.occurredAt,
+    expectedEventId: [
+      "github",
+      `pr-${sourceObject.externalId}`,
+      observed.headRevision,
+      revision.occurredAt
+    ].join(":")
+  });
+  const payload = candidate.payload;
 
   if (
     !isBoundedString(mapping.attemptId, ID_LIMIT) ||
@@ -857,10 +1077,10 @@ function normalizeArtifactCandidate({
   }
 
   return {
-    eventId: event.eventId,
-    workItemId: event.workItemId,
-    type: event.type,
-    occurredAt: event.occurredAt,
+    eventId: candidate.eventId,
+    workItemId: candidate.workItemId,
+    type: "artifact.linked",
+    occurredAt: candidate.occurredAt,
     payload: {
       artifactId: payload.artifactId,
       attemptId: payload.attemptId,
@@ -874,10 +1094,28 @@ function normalizeArtifactCandidate({
 function normalizeEvidenceCandidate({
   event,
   sourceObject,
+  revision,
   observed,
   mapping
-}) {
-  const payload = event.payload;
+}: {
+  event: unknown;
+  sourceObject: ProviderCheckFact["sourceObject"];
+  revision: ProviderRevision;
+  observed: ProviderCheckObservation;
+  mapping: ProviderSnapshotMapping;
+}): EvidenceRecordedEvent {
+  const candidate = normalizeCandidateEventEnvelope({
+    event,
+    mapping,
+    expectedType: "evidence.recorded",
+    expectedOccurredAt: revision.occurredAt,
+    expectedEventId: [
+      "github",
+      `check-${sourceObject.externalId}`,
+      observed.headRevision
+    ].join(":")
+  });
+  const payload = candidate.payload;
 
   if (
     !isBoundedString(mapping.attemptId, ID_LIMIT) ||
@@ -911,7 +1149,7 @@ function normalizeEvidenceCandidate({
     payload.revision !== mapping.artifactRevision ||
     payload.criterionKey !== mapping.criterionKey ||
     !mapping.requiredEvidence.includes(payload.criterionKey) ||
-    !["passed", "failed"].includes(payload.outcome) ||
+    !isEvidenceOutcome(payload.outcome) ||
     payload.outcome !== observed.outcome ||
     payload.url !== sourceObject.url
   ) {
@@ -919,10 +1157,10 @@ function normalizeEvidenceCandidate({
   }
 
   return {
-    eventId: event.eventId,
-    workItemId: event.workItemId,
-    type: event.type,
-    occurredAt: event.occurredAt,
+    eventId: candidate.eventId,
+    workItemId: candidate.workItemId,
+    type: "evidence.recorded",
+    occurredAt: candidate.occurredAt,
     payload: {
       evidenceId: payload.evidenceId,
       attemptId: payload.attemptId,
@@ -940,8 +1178,13 @@ function normalizeProviderUrl({
   objectType,
   url,
   scope
-}) {
-  let parsed;
+}: {
+  provider: ProviderName;
+  objectType: ProviderObjectType;
+  url: string;
+  scope: unknown;
+}): string {
+  let parsed: URL;
 
   try {
     parsed = new URL(url);
@@ -961,9 +1204,14 @@ function normalizeProviderUrl({
   }
 
   if (provider === "github") {
+    const scopeKey =
+      isPlainRecord(scope) &&
+      typeof scope.key === "string"
+        ? scope.key
+        : "";
     const scopeMatch =
       /^github:repository:([^/]+)\/([^/]+)$/.exec(
-        scope?.key
+        scopeKey
       );
     const pathSegments = parsed.pathname
       .split("/")
@@ -974,6 +1222,7 @@ function normalizeProviderUrl({
         : objectType === "pull_request"
           ? "pull"
           : null;
+    const objectNumber = pathSegments[3];
     const matchesRepository =
       pathSegments[0]?.toLowerCase() ===
         scopeMatch?.[1]?.toLowerCase() &&
@@ -983,7 +1232,8 @@ function normalizeProviderUrl({
       ? pathSegments.length === 4 &&
         matchesRepository &&
         pathSegments[2] === expectedSegment &&
-        /^\d+$/.test(pathSegments[3])
+        typeof objectNumber === "string" &&
+        /^\d+$/.test(objectNumber)
       : objectType === "check" &&
         pathSegments.length >= 4 &&
         matchesRepository &&
@@ -1010,14 +1260,17 @@ function normalizeProviderUrl({
 function planSnapshotFacts({
   snapshot,
   workflow
-}) {
-  const actions = [];
-  const events = [];
+}: {
+  snapshot: AuthorizedSnapshot;
+  workflow: Workflow;
+}): PlanningResult {
+  const actions: ImportAction[] = [];
+  const events: ImportPlanEvent[] = [];
   let projectedWorkflow = workflow;
   let providerIndex = buildProviderIndex(projectedWorkflow);
 
   for (const fact of snapshot.facts) {
-    if (fact.sourceObject.objectType !== "issue") {
+    if (!isProviderIssueFact(fact)) {
       continue;
     }
 
@@ -1037,7 +1290,7 @@ function planSnapshotFacts({
   }
 
   for (const fact of snapshot.facts) {
-    if (fact.sourceObject.objectType === "issue") {
+    if (!isDeliveryFact(fact)) {
       continue;
     }
 
@@ -1057,7 +1310,10 @@ function planSnapshotFacts({
   return { actions, events };
 }
 
-function projectPlanningEvents(workflow, events) {
+function projectPlanningEvents(
+  workflow: Workflow,
+  events: readonly ImportPlanEvent[]
+): Workflow {
   let projected = workflow;
 
   for (
@@ -1077,7 +1333,11 @@ function planCandidateFact({
   fact,
   snapshot,
   workflow
-}) {
+}: {
+  fact: ProviderPullRequestFact | ProviderCheckFact;
+  snapshot: AuthorizedSnapshot;
+  workflow: Workflow;
+}): PlanningResult {
   const candidateEvent = fact.candidateEvent;
   const candidateDecision = classifyProcessedEvent(
     workflow,
@@ -1112,7 +1372,7 @@ function planCandidateFact({
     mapping: snapshot.mapping,
     semanticTarget,
     occurredAt: candidateEvent.occurredAt,
-    payload: cloneRecord(candidateEvent.payload)
+    payload: cloneCandidatePayload(candidateEvent)
   });
   const importedDecision = classifyProcessedEvent(
     workflow,
@@ -1163,15 +1423,20 @@ function planWorkItemFact({
   snapshot,
   workflow,
   providerIndex
-}) {
-  const actions = [];
-  const events = [];
+}: {
+  fact: ProviderIssueFact;
+  snapshot: AuthorizedSnapshot;
+  workflow: Workflow;
+  providerIndex: ProviderIndex;
+}): PlanningResult {
+  const actions: ImportAction[] = [];
+  const events: ImportPlanEvent[] = [];
   const mapping = snapshot.mapping;
   const objectKey = fact.sourceObject.providerObjectKey;
   const owner = providerIndex.get(objectKey);
   const workItem = workflow.workItems[mapping.workItemId];
 
-  if (owner?.ambiguous) {
+  if (owner?.kind === "ambiguous") {
     actions.push(
       createAction({
         kind: "conflict",
@@ -1184,7 +1449,10 @@ function planWorkItemFact({
     return { actions, events };
   }
 
-  if (owner && owner.workItemId !== mapping.workItemId) {
+  if (
+    owner?.kind === "owned" &&
+    owner.workItemId !== mapping.workItemId
+  ) {
     actions.push(
       createAction({
         kind: "conflict",
@@ -1302,6 +1570,10 @@ function planWorkItemFact({
     return { actions, events };
   }
 
+  if (owner.kind !== "owned") {
+    throw snapshotInvalid();
+  }
+
   const link = owner.link;
 
   if (link.legacy === true) {
@@ -1317,7 +1589,7 @@ function planWorkItemFact({
         baseline: {
           providerObjectKey: objectKey,
           objectType: fact.sourceObject.objectType,
-          scopeRef: cloneRecord(snapshot.scope),
+          scopeRef: cloneScopeRef(snapshot.scope),
           managedFields: [...mapping.managedFields]
         },
         observation: createObservation(fact, {
@@ -1481,7 +1753,11 @@ function createTitleUpdate({
   fact,
   mapping,
   before
-}) {
+}: {
+  fact: ProviderIssueFact;
+  mapping: ProviderSnapshotMapping;
+  before: string;
+}): CreatedActionAndEvent {
   const semanticTarget = "work-item-title";
   const event = createImportedEvent({
     type: "work_item.updated",
@@ -1521,23 +1797,28 @@ function createTitleUpdate({
 function createRichLink({
   fact,
   snapshot
-}) {
+}: {
+  fact: ProviderIssueFact;
+  snapshot: AuthorizedSnapshot;
+}): RichExternalLink {
   return {
     providerObjectKey: fact.sourceObject.providerObjectKey,
     provider: fact.sourceObject.provider,
     objectType: fact.sourceObject.objectType,
     externalId: fact.sourceObject.externalId,
-    scopeRef: cloneRecord(snapshot.scope),
+    scopeRef: cloneScopeRef(snapshot.scope),
     url: fact.sourceObject.url,
     managedFields: [...snapshot.mapping.managedFields],
     lastObservation: createObservation(fact)
   };
 }
 
-function createObservation(fact, {
+function createObservation(fact: ProviderIssueFact, {
   includeUrl = false
-} = {}) {
-  const observation = {
+}: {
+  includeUrl?: boolean | undefined;
+} = {}): ExternalObservation {
+  const observation: ExternalObservation = {
     revisionId: fact.revision.id,
     occurredAt: fact.revision.occurredAt,
     contentDigest: fact.revision.contentDigest,
@@ -1558,7 +1839,14 @@ function createImportedEvent({
   semanticTarget,
   occurredAt,
   payload
-}) {
+}: {
+  type: ImportEventType;
+  fact: ProviderFact;
+  mapping: ProviderSnapshotMapping;
+  semanticTarget: string;
+  occurredAt: string;
+  payload: Record<string, unknown>;
+}): ImportPlanEvent {
   return {
     eventId: deriveImportEventId({
       eventType: type,
@@ -1582,7 +1870,14 @@ function createAction({
   mapping,
   semanticTarget,
   event
-}) {
+}: {
+  kind: ImportAction["kind"];
+  reasonCode: string;
+  fact: ProviderFact;
+  mapping: ProviderSnapshotMapping;
+  semanticTarget: string;
+  event?: ImportPlanEvent | undefined;
+}): ImportAction {
   const identity = {
     workItemId: mapping.workItemId,
     sourceObjectKey:
@@ -1590,7 +1885,7 @@ function createAction({
     sourceRevisionId: fact.revision.id,
     semanticTarget
   };
-  const action = {
+  const action: ImportAction = {
     actionId: deriveImportActionId(identity),
     kind,
     workItemId: mapping.workItemId,
@@ -1609,11 +1904,16 @@ function simulatePlannedEvents({
   workflow,
   actions,
   events
-}) {
+}: {
+  workflow: Workflow;
+  actions: ImportAction[];
+  events: ImportPlanEvent[];
+}): SimulationResult {
   const sortedEvents = [...events].sort(
     compareImportEvents
   );
-  const actionByEventId = new Map();
+  const actionByEventId =
+    new Map<string, ImportAction>();
 
   for (const action of actions) {
     for (const eventId of action.eventIds) {
@@ -1622,9 +1922,10 @@ function simulatePlannedEvents({
   }
 
   let projected = workflow;
-  const rejectedEventIds = new Set();
-  const replacementActions = new Map();
-  const domainCodes = new Map();
+  const rejectedEventIds = new Set<string>();
+  const replacementActions =
+    new Map<string, ImportAction>();
+  const domainCodes = new Map<string, string>();
 
   for (const event of sortedEvents) {
     try {
@@ -1636,15 +1937,17 @@ function simulatePlannedEvents({
         throw error;
       }
 
+      const errorCode = getErrorCode(error);
       const directConflict =
-        DIRECT_DOMAIN_CONFLICTS.has(error?.code);
+        errorCode !== undefined &&
+        DIRECT_DOMAIN_CONFLICTS.has(errorCode);
       replacementActions.set(
         original.actionId,
         {
           ...original,
           kind: "conflict",
           reasonCode: directConflict
-            ? error.code
+            ? errorCode
             : "DOMAIN_INVARIANT_VIOLATION",
           eventIds: []
         }
@@ -1652,7 +1955,7 @@ function simulatePlannedEvents({
       if (!directConflict) {
         domainCodes.set(
           original.actionId,
-          error?.code ?? "UNKNOWN"
+          errorCode ?? "UNKNOWN"
         );
       }
       rejectedEventIds.add(event.eventId);
@@ -1671,8 +1974,10 @@ function simulatePlannedEvents({
   };
 }
 
-function buildProviderIndex(workflow) {
-  const index = new Map();
+function buildProviderIndex(
+  workflow: Workflow
+): ProviderIndex {
+  const index: ProviderIndex = new Map();
 
   for (const workItem of Object.values(workflow.workItems)) {
     for (const link of workItem.externalLinks) {
@@ -1680,10 +1985,11 @@ function buildProviderIndex(workflow) {
 
       if (existing) {
         index.set(link.providerObjectKey, {
-          ambiguous: true
+          kind: "ambiguous"
         });
       } else {
         index.set(link.providerObjectKey, {
+          kind: "owned",
           workItemId: workItem.id,
           link
         });
@@ -1694,8 +2000,10 @@ function buildProviderIndex(workflow) {
   return index;
 }
 
-function summarizeActions(actions) {
-  const summary = {
+function summarizeActions(
+  actions: readonly ImportAction[]
+): ImportPlanSummary {
+  const summary: ImportPlanSummary = {
     create: 0,
     link: 0,
     refresh: 0,
@@ -1711,7 +2019,10 @@ function summarizeActions(actions) {
   return summary;
 }
 
-function compareFacts(left, right) {
+function compareFacts(
+  left: ProviderFact,
+  right: ProviderFact
+): number {
   return (
     compareStrings(
       left.sourceObject.providerObjectKey,
@@ -1729,11 +2040,16 @@ function compareFacts(left, right) {
   );
 }
 
-function sameStringSet(left, right) {
+function sameStringSet(
+  left: unknown,
+  right: unknown
+): boolean {
   if (
     !Array.isArray(left) ||
     !Array.isArray(right) ||
-    left.length !== right.length
+    left.length !== right.length ||
+    !left.every(isString) ||
+    !right.every(isString)
   ) {
     return false;
   }
@@ -1748,11 +2064,17 @@ function sameStringSet(left, right) {
   );
 }
 
-function compareStrings(left, right) {
+function compareStrings(
+  left: string,
+  right: string
+): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function scopeRefsEqual(left, right) {
+function scopeRefsEqual(
+  left: ScopeRef | null,
+  right: ProviderScopeRef
+): boolean {
   return (
     left?.kind === right?.kind &&
     left?.key === right?.key &&
@@ -1760,7 +2082,10 @@ function scopeRefsEqual(left, right) {
   );
 }
 
-function hasExactKeys(value, keys) {
+function hasExactKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[]
+): boolean {
   const actualKeys = Object.keys(value);
 
   return (
@@ -1770,10 +2095,10 @@ function hasExactKeys(value, keys) {
 }
 
 function hasAllowedAndRequiredKeys(
-  value,
-  requiredKeys,
-  optionalKeys
-) {
+  value: Record<string, unknown>,
+  requiredKeys: readonly string[],
+  optionalKeys: readonly string[]
+): boolean {
   const keys = Object.keys(value);
   const allowedKeys = new Set([
     ...requiredKeys,
@@ -1786,7 +2111,9 @@ function hasAllowedAndRequiredKeys(
   );
 }
 
-function isPlainRecord(value) {
+function isPlainRecord(
+  value: unknown
+): value is Record<string, unknown> {
   if (
     !value ||
     typeof value !== "object" ||
@@ -1799,7 +2126,7 @@ function isPlainRecord(value) {
   return prototype === Object.prototype || prototype === null;
 }
 
-function isTimestamp(value) {
+function isTimestamp(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.trim().length > 0 &&
@@ -1807,7 +2134,10 @@ function isTimestamp(value) {
   );
 }
 
-function isBoundedString(value, maximumLength) {
+function isBoundedString(
+  value: unknown,
+  maximumLength: number
+): value is string {
   return (
     typeof value === "string" &&
     value.trim().length > 0 &&
@@ -1815,11 +2145,11 @@ function isBoundedString(value, maximumLength) {
   );
 }
 
-function codePointLength(value) {
+function codePointLength(value: string): number {
   return [...value].length;
 }
 
-function isUuid(value) {
+function isUuid(value: unknown): value is string {
   return (
     typeof value === "string" &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
@@ -1828,27 +2158,130 @@ function isUuid(value) {
   );
 }
 
-function cloneRecord(value) {
-  return Object.fromEntries(
-    Object.entries(value).map(([key, item]) => [
-      key,
-      Array.isArray(item)
-        ? [...item]
-        : isPlainRecord(item)
-          ? cloneRecord(item)
-          : item
-    ])
+function cloneCandidatePayload(
+  event: ArtifactLinkedEvent | EvidenceRecordedEvent
+): Record<string, unknown> {
+  if (event.type === "artifact.linked") {
+    return {
+      artifactId: event.payload.artifactId,
+      attemptId: event.payload.attemptId,
+      kind: event.payload.kind,
+      revision: event.payload.revision,
+      url: event.payload.url
+    };
+  }
+
+  return {
+    evidenceId: event.payload.evidenceId,
+    attemptId: event.payload.attemptId,
+    artifactId: event.payload.artifactId,
+    revision: event.payload.revision,
+    criterionKey: event.payload.criterionKey,
+    outcome: event.payload.outcome,
+    url: event.payload.url
+  };
+}
+
+function cloneScopeRef(
+  scope: ProviderScopeRef
+): ScopeRef {
+  return {
+    kind: scope.kind,
+    key: scope.key,
+    ...(scope.parentKey === undefined
+      ? {}
+      : { parentKey: scope.parentKey })
+  };
+}
+
+function isProviderIssueFact(
+  fact: ProviderFact
+): fact is ProviderIssueFact {
+  return fact.sourceObject.objectType === "issue";
+}
+
+function isDeliveryFact(
+  fact: ProviderFact
+): fact is ProviderPullRequestFact | ProviderCheckFact {
+  return (
+    fact.sourceObject.objectType === "pull_request" ||
+    fact.sourceObject.objectType === "check"
   );
 }
 
-function snapshotInvalid() {
+function isProviderName(
+  value: unknown
+): value is ProviderName {
+  return value === "github" || value === "linear";
+}
+
+function normalizeProviderName(
+  value: unknown
+): ProviderName {
+  if (!isProviderName(value)) {
+    throw snapshotInvalid();
+  }
+
+  return value;
+}
+
+function isProviderObjectType(
+  value: unknown
+): value is ProviderObjectType {
+  return (
+    value === "issue" ||
+    value === "pull_request" ||
+    value === "check"
+  );
+}
+
+function isEvidenceOutcome(
+  value: unknown
+): value is "passed" | "failed" {
+  return value === "passed" || value === "failed";
+}
+
+function isManagedField(
+  value: string
+): value is ManagedField {
+  return value === "title";
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string";
+}
+
+function isDigest(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^sha256:[0-9a-f]{64}$/.test(value)
+  );
+}
+
+function getErrorCode(error: unknown): string | undefined {
+  if (
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string"
+  ) {
+    return error.code;
+  }
+
+  return undefined;
+}
+
+function snapshotInvalid(): SnapshotImportError {
   return new SnapshotImportError(
     "SNAPSHOT_INVALID",
     "ProviderSnapshot does not match the supported safe schema."
   );
 }
 
-function snapshotLimit(field, limit) {
+function snapshotLimit(
+  field: string,
+  limit: number
+): SnapshotImportError {
   return new SnapshotImportError(
     "SNAPSHOT_LIMIT_EXCEEDED",
     `Snapshot ${field} exceeds limit ${limit}.`
@@ -1856,7 +2289,9 @@ function snapshotLimit(field, limit) {
 }
 
 export class SnapshotImportError extends Error {
-  constructor(code, message) {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
     super(message);
     this.name = "SnapshotImportError";
     this.code = code;

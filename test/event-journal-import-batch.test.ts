@@ -19,7 +19,7 @@ import {
 import {
   createActor,
   createPreviewPlan
-} from "../test-support/snapshot-import-fixtures.js";
+} from "../test-support/snapshot-import-fixtures.ts";
 
 test("file journal atomically appends a complete import batch", async (t) => {
   const directory = await createTemporaryDirectory(t);

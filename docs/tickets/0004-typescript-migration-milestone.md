@@ -44,31 +44,31 @@
 
 ## T12.7 — 迁移 Snapshot Import
 
-- 状态：GitHub Issue `#22`；从 T12.4 拆出，避免把约千行 importer 与 provider transport 放入同一审查单元。
+- 状态：已完成；GitHub Issue `#22`，Snapshot Import、fixture 与直接测试已进入 strict TypeScript 门禁。
 - 目的：类型化不可信 snapshot 文本到确定性 ImportPlan 的完整 runtime guard、digest、冲突和排序边界。
 - 范围：snapshot importer、test-support fixture、preview/domain/apply 直接测试与临时声明清理。
 - 不包含：provider 网络、真实外部写入、CLI/server/runner、插件 SDK 或规则变更。
 - 依赖：T12.3、T12.4；应在 T12.5/T12.6 完成前独立关闭。
 - 验收标准：`JSON.parse` 结果保持 `unknown`；全部资源限制、schema、digest、冲突、排序、apply 和 crash recovery 语义兼容。
-- 验证：snapshot/import batch/journal crash 定向测试、全量测试和独立审查。
+- 验证：Snapshot preview/domain/apply 51/51、import batch/journal closure 16/16、扩展定向闭包 71/71、全量测试 229/229 通过；35 个旧/新实现差分场景 0 mismatch；独立审查无剩余 P0–P3。
 
 ## T12.5 — 迁移 Codex runner
 
-- 状态：GitHub Issue `#16`，依赖 `#14`，可与 `#15` 在契约稳定后独立推进。
+- 状态：GitHub Issue `#16`，依赖 `#14` 与 `#22`。
 - 目的：类型化 JSON-RPC、子进程生命周期、审批拒绝、timeout 和 Attempt 映射。
 - 范围：App Server client、runner、fake server 和测试。
 - 不包含：更换 Codex SDK、远程 runner、自动审批。
-- 依赖：T12.3。
+- 依赖：T12.3、T12.7。
 - 验收标准：notification/response 使用可辨识类型并保持 fail-closed；真实 read-only smoke 行为不变。
 - 验证：runner 定向测试、全量测试和受控 read-only smoke。
 
 ## T12.6 — 迁移 CLI 与本地 HTTP server
 
-- 状态：GitHub Issue `#17`，依赖 `#14`、`#15`、`#16`。
+- 状态：GitHub Issue `#17`，依赖 `#14`、`#15`、`#16` 与 `#22`；后续按 Server/Demo 和 CLI/Bin 两个审查切片交付。
 - 目的：完成 Node.js 服务端源码迁移，并类型化命令、请求和关闭生命周期。
 - 范围：CLI、server、demo 和对应测试；最后更新 package bin/start。
 - 不包含：远程暴露、认证、NestJS 或前端构建。
-- 依赖：T12.3、T12.4、T12.5。
+- 依赖：T12.3、T12.4、T12.5、T12.7。
 - 验收标准：CLI shebang/bin 可执行；loopback、CSRF、shutdown 和退出码行为不变。
 - 验证：CLI/server 定向测试、全量测试和本地浏览器走查。
 

@@ -29,7 +29,7 @@ import {
   createActor,
   createGitHubIssueSnapshot,
   createPreviewPlan
-} from "../test-support/snapshot-import-fixtures.js";
+} from "../test-support/snapshot-import-fixtures.ts";
 
 test("a validated import plan becomes a replayable batch and immutable receipt", () => {
   const plan = createPreviewPlan();

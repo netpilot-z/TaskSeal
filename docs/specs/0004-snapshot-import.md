@@ -736,7 +736,7 @@ provider read client
 | --- | --- |
 | `src/connectors/*` | ProviderObjectKey、SourceRevision、裁剪 fact 与 candidate event；无 journal 依赖 |
 | `src/application/provider-inspection.ts` | scope/mapping 组装和 ProviderSnapshot v2；无写入 |
-| `src/application/snapshot-import.js` | snapshot 校验、digest、纯 preview、ImportPlan |
+| `src/application/snapshot-import.ts` | snapshot 校验、digest、纯 preview、ImportPlan |
 | `src/application/import-policy.ts` | ImportPolicy v1 规范化、PolicyBinding 与 policyDigest |
 | `src/application/import-batch.ts` | ImportBatchRecord 语义校验、planDigest 重算与 receipt 投影 |
 | `src/domain/workflow.ts` | ExternalLink 唯一性、字段管理权、legacy upcast、新 canonical events 与全部领域不变量 |
