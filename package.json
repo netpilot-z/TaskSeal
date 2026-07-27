@@ -5,11 +5,11 @@
   "type": "module",
   "description": "Evidence-driven AI delivery control plane experiment",
   "bin": {
-    "taskseal": "src/cli.js"
+    "taskseal": "src/cli.ts"
   },
   "scripts": {
-    "start": "node src/cli.js start",
-    "taskseal": "node src/cli.js",
+    "start": "node src/cli.ts start",
+    "taskseal": "node src/cli.ts",
     "typecheck": "tsc --noEmit",
     "test": "npm run typecheck && node --test"
   },

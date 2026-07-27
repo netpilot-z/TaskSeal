@@ -23,7 +23,7 @@
 - 依赖：T01。
 - 实现提示：CLI 只调用 application/storage 接口；不得覆盖现有配置或输出凭证。
 - 验收标准：init 幂等；doctor 能区分 Codex 不存在和未登录；默认 `npm start` 仍可启动 Control Room。
-- 验证：`node --test test/cli.test.js`，并人工执行 `node src/cli.js doctor`。
+- 验证：原切片已完成；当前入口迁移后使用 `node --test test/cli.test.ts`，并人工执行 `node src/cli.ts doctor`。
 
 ## T03 — 运行并记录一个 Codex App Server turn
 

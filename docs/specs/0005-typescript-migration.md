@@ -67,14 +67,14 @@ TaskSeal 已经包含领域状态机、文件 journal、Codex runner、provider 
 4. provider normalizer/read client；
 5. snapshot importer 与测试 fixture；
 6. Codex runner 与 App Server transport；
-7. CLI 和 HTTP server；
+7. HTTP server、Demo 与 CLI；
 8. 单独决定 Control Room 的前端工具链。
 
 每一步只迁移一组具有共同契约的文件，不做全仓库扩展名批量替换。
 
 ## 兼容、回退与分支协作
 
-- `bin` 继续指向 JavaScript CLI，直到 CLI 切片迁移。
+- CLI 切片完成后，private/source-checkout 入口直接指向 TypeScript；可安装 npm 发布物必须另建编译或 bundle 决策，不能依赖 `node_modules` 内原生 `.ts` 执行。
 - 静态资源目录和 URL 不变。
 - 迁移分支不混入 snapshot import 或外部 provider 写入功能。
 - 任一切片失败时，可把该切片恢复为 `.js` 并删除对应类型，不影响其他已迁移模块。
@@ -86,7 +86,7 @@ TaskSeal 已经包含领域状态机、文件 journal、Codex runner、provider 
 2. `npm run typecheck` 在不生成 JavaScript 的情况下通过。
 3. `npm test` 执行类型门禁并保持全部既有测试通过。
 4. Node test runner 能发现并运行 `.test.ts`。
-5. JavaScript 应用模块能直接导入并调用 `.ts` 配置模块。
+5. 迁移期间的 JavaScript consumer 与迁移完成后的 TypeScript consumer 都能直接导入 `.ts` 模块。
 6. 无 enum、parameter property、path alias、生产依赖或 `dist/`。
 7. CI 使用 Node.js 24，并在测试前安装锁定依赖。
 8. 仓库不包含本地绝对路径、凭证或生成的 JavaScript。
@@ -98,4 +98,4 @@ NestJS、monorepo 和编译产物的触发条件以 ADR 0002 为准。未满足�
 
 ## 未决问题
 
-无阻塞问题。npm CLI 发布、远程多人后端和独立 Web 构建均在真实需求出现后另行规格化。
+无阻塞问题。可分发 CLI 由 GitHub Issue `#32` 跟踪；远程多人后端和独立 Web 构建均在真实需求出现后另行规格化。

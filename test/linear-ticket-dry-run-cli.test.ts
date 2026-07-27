@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { runCli } from "../src/cli.js";
+import { runCli } from "../src/cli.ts";
+import type { OutputPort } from "../src/cli.ts";
 
 test("sync linear dry-run renders the local draft plan", async () => {
   const output = createOutput();
-  const calls = [];
+  const calls: unknown[] = [];
   const plan = {
     schemaVersion: 1,
     mode: "dry-run",
@@ -40,7 +41,8 @@ test("sync linear dry-run renders the local draft plan", async () => {
       source: "docs/tickets/0002-codex-runner-milestone.md"
     }
   ]);
-  assert.deepEqual(JSON.parse(output.text()), plan);
+  const rendered: unknown = JSON.parse(output.text());
+  assert.deepEqual(rendered, plan);
 });
 
 test("sync linear requires dry-run and never falls through to a write mode", async () => {
@@ -66,11 +68,13 @@ test("sync linear requires dry-run and never falls through to a write mode", asy
   }
 });
 
-function createOutput() {
-  const chunks = [];
+function createOutput(): OutputPort & {
+  text(): string;
+} {
+  const chunks: string[] = [];
 
   return {
-    write(value) {
+    write(value: string) {
       chunks.push(String(value));
     },
     text() {

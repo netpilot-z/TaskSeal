@@ -1,16 +1,129 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import type { TestContext } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   resolveCodexInvocation,
   runCli,
   startPersistentControlRoom
-} from "../src/cli.js";
+} from "../src/cli.ts";
+import type {
+  CommandRunner,
+  OutputPort
+} from "../src/cli.ts";
+import type { CodexRunnerRunOptions } from "../src/runners/codex-runner.ts";
+import type {
+  PersistentServicePort,
+  PersistentTaskSealServerOptions
+} from "../src/server.ts";
 import { FileEventJournal } from "../src/storage/event-journal.ts";
+
+test("package entrypoints target the source-checkout TypeScript CLI", async () => {
+  const packageJson: unknown = JSON.parse(
+    await readFile(
+      new URL("../package.json", import.meta.url),
+      "utf8"
+    )
+  );
+  const packageLock: unknown = JSON.parse(
+    await readFile(
+      new URL("../package-lock.json", import.meta.url),
+      "utf8"
+    )
+  );
+
+  assert.equal(readJsonPath(packageJson, "private"), true);
+  assert.deepEqual(readJsonPath(packageJson, "bin"), {
+    taskseal: "src/cli.ts"
+  });
+  assert.equal(
+    readJsonPath(packageJson, "scripts", "start"),
+    "node src/cli.ts start"
+  );
+  assert.equal(
+    readJsonPath(packageJson, "scripts", "taskseal"),
+    "node src/cli.ts"
+  );
+  assert.equal(
+    readJsonPath(
+      packageLock,
+      "packages",
+      "",
+      "bin",
+      "taskseal"
+    ),
+    "src/cli.ts"
+  );
+});
+
+test("the source-checkout CLI preserves its POSIX executable contract", async () => {
+  const cli = await readFile(
+    new URL("../src/cli.ts", import.meta.url)
+  );
+
+  assert.equal(
+    cli.subarray(0, "#!/usr/bin/env node\n".length).toString(),
+    "#!/usr/bin/env node\n"
+  );
+  assert.equal(cli.includes(Buffer.from("\r\n")), false);
+
+  const repositoryRoot = fileURLToPath(
+    new URL("../", import.meta.url)
+  );
+  const mode = spawnSync(
+    "git",
+    ["ls-files", "--stage", "src/cli.ts"],
+    {
+      cwd: repositoryRoot,
+      encoding: "utf8"
+    }
+  );
+
+  assert.equal(mode.status, 0, mode.stderr);
+  assert.match(
+    mode.stdout,
+    /^100755 [0-9a-f]+ 0\tsrc\/cli\.ts\r?\n?$/
+  );
+});
+
+test("the POSIX source-checkout CLI executes through its raw entrypoint", () => {
+  if (process.platform === "win32") {
+    return;
+  }
+
+  const repositoryRoot = fileURLToPath(
+    new URL("../", import.meta.url)
+  );
+  const cliPath = fileURLToPath(
+    new URL("../src/cli.ts", import.meta.url)
+  );
+  const result = spawnSync(
+    cliPath,
+    ["unknown"],
+    {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      shell: false
+    }
+  );
+
+  assert.equal(result.error, undefined);
+  assert.equal(result.signal, null);
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stdout, /Usage:/);
+});
 
 test("init creates one local work item and remains idempotent", async (t) => {
   const cwd = await createTemporaryDirectory(t);
@@ -26,8 +139,14 @@ test("init creates one local work item and remains idempotent", async (t) => {
   const events = await journal.readAll();
 
   assert.equal(events.length, 1);
-  assert.equal(events[0].type, "work_item.created");
-  assert.equal(events[0].workItemId, "TS-1");
+  assert.equal(
+    readJsonPath(events[0], "type"),
+    "work_item.created"
+  );
+  assert.equal(
+    readJsonPath(events[0], "workItemId"),
+    "TS-1"
+  );
   assert.doesNotMatch(JSON.stringify(events), new RegExp(escapeRegExp(cwd)));
 });
 
@@ -43,8 +162,11 @@ test("doctor reports project and Codex readiness without command stderr", async 
       linear: { workspace: "TaskSeal", team: "netpilot" }
     })
   );
-  const commands = [];
-  const commandRunner = async (command, args) => {
+  const commands: string[] = [];
+  const commandRunner: CommandRunner = async (
+    command,
+    args
+  ) => {
     commands.push(command);
 
     if (command === "where.exe") {
@@ -95,7 +217,10 @@ test("doctor enforces the Node 24.12.0 runtime minimum", async (t) => {
     join(cwd, "config", "project.json"),
     JSON.stringify({ project: "TaskSeal" })
   );
-  const commandRunner = async (command, args) => {
+  const commandRunner: CommandRunner = async (
+    command,
+    args
+  ) => {
     if (command === "where.exe") {
       return {
         exitCode: 0,
@@ -164,9 +289,10 @@ test("doctor fails clearly when Codex is unavailable", async (t) => {
     cwd,
     output,
     commandRunner: async () => {
-      const error = new Error("not found");
-      error.code = "ENOENT";
-      throw error;
+      throw Object.assign(
+        new Error("not found"),
+        { code: "ENOENT" }
+      );
     }
   });
 
@@ -234,25 +360,50 @@ test("no command keeps the compatible start behavior", async (t) => {
 test("persistent start wires one service and runner into the Control Room", async (t) => {
   const cwd = await createTemporaryDirectory(t);
   const output = createOutput();
-  const calls = [];
-  const service = { snapshot() {}, getWorkItem() {} };
+  const calls: unknown[] = [];
+  const service: PersistentServicePort = {
+    snapshot() {
+      return {
+        generatedAt: "2026-07-26T09:00:00.000Z",
+        summary: {
+          total: 0,
+          planned: 0,
+          running: 0,
+          reviewing: 0,
+          blocked: 0,
+          accepted: 0,
+          activeAgents: 0
+        },
+        workItems: []
+      };
+    },
+    getWorkItem(workItemId: string) {
+      return { id: workItemId };
+    }
+  };
   const runner = {
-    async run(options) {
+    async run(options: CodexRunnerRunOptions) {
       calls.push(options);
       return { outcome: "completed" };
     }
   };
   let initialized = false;
   let shutDown = false;
-  let serverOptions;
+  let serverOptions:
+    | PersistentTaskSealServerOptions
+    | undefined;
   const signalSource = new EventEmitter();
   class FakeServer extends EventEmitter {
-    listen(port, host, callback) {
+    listen(
+      port: number,
+      host: string,
+      callback: () => void
+    ): void {
       calls.push({ port, host });
       callback();
     }
 
-    async shutdown() {
+    async shutdown(): Promise<void> {
       shutDown = true;
       this.emit("close");
     }
@@ -278,11 +429,14 @@ test("persistent start wires one service and runner into the Control Room", asyn
 
   assert.equal(initialized, true);
   assert.equal(server instanceof FakeServer, true);
+  assert.ok(serverOptions);
   assert.equal(serverOptions.service, service);
+  const signal = new AbortController().signal;
   await serverOptions.runWorkItem({
     workItemId: "TS-1",
     prompt: "Run from the Control Room.",
-    sandbox: "read-only"
+    sandbox: "read-only",
+    signal
   });
   assert.deepEqual(calls, [
     { port: 0, host: "127.0.0.1" },
@@ -290,6 +444,7 @@ test("persistent start wires one service and runner into the Control Room", asyn
       workItemId: "TS-1",
       prompt: "Run from the Control Room.",
       sandbox: "read-only",
+      signal,
       cwd,
       approvalPolicy: "never"
     }
@@ -297,7 +452,9 @@ test("persistent start wires one service and runner into the Control Room", asyn
   assert.match(output.text(), /http:\/\/127\.0\.0\.1:0/);
 
   signalSource.emit("SIGTERM");
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) =>
+    setImmediate(() => resolve())
+  );
   assert.equal(shutDown, true);
 });
 
@@ -321,7 +478,7 @@ test("persistent start refuses non-loopback binding", async (t) => {
 test("run delegates one work item to Codex with an explicit safety mode", async (t) => {
   const cwd = await createTemporaryDirectory(t);
   const output = createOutput();
-  const calls = [];
+  const calls: unknown[] = [];
 
   const exitCode = await runCli({
     args: [
@@ -411,11 +568,13 @@ test("unknown commands return a usage error", async (t) => {
   assert.match(output.text(), /Usage:/);
 });
 
-function createOutput() {
-  const chunks = [];
+function createOutput(): OutputPort & {
+  text(): string;
+} {
+  const chunks: string[] = [];
 
   return {
-    write(value) {
+    write(value: string) {
       chunks.push(String(value));
     },
     text() {
@@ -424,12 +583,41 @@ function createOutput() {
   };
 }
 
-async function createTemporaryDirectory(t) {
+async function createTemporaryDirectory(
+  t: TestContext
+): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "taskseal-cli-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   return directory;
 }
 
-function escapeRegExp(value) {
+function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function readJsonPath(
+  value: unknown,
+  ...path: string[]
+): unknown {
+  let current = value;
+
+  for (const segment of path) {
+    if (!isRecord(current)) {
+      throw new TypeError("Expected a JSON object.");
+    }
+
+    current = current[segment];
+  }
+
+  return current;
+}
+
+function isRecord(
+  value: unknown
+): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
+  );
 }

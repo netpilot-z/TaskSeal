@@ -74,13 +74,23 @@
 
 ## T12.8 — 迁移 CLI 与 Bin
 
-- 状态：GitHub Issue `#28`，依赖 `#16`、`#17` 与 `#22`。
+- 状态：已完成；GitHub Issue `#28`，CLI、源码入口与直接测试已进入 strict TypeScript 门禁。
 - 目的：迁移正式入口并类型化命令参数、环境变量、退出码和 shutdown 调用。
 - 范围：CLI、CLI 集成测试与 `package.json` 的 bin/start/taskseal 入口。
-- 不包含：HTTP Server/Demo、浏览器构建、远程暴露、认证、NestJS 或 monorepo。
+- 不包含：HTTP Server/Demo、浏览器构建、远程暴露、认证、NestJS、monorepo，以及可安装 npm 发布物。
 - 依赖：T12.5、T12.6、T12.7。
-- 验收标准：CLI 参数与错误码兼容；shebang、直接 bin、npm scripts 在 Windows 与 POSIX 语义下可执行。
-- 验证：CLI/doctor/inspect/sync/run 定向测试、bin smoke、全量测试和独立审查。
+- 验收标准：CLI 参数与错误码兼容；private/source checkout 的 shebang、直接入口和 npm scripts 在 Windows 与 POSIX 语义下可执行。
+- 验证：CLI/doctor/inspect/sync/run 定向测试 25/25、全量测试 249/249、Windows 直接/npm script smoke、pack 内容审计和独立审查通过；PR `#33` 的 Ubuntu CI 实际执行 POSIX raw source entry 并通过。
+
+## T12.9 — 建立可分发的跨平台 CLI 发布物
+
+- 状态：等待仓库外安装需求；GitHub Issue `#32`。
+- 目的：提供不依赖 `node_modules` 内原生 TypeScript 执行的可安装 CLI。
+- 范围：比较 `tsc → dist`、单文件 bundle 与插件包装；定义发布 manifest，并在隔离项目安装 tarball。
+- 不包含：当前取消 `private: true`、立即发布 npm、远程 daemon、NestJS、monorepo 或浏览器 bundle。
+- 依赖：T12.8；由仓库外安装、版本发布或第三方复用触发。
+- 验收标准：Windows/POSIX 安装后 `.bin` 真实运行，发布物可复现且不携带凭证、本地状态或未声明源码。
+- 验证：pack 内容审计、隔离 install、Windows/Ubuntu smoke、全量测试与回退演练。
 
 ## T13 — 重新评估 Control Room 前端工具链
 

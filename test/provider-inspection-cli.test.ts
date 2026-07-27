@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { runCli } from "../src/cli.js";
+import { runCli } from "../src/cli.ts";
+import type { OutputPort } from "../src/cli.ts";
 
 test("inspect github-issue parses one explicit issue mapping", async () => {
   const output = createOutput();
-  const calls = [];
+  const calls: unknown[] = [];
 
   const exitCode = await runCli({
     args: [
@@ -40,7 +41,8 @@ test("inspect github-issue parses one explicit issue mapping", async () => {
       requiredEvidence: ["tests"]
     }
   ]);
-  assert.equal(JSON.parse(output.text()).provider, "github");
+  const rendered: unknown = JSON.parse(output.text());
+  assert.equal(readJsonProperty(rendered, "provider"), "github");
 });
 
 test("inspect github-issue rejects invalid or delivery-chain arguments", async () => {
@@ -96,7 +98,7 @@ test("inspect github-issue rejects invalid or delivery-chain arguments", async (
 
 test("inspect github parses explicit mappings and renders JSON", async () => {
   const output = createOutput();
-  const calls = [];
+  const calls: unknown[] = [];
   const snapshot = {
     schemaVersion: 1,
     mode: "read-only",
@@ -141,12 +143,13 @@ test("inspect github parses explicit mappings and renders JSON", async () => {
       criterionKey: "tests"
     }
   ]);
-  assert.deepEqual(JSON.parse(output.text()), snapshot);
+  const rendered: unknown = JSON.parse(output.text());
+  assert.deepEqual(rendered, snapshot);
 });
 
 test("inspect linear parses one explicit issue mapping", async () => {
   const output = createOutput();
-  const calls = [];
+  const calls: unknown[] = [];
 
   const exitCode = await runCli({
     args: [
@@ -181,7 +184,8 @@ test("inspect linear parses one explicit issue mapping", async () => {
       requiredEvidence: ["tests"]
     }
   ]);
-  assert.equal(JSON.parse(output.text()).provider, "linear");
+  const rendered: unknown = JSON.parse(output.text());
+  assert.equal(readJsonProperty(rendered, "provider"), "linear");
 });
 
 test("inspect rejects incomplete arguments and renders safe provider errors", async () => {
@@ -202,8 +206,10 @@ test("inspect rejects incomplete arguments and renders safe provider errors", as
   assert.match(usageOutput.text(), /taskseal inspect github/);
 
   const errorOutput = createOutput();
-  const error = new Error("The configured workspace does not match.");
-  error.code = "LINEAR_WORKSPACE_MISMATCH";
+  const error = Object.assign(
+    new Error("The configured workspace does not match."),
+    { code: "LINEAR_WORKSPACE_MISMATCH" }
+  );
 
   assert.equal(
     await runCli({
@@ -343,13 +349,13 @@ test("inspect v2 maps explicit title management for every provider command", asy
   ];
 
   for (const scenario of scenarios) {
-    const calls = [];
+    const calls: unknown[] = [];
     const output = createOutput();
     const exitCode = await runCli({
       args: scenario.args,
       cwd: "project-root",
       output,
-      [scenario.dependency]: async (options) => {
+      [scenario.dependency]: async (options: unknown) => {
         calls.push(options);
         return {
           schemaVersion: 2,
@@ -416,15 +422,38 @@ test("inspect rejects incomplete or incompatible snapshot version options", asyn
   }
 });
 
-function createOutput() {
-  const chunks = [];
+function createOutput(): OutputPort & {
+  text(): string;
+} {
+  const chunks: string[] = [];
 
   return {
-    write(value) {
+    write(value: string) {
       chunks.push(String(value));
     },
     text() {
       return chunks.join("");
     }
   };
+}
+
+function readJsonProperty(
+  value: unknown,
+  key: string
+): unknown {
+  if (!isRecord(value)) {
+    throw new TypeError("Expected a JSON object.");
+  }
+
+  return value[key];
+}
+
+function isRecord(
+  value: unknown
+): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
+  );
 }
