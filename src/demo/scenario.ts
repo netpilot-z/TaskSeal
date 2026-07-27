@@ -7,8 +7,18 @@ import {
 } from "../connectors/github.ts";
 import { normalizeLinearIssue } from "../connectors/linear.ts";
 import { applyEvent, createWorkflow } from "../domain/workflow.ts";
+import type {
+  CanonicalEvent,
+  Workflow
+} from "../domain/workflow.ts";
 
-export async function loadDemoSteps() {
+export interface DemoStep {
+  source: string;
+  label: string;
+  event: CanonicalEvent;
+}
+
+export async function loadDemoSteps(): Promise<DemoStep[]> {
   const [
     linearIssue,
     codexRunStarted,
@@ -23,7 +33,7 @@ export async function loadDemoSteps() {
     loadJson("../../fixtures/github/check.completed.json")
   ]);
 
-  return [
+  const steps: DemoStep[] = [
     {
       source: "Linear",
       label: "Work item created",
@@ -76,15 +86,21 @@ export async function loadDemoSteps() {
       }
     }
   ];
+
+  return steps;
 }
 
-export function replayDemoSteps(steps, stepCount) {
+export function replayDemoSteps(
+  steps: readonly DemoStep[],
+  stepCount: number
+): Workflow {
   return steps
     .slice(0, stepCount)
     .reduce((workflow, step) => applyEvent(workflow, step.event), createWorkflow());
 }
 
-async function loadJson(relativePath) {
+async function loadJson(relativePath: string): Promise<unknown> {
   const content = await readFile(new URL(relativePath, import.meta.url), "utf8");
-  return JSON.parse(content);
+  const parsed: unknown = JSON.parse(content);
+  return parsed;
 }

@@ -15,7 +15,7 @@ import { TaskSealService } from "./application/taskseal-service.ts";
 import { isLinearIssueReference } from "./connectors/linear.ts";
 import { CodexAppServerClient } from "./runners/codex-app-server-client.ts";
 import { CodexRunner } from "./runners/codex-runner.ts";
-import { createTaskSealServer } from "./server.js";
+import { createTaskSealServer } from "./server.ts";
 import { FileEventJournal } from "./storage/event-journal.ts";
 
 const MINIMUM_NODE_VERSION = [24, 12, 0];

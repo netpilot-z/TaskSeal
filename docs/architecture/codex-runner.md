@@ -64,6 +64,9 @@ TaskSealService ───────► Dashboard projection
 - CLI 管理 init、doctor、start 和 run。
 - HTTP 只发送应用命令并读取 projection。
 - 两者不得直接写 journal 或调用 `applyEvent`。
+- `server.ts` 用 demo/persistent 判别联合隔离 fixture replay 与真实 service/runner 注入。
+- HTTP URL、header、JSON body、service health 和 caught error 都先作为不可信输入收窄。
+- Service 错误只保留经过格式校验的 code；面向浏览器的 message 使用固定安全文案。
 
 ## 数据与控制流
 
@@ -83,6 +86,8 @@ TaskSealService ───────► Dashboard projection
 - App Server error response 只暴露 method 与整数错误码，不传播不可信服务端 message。
 - HTTP 断开不取消已经开始的 runner；显式取消由后续命令实现。
 - 单进程串行 queue 防止 HTTP 与 CLI 并发 append 分叉；多进程写入暂不支持。
+- Persistent 写入口拒绝非 JSON、非 loopback Host、跨 Origin/Site、无效 CSRF 和超过 64 KiB 的 body。
+- `SERVICE_REOPEN_REQUIRED` 保留可机器处理的安全 code 并返回 503，不传播 service 原始错误正文。
 
 ## 测试策略
 
