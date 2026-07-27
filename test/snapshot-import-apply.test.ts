@@ -6,16 +6,32 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import type { TestContext } from "node:test";
 
 import {
   createImportBatchRecord
 } from "../src/application/import-batch.ts";
+import type {
+  ImportBatchRecord
+} from "../src/application/import-batch.ts";
 import {
   TaskSealService
 } from "../src/application/taskseal-service.ts";
+import type {
+  EventJournal,
+  SnapshotImportApplyResult
+} from "../src/application/taskseal-service.ts";
+import type {
+  ImportPlan
+} from "../src/application/import-plan.ts";
 import {
   applyEvent,
   createWorkflow
+} from "../src/domain/workflow.ts";
+import type {
+  CanonicalEvent,
+  ExternalLinkLinkedEvent,
+  WorkItemCreatedEvent
 } from "../src/domain/workflow.ts";
 import {
   FileEventJournal
@@ -25,7 +41,7 @@ import {
   createGitHubIssueSnapshot,
   createImportPolicy,
   createPreviewPlan
-} from "../test-support/snapshot-import-fixtures.js";
+} from "../test-support/snapshot-import-fixtures.ts";
 
 const APPLIED_AT = "2026-07-26T08:05:00.000Z";
 
@@ -58,7 +74,7 @@ test("service atomically applies a plan, returns one immutable receipt, and repl
     committed.receipt
   );
   assert.equal(
-    service.getWorkItem("TS-1").title,
+    required(service.getWorkItem("TS-1")).title,
     "Apply a provider snapshot safely"
   );
   assert.equal((await journal.readAll()).length, 1);
@@ -120,7 +136,7 @@ test("provider updates and additional links apply as complete replayable batches
   assert.equal(updatePlan.events.length, 2);
   assert.equal(updated.receipt.eventIds.length, 2);
   assert.equal(
-    service.getWorkItem("TS-1").title,
+    required(service.getWorkItem("TS-1")).title,
     "Updated provider title"
   );
 
@@ -139,7 +155,8 @@ test("provider updates and additional links apply as complete replayable batches
 
   assert.equal(linkPlan.events.length, 1);
   assert.equal(
-    service.getWorkItem("TS-1").externalLinks.length,
+    required(service.getWorkItem("TS-1"))
+      .externalLinks.length,
     2
   );
 
@@ -151,15 +168,19 @@ test("provider updates and additional links apply as complete replayable batches
     service.getWorkflow()
   );
   assert.equal(
-    reopened.getImportReceipt({
-      planDigest: updatePlan.planDigest
-    }).eventIds.length,
+    required(
+      reopened.getImportReceipt({
+        planDigest: updatePlan.planDigest
+      })
+    ).eventIds.length,
     2
   );
   assert.equal(
-    reopened.getImportReceipt({
-      planDigest: linkPlan.planDigest
-    }).eventIds.length,
+    required(
+      reopened.getImportReceipt({
+        planDigest: linkPlan.planDigest
+      })
+    ).eventIds.length,
     1
   );
 });
@@ -171,7 +192,8 @@ test("tampered, forbidden, blocked, and stale plans perform zero batch writes", 
   );
   const original = createPreviewPlan();
   const tampered = structuredClone(original);
-  tampered.events[0].payload.title = "Tampered";
+  required(tampered.events[0]).payload.title =
+    "Tampered";
 
   await assert.rejects(
     applyPlan(tamperedService, tampered),
@@ -268,7 +290,7 @@ test("a previewed legacy baseline authority conflict reaches the blocked decisio
 test("scope changes make a plan policy-stale without trusting caller policy", async () => {
   const journal = new MemoryJournal();
   const changedPolicy = createImportPolicy();
-  changedPolicy.allowedScopes[0].scopeRef.key =
+  required(changedPolicy.allowedScopes[0]).scopeRef.key =
     "github:repository:netpilot-z/other";
   const service = await openService(
     journal,
@@ -402,11 +424,15 @@ test("append and import apply are serialized in enqueue order", async () => {
   );
   await appendedAfter;
   assert.equal(
-    committedService.getWorkItem("TS-1").status,
+    required(
+      committedService.getWorkItem("TS-1")
+    ).status,
     "planned"
   );
   assert.equal(
-    committedService.getWorkItem("second").status,
+    required(
+      committedService.getWorkItem("second")
+    ).status,
     "planned"
   );
   assert.equal(committedJournal.records.length, 2);
@@ -450,8 +476,14 @@ test("replay skips identical seen batches before base checks and rejects changed
     ])
   });
 
-  assert.equal(valid.getWorkItem("TS-1").status, "planned");
-  assert.equal(valid.getWorkItem("later").status, "planned");
+  assert.equal(
+    required(valid.getWorkItem("TS-1")).status,
+    "planned"
+  );
+  assert.equal(
+    required(valid.getWorkItem("later")).status,
+    "planned"
+  );
 
   const changed = structuredClone(record);
   changed.actor.id = "forged";
@@ -473,9 +505,9 @@ test("replay skips identical seen batches before base checks and rejects changed
 });
 
 async function openService(
-  journal,
-  policy = createImportPolicy()
-) {
+  journal: EventJournal,
+  policy: unknown = createImportPolicy()
+): Promise<TaskSealService> {
   return TaskSealService.open({
     journal,
     importPolicyProvider: async () =>
@@ -484,7 +516,10 @@ async function openService(
   });
 }
 
-function applyPlan(service, plan) {
+function applyPlan(
+  service: TaskSealService,
+  plan: ImportPlan
+): Promise<SnapshotImportApplyResult> {
   return service.applySnapshotImport({
     plan,
     expectedPlanDigest: plan.planDigest,
@@ -493,21 +528,29 @@ function applyPlan(service, plan) {
 }
 
 class MemoryJournal {
-  constructor(records = []) {
+  records: unknown[];
+  commitCalls: number;
+  commitError: Error | null;
+
+  constructor(records: unknown[] = []) {
     this.records = structuredClone(records);
     this.commitCalls = 0;
     this.commitError = null;
   }
 
-  async readAll() {
+  async readAll(): Promise<unknown[]> {
     return structuredClone(this.records);
   }
 
-  async append(event) {
+  async append(
+    event: CanonicalEvent
+  ): Promise<void> {
     this.records.push(structuredClone(event));
   }
 
-  async commitBatch(record) {
+  async commitBatch(
+    record: ImportBatchRecord
+  ): Promise<void> {
     this.commitCalls += 1;
 
     if (this.commitError) {
@@ -518,7 +561,9 @@ class MemoryJournal {
   }
 }
 
-function createLocalWorkItemEvent(workItemId) {
+function createLocalWorkItemEvent(
+  workItemId: string
+): WorkItemCreatedEvent {
   return {
     eventId: `local:${workItemId}:created`,
     workItemId,
@@ -537,7 +582,8 @@ function createLocalWorkItemEvent(workItemId) {
   };
 }
 
-function createLegacyGitHubWorkItemEvent() {
+function createLegacyGitHubWorkItemEvent():
+  WorkItemCreatedEvent {
   return {
     eventId: "github:issue-501:created",
     workItemId: "TS-1",
@@ -556,7 +602,8 @@ function createLegacyGitHubWorkItemEvent() {
   };
 }
 
-function createLinearTitleManagerEvent() {
+function createLinearTitleManagerEvent():
+  ExternalLinkLinkedEvent {
   return {
     eventId: "taskseal:import:v1:link:linear-1",
     workItemId: "TS-1",
@@ -591,7 +638,9 @@ function createLinearTitleManagerEvent() {
   };
 }
 
-async function createTemporaryDirectory(t) {
+async function createTemporaryDirectory(
+  t: TestContext
+): Promise<string> {
   const directory = await mkdtemp(
     join(tmpdir(), "taskseal-import-apply-")
   );
@@ -604,10 +653,36 @@ async function createTemporaryDirectory(t) {
   return directory;
 }
 
-function codedError(code) {
-  return Object.assign(new Error(code), { code });
+class CodedError extends Error {
+  readonly code: string;
+
+  constructor(code: string) {
+    super(code);
+    this.name = "CodedError";
+    this.code = code;
+  }
 }
 
-function hasCode(code) {
-  return (error) => error?.code === code;
+function codedError(code: string): CodedError {
+  return new CodedError(code);
+}
+
+function hasCode(
+  code: string
+): (error: unknown) => boolean {
+  return (error: unknown) =>
+    error instanceof Error &&
+    "code" in error &&
+    error.code === code;
+}
+
+function required<T>(
+  value: T | null | undefined,
+  label = "value"
+): T {
+  if (value === null || value === undefined) {
+    throw new Error(`${label} is required.`);
+  }
+
+  return value;
 }

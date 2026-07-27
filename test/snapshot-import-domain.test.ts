@@ -6,6 +6,14 @@ import {
   classifyProcessedEvent,
   createWorkflow
 } from "../src/domain/workflow.ts";
+import type {
+  ExternalLinkObservedEvent,
+  ManagedField,
+  RichExternalLink,
+  Workflow,
+  WorkItem,
+  WorkItemCreatedEvent
+} from "../src/domain/workflow.ts";
 
 test("the domain exposes the single processed-event classification contract", () => {
   const event = createLegacyWorkItemEvent();
@@ -17,17 +25,17 @@ test("the domain exposes the single processed-event classification contract", ()
   );
   assert.equal(
     classifyProcessedEvent(workflow, {
-      ...event,
-      occurredAt: "2026-07-26T08:02:00.000Z"
-    }),
-    "EVENT_ID_CONFLICT"
-  );
-  assert.equal(
-    classifyProcessedEvent(workflow, {
-      ...event,
       eventId: "github:issue-502:created"
     }),
     null
+  );
+  const changedEvent = {
+      ...event,
+      occurredAt: "2026-07-26T08:02:00.000Z"
+    };
+  assert.equal(
+    classifyProcessedEvent(workflow, changedEvent),
+    "EVENT_ID_CONFLICT"
   );
 });
 
@@ -37,7 +45,9 @@ test("legacy GitHub work item links receive a deterministic compatibility identi
     createLegacyWorkItemEvent()
   );
 
-  assert.deepEqual(workflow.workItems["TS-1"].externalLinks, [
+  assert.deepEqual(required(
+    workflow.workItems["TS-1"]
+  ).externalLinks, [
     {
       providerObjectKey: "github:issue:501",
       provider: "github",
@@ -61,14 +71,20 @@ test("legacy journals with duplicate provider references remain replayable", () 
     })
   ];
   const workflow = events.reduce(applyEvent, createWorkflow());
+  const firstWorkItem = required(
+    workflow.workItems["TS-1"]
+  );
+  const secondWorkItem = required(
+    workflow.workItems["TS-2"]
+  );
 
   assert.equal(
-    workflow.workItems["TS-1"].externalLinks[0]
+    required(firstWorkItem.externalLinks[0])
       .providerObjectKey,
     "github:issue:501"
   );
   assert.equal(
-    workflow.workItems["TS-2"].externalLinks[0]
+    required(secondWorkItem.externalLinks[0])
       .providerObjectKey,
     "github:issue:501"
   );
@@ -117,7 +133,10 @@ test("a legacy GitHub link accepts exactly one explicit v2 baseline", () => {
   });
 
   assert.deepEqual(
-    baselined.workItems["TS-1"].externalLinks[0],
+    required(
+      required(baselined.workItems["TS-1"])
+        .externalLinks[0]
+    ),
     {
       ...createRichGitHubLink(),
       lastObservation: {
@@ -142,14 +161,20 @@ test("an import event links a new provider object without changing delivery stat
     payload: { link }
   });
 
-  assert.equal(linked.workItems["TS-1"].status, "planned");
+  const linkedWorkItem = required(
+    linked.workItems["TS-1"]
+  );
+  const initialWorkItem = required(
+    initial.workItems["TS-1"]
+  );
+  assert.equal(linkedWorkItem.status, "planned");
   assert.equal(
-    linked.workItems["TS-1"].title,
-    initial.workItems["TS-1"].title
+    linkedWorkItem.title,
+    initialWorkItem.title
   );
   assert.deepEqual(
-    linked.workItems["TS-1"].externalLinks,
-    [...initial.workItems["TS-1"].externalLinks, link]
+    linkedWorkItem.externalLinks,
+    [...initialWorkItem.externalLinks, link]
   );
 });
 
@@ -253,15 +278,28 @@ test("a newer observation refreshes a reference link without changing the work i
     }
   });
 
-  const workItem = refreshed.workItems["TS-1"];
-  const providerLink = workItem.externalLinks.find(
+  const workItem = required(
+    refreshed.workItems["TS-1"]
+  );
+  const providerLink = required(
+    workItem.externalLinks.find(
     (link) => link.providerObjectKey === "github:issue:501"
+    )
+  );
+  const lastObservation = required(
+    providerLink.lastObservation
   );
 
   assert.equal(workItem.title, "Import provider facts safely");
   assert.equal(workItem.status, "planned");
-  assert.equal(providerLink.lastObservation.revisionId, "2026-07-26T08:02:00.000Z");
-  assert.equal(providerLink.lastObservation.title, "Renamed provider issue");
+  assert.equal(
+    lastObservation.revisionId,
+    "2026-07-26T08:02:00.000Z"
+  );
+  assert.equal(
+    lastObservation.title,
+    "Renamed provider issue"
+  );
 });
 
 test("a title manager can update only the canonical title after its observation", () => {
@@ -313,10 +351,16 @@ test("a title manager can update only the canonical title after its observation"
     }
   });
 
-  assert.equal(updated.workItems["TS-1"].title, "Renamed provider issue");
-  assert.equal(updated.workItems["TS-1"].status, "planned");
+  const updatedWorkItem = required(
+    updated.workItems["TS-1"]
+  );
+  assert.equal(
+    updatedWorkItem.title,
+    "Renamed provider issue"
+  );
+  assert.equal(updatedWorkItem.status, "planned");
   assert.deepEqual(
-    updated.workItems["TS-1"].requiredEvidence,
+    updatedWorkItem.requiredEvidence,
     ["tests"]
   );
 });
@@ -494,25 +538,34 @@ test("provider-driven title updates enforce authority, source, and before-value 
 
 test("external metadata events preserve delivery and acceptance state", () => {
   const initial = createWorkflowWithRichLink();
-  const workItem = initial.workItems["TS-1"];
-  const protectedDeliveryState = {
+  const workItem = required(
+    initial.workItems["TS-1"]
+  );
+  const protectedDeliveryState: Pick<
+    WorkItem,
+    | "status"
+    | "activeAttemptId"
+    | "activeArtifact"
+    | "attempts"
+    | "artifacts"
+    | "evidence"
+    | "acceptanceDecision"
+  > = {
     status: "accepted",
     activeAttemptId: null,
     activeArtifact: {
-      id: "pr-1",
-      attemptId: "run-1",
-      kind: "pull_request",
+      artifactId: "pr-1",
       revision: "abc123",
-      url: "https://github.com/netpilot-z/TaskSeal/pull/1",
       linkedAt: "2026-07-26T08:00:30.000Z"
     },
     attempts: [
       {
         id: "run-1",
         agentId: "codex",
+        status: "completed",
         startedAt: "2026-07-26T08:00:00.000Z",
-        finishedAt: "2026-07-26T08:00:20.000Z",
-        outcome: "completed"
+        completedAt: "2026-07-26T08:00:20.000Z",
+        runtimeOutcome: "completed"
       }
     ],
     artifacts: [
@@ -544,7 +597,7 @@ test("external metadata events preserve delivery and acceptance state", () => {
       decidedAt: "2026-07-26T08:00:50.000Z"
     }
   };
-  const accepted = {
+  const accepted: Workflow = {
     ...initial,
     workItems: {
       ...initial.workItems,
@@ -590,9 +643,22 @@ test("external metadata events preserve delivery and acceptance state", () => {
     }
   });
 
-  for (const [key, value] of Object.entries(protectedDeliveryState)) {
-    assert.deepEqual(updated.workItems["TS-1"][key], value, key);
-  }
+  const updatedWorkItem = required(
+    updated.workItems["TS-1"]
+  );
+  assert.deepEqual(
+    {
+      status: updatedWorkItem.status,
+      activeAttemptId: updatedWorkItem.activeAttemptId,
+      activeArtifact: updatedWorkItem.activeArtifact,
+      attempts: updatedWorkItem.attempts,
+      artifacts: updatedWorkItem.artifacts,
+      evidence: updatedWorkItem.evidence,
+      acceptanceDecision:
+        updatedWorkItem.acceptanceDecision
+    },
+    protectedDeliveryState
+  );
 });
 
 test("new canonical events remain idempotent and detect event ID conflicts", () => {
@@ -700,7 +766,7 @@ test("legacy journals replay titles that predate the import title limit", () => 
   );
 
   assert.equal(
-    workflow.workItems["TS-1"].title,
+    required(workflow.workItems["TS-1"]).title,
     legacyEvent.payload.title
   );
 });
@@ -720,8 +786,10 @@ test("title limits count Unicode code points instead of UTF-16 code units", () =
   };
 
   assert.equal(
-    applyEvent(createWorkflow(), valid)
-      .workItems["TS-1"].title,
+    required(
+      applyEvent(createWorkflow(), valid)
+        .workItems["TS-1"]
+    ).title,
     maximumTitle
   );
 
@@ -747,7 +815,10 @@ test("title limits count Unicode code points instead of UTF-16 code units", () =
 function createLegacyWorkItemEvent({
   eventId = "github:issue-501:created",
   workItemId = "TS-1"
-} = {}) {
+}: {
+  eventId?: string | undefined;
+  workItemId?: string | undefined;
+} = {}): WorkItemCreatedEvent {
   return {
     eventId,
     workItemId,
@@ -767,7 +838,9 @@ function createLegacyWorkItemEvent({
 
 function createLocalWorkItemEvent({
   workItemId = "TS-1"
-} = {}) {
+}: {
+  workItemId?: string | undefined;
+} = {}): WorkItemCreatedEvent {
   return {
     eventId: `taskseal:${workItemId}:local-created`,
     workItemId,
@@ -788,7 +861,10 @@ function createLocalWorkItemEvent({
 function createRichWorkItemEvent({
   workItemId = "TS-1",
   eventId = "taskseal:import:v1:create:github-501"
-} = {}) {
+}: {
+  workItemId?: string | undefined;
+  eventId?: string | undefined;
+} = {}): WorkItemCreatedEvent {
   return {
     eventId,
     workItemId,
@@ -804,7 +880,9 @@ function createRichWorkItemEvent({
 
 function createWorkflowWithRichLink({
   managedFields = ["title"]
-} = {}) {
+}: {
+  managedFields?: ManagedField[] | undefined;
+} = {}): Workflow {
   const created = applyEvent(
     createWorkflow(),
     createLocalWorkItemEvent()
@@ -821,7 +899,8 @@ function createWorkflowWithRichLink({
   });
 }
 
-function createBaselineEvent() {
+function createBaselineEvent():
+  ExternalLinkObservedEvent {
   return {
     eventId: "taskseal:import:v1:observe:github-501-baseline",
     workItemId: "TS-1",
@@ -850,13 +929,20 @@ function createBaselineEvent() {
   };
 }
 
-function hasCode(code) {
-  return (error) => error?.code === code;
+function hasCode(
+  code: string
+): (error: unknown) => boolean {
+  return (error: unknown) =>
+    error instanceof Error &&
+    "code" in error &&
+    error.code === code;
 }
 
 function createRichGitHubLink({
   managedFields = ["title"]
-} = {}) {
+}: {
+  managedFields?: ManagedField[] | undefined;
+} = {}): RichExternalLink {
   return {
     providerObjectKey: "github:issue:501",
     provider: "github",
@@ -877,7 +963,7 @@ function createRichGitHubLink({
   };
 }
 
-function createRichLinearLink() {
+function createRichLinearLink(): RichExternalLink {
   return {
     providerObjectKey:
       "linear:issue:11111111-1111-4111-8111-111111111111",
@@ -899,4 +985,15 @@ function createRichLinearLink() {
       title: "Import provider facts safely"
     }
   };
+}
+
+function required<T>(
+  value: T | null | undefined,
+  label = "value"
+): T {
+  if (value === null || value === undefined) {
+    throw new Error(`${label} is required.`);
+  }
+
+  return value;
 }
