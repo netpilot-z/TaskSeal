@@ -2,10 +2,27 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 
-import { TaskSealService } from "../src/application/taskseal-service.js";
-import { FileEventJournal } from "../src/storage/event-journal.js";
+import { TaskSealService } from "../src/application/taskseal-service.ts";
+import type {
+  AttemptStartedEvent,
+  CanonicalEvent,
+  WorkItem,
+  WorkItemCreatedEvent
+} from "../src/domain/workflow.ts";
+import { FileEventJournal } from "../src/storage/event-journal.ts";
+
+interface LegacyWorkItemCreatedTestEvent
+  extends WorkItemCreatedEvent {
+  legacyMetadata?: string;
+}
+
+interface OversizedLegacyCase {
+  name: string;
+  workItemId: string;
+  mutate(event: LegacyWorkItemCreatedTestEvent): void;
+}
 
 test("service restores the same workflow from a reopened journal", async (t) => {
   const directory = await createTemporaryDirectory(t);
@@ -22,11 +39,14 @@ test("service restores the same workflow from a reopened journal", async (t) => 
   });
 
   assert.deepEqual(reopened.getWorkflow(), first.getWorkflow());
-  assert.equal(reopened.snapshot().workItems[0].status, "running");
+  assert.equal(
+    requireFirst(reopened.snapshot().workItems).status,
+    "running"
+  );
 });
 
 test("service reopens oversized legacy events accepted by the domain", async (t) => {
-  const cases = [
+  const cases: OversizedLegacyCase[] = [
     {
       name: "extra-envelope-field",
       workItemId: "TS-extra",
@@ -67,7 +87,9 @@ test("service reopens oversized legacy events accepted by the domain", async (t)
     });
 
     assert.equal(
-      reopened.getWorkItem(testCase.workItemId).title,
+      requireWorkItem(
+        reopened.getWorkItem(testCase.workItemId)
+      ).title,
       event.payload.title
     );
   }
@@ -92,11 +114,17 @@ test("service does not append duplicate or conflicting event ids", async (t) => 
         title: "Conflicting title"
       }
     }),
-    (error) => error.code === "EVENT_ID_CONFLICT"
+    hasCode("EVENT_ID_CONFLICT")
   );
 
   assert.equal((await journal.readAll()).length, 1);
-  assert.equal(service.getWorkflow().workItems["TS-1"].title, event.payload.title);
+  const storedWorkflowItem =
+    service.getWorkflow().workItems["TS-1"];
+  assert.ok(storedWorkflowItem);
+  assert.equal(
+    storedWorkflowItem.title,
+    event.payload.title
+  );
 });
 
 test("service snapshots cannot mutate private workflow state", async (t) => {
@@ -109,26 +137,44 @@ test("service snapshots cannot mutate private workflow state", async (t) => {
   await service.append(createWorkItemEvent());
   await service.append(createAttemptEvent());
   const snapshot = service.snapshot();
+  const projectedWorkItem = requireFirst(
+    snapshot.workItems
+  );
+  const projectedAttempt = requireFirst(
+    projectedWorkItem.attempts
+  );
+  const projectedExternalLink = requireFirst(
+    projectedWorkItem.externalLinks
+  );
 
-  snapshot.workItems[0].requiredEvidence.push("forged");
-  snapshot.workItems[0].attempts[0].status = "succeeded";
-  snapshot.workItems[0].externalLinks[0].externalId = "forged";
+  projectedWorkItem.requiredEvidence.push("forged");
+  Object.defineProperty(projectedAttempt, "status", {
+    configurable: true,
+    value: "succeeded",
+    writable: true
+  });
+  projectedExternalLink.externalId = "forged";
 
-  const stored = service.getWorkItem("TS-1");
+  const stored = requireWorkItem(
+    service.getWorkItem("TS-1")
+  );
   assert.deepEqual(stored.requiredEvidence, ["tests"]);
-  assert.equal(stored.attempts[0].status, "running");
   assert.equal(
-    stored.externalLinks[0].externalId,
+    requireFirst(stored.attempts).status,
+    "running"
+  );
+  assert.equal(
+    requireFirst(stored.externalLinks).externalId,
     "TS-1"
   );
 });
 
 test("service keeps memory unchanged when journal append fails", async () => {
   const journal = {
-    async readAll() {
+    async readAll(): Promise<unknown[]> {
       return [];
     },
-    async append() {
+    async append(_event: CanonicalEvent): Promise<void> {
       throw new Error("disk unavailable");
     }
   };
@@ -136,7 +182,7 @@ test("service keeps memory unchanged when journal append fails", async () => {
 
   await assert.rejects(
     service.append(createWorkItemEvent()),
-    (error) => error.code === "JOURNAL_WRITE_FAILED"
+    hasCode("JOURNAL_WRITE_FAILED")
   );
 
   assert.deepEqual(service.getWorkflow().workItems, {});
@@ -154,7 +200,7 @@ test("service rejects oversized events before changing memory or journal", async
 
   await assert.rejects(
     service.append(event),
-    (error) => error.code === "JOURNAL_WRITE_FAILED"
+    hasCode("JOURNAL_WRITE_FAILED")
   );
 
   assert.deepEqual(service.getWorkflow().workItems, {});
@@ -177,13 +223,21 @@ test("service recovers unfinished attempts as interrupted after restart", async 
   const recoveredAgain = await service.recoverRunningAttempts({
     occurredAt: "2026-07-26T08:03:00.000Z"
   });
-  const workItem = service.getWorkItem("TS-1");
+  const workItem = requireWorkItem(
+    service.getWorkItem("TS-1")
+  );
+  const attempt = requireFirst(workItem.attempts);
 
   assert.equal(recovered, 1);
   assert.equal(recoveredAgain, 0);
   assert.equal(workItem.status, "blocked");
-  assert.equal(workItem.attempts[0].status, "interrupted");
-  assert.match(workItem.attempts[0].summary, /restarted/);
+  assert.equal(attempt.status, "interrupted");
+
+  if (typeof attempt.summary !== "string") {
+    assert.fail("Recovered attempt requires a summary.");
+  }
+
+  assert.match(attempt.summary, /restarted/);
   assert.equal((await journal.readAll()).length, 3);
 });
 
@@ -204,26 +258,36 @@ test("service recovers matching attempt ids from different work items", async (t
   });
 
   assert.equal(recovered, 2);
-  assert.equal(service.getWorkItem("TS-1").status, "blocked");
-  assert.equal(service.getWorkItem("TS-2").status, "blocked");
+  const firstWorkItem = requireWorkItem(
+    service.getWorkItem("TS-1")
+  );
+  const secondWorkItem = requireWorkItem(
+    service.getWorkItem("TS-2")
+  );
+  assert.equal(firstWorkItem.status, "blocked");
+  assert.equal(secondWorkItem.status, "blocked");
   assert.equal(
-    service.getWorkItem("TS-1").attempts[0].status,
+    requireFirst(firstWorkItem.attempts).status,
     "interrupted"
   );
   assert.equal(
-    service.getWorkItem("TS-2").attempts[0].status,
+    requireFirst(secondWorkItem.attempts).status,
     "interrupted"
   );
   assert.equal((await journal.readAll()).length, 6);
 });
 
-async function createTemporaryDirectory(t) {
+async function createTemporaryDirectory(
+  t: TestContext
+): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "taskseal-service-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   return directory;
 }
 
-function createWorkItemEvent(workItemId = "TS-1") {
+function createWorkItemEvent(
+  workItemId = "TS-1"
+): LegacyWorkItemCreatedTestEvent {
   return {
     eventId: `local:${workItemId}:created`,
     workItemId,
@@ -244,7 +308,7 @@ function createWorkItemEvent(workItemId = "TS-1") {
 function createAttemptEvent(
   workItemId = "TS-1",
   attemptId = "run-1"
-) {
+): AttemptStartedEvent {
   return {
     eventId: `codex:${workItemId}:${attemptId}:started`,
     workItemId,
@@ -255,4 +319,38 @@ function createAttemptEvent(
       agentId: "codex"
     }
   };
+}
+
+function hasCode(
+  code: string
+): (error: unknown) => boolean {
+  return (error) =>
+    isRecord(error) && error.code === code;
+}
+
+function requireWorkItem(
+  workItem: WorkItem | null
+): WorkItem {
+  assert.ok(workItem);
+  return workItem;
+}
+
+function requireFirst<T>(values: readonly T[]): T {
+  const value = values[0];
+
+  if (value === undefined) {
+    assert.fail("Expected a non-empty array.");
+  }
+
+  return value;
+}
+
+function isRecord(
+  value: unknown
+): value is Record<string, unknown> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+  );
 }

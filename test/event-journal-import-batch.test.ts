@@ -8,14 +8,14 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 
 import {
   createImportBatchRecord
-} from "../src/application/import-batch.js";
+} from "../src/application/import-batch.ts";
 import {
   FileEventJournal
-} from "../src/storage/event-journal.js";
+} from "../src/storage/event-journal.ts";
 import {
   createActor,
   createPreviewPlan
@@ -155,7 +155,7 @@ test("an unsupported atomic replace probe keeps the journal read-only", async (t
   );
   await assert.rejects(
     readFile(filePath, "utf8"),
-    (error) => error.code === "ENOENT"
+    hasCode("ENOENT")
   );
 });
 
@@ -169,7 +169,10 @@ test("journal configuration stays bound to its constructor path", async (t) => {
     atomicReplaceProbe: async () => true
   });
 
-  journal.filePath = reassignedPath;
+  Object.defineProperty(journal, "filePath", {
+    configurable: true,
+    value: reassignedPath
+  });
   await journal.commitBatch(record);
 
   assert.deepEqual(
@@ -180,7 +183,7 @@ test("journal configuration stays bound to its constructor path", async (t) => {
   );
   await assert.rejects(
     readFile(reassignedPath, "utf8"),
-    (error) => error.code === "ENOENT"
+    hasCode("ENOENT")
   );
 });
 
@@ -210,7 +213,9 @@ function createLegacyEvent() {
   };
 }
 
-async function createTemporaryDirectory(t) {
+async function createTemporaryDirectory(
+  t: TestContext
+): Promise<string> {
   const directory = await mkdtemp(
     join(tmpdir(), "taskseal-import-journal-")
   );
@@ -223,6 +228,19 @@ async function createTemporaryDirectory(t) {
   return directory;
 }
 
-function hasCode(code) {
-  return (error) => error?.code === code;
+function hasCode(
+  code: string
+): (error: unknown) => boolean {
+  return (error) =>
+    isRecord(error) && error.code === code;
+}
+
+function isRecord(
+  value: unknown
+): value is Record<string, unknown> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+  );
 }

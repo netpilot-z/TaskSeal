@@ -1,6 +1,6 @@
 import {
   digestCanonicalJson
-} from "./canonical-json.js";
+} from "./canonical-json.ts";
 
 export function digestProviderFactContent(fact) {
   return digestCanonicalJson({

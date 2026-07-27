@@ -1,8 +1,34 @@
 import { createHash } from "node:crypto";
 
-export function canonicalizeJson(value, {
-  maxDepth = 16
-} = {}) {
+export interface CanonicalJsonOptions {
+  maxDepth?: number;
+}
+
+export interface JsonLimitOptions extends CanonicalJsonOptions {
+  maxBytes?: number;
+  maxArrayLength?: number;
+  maxObjectKeys?: number;
+}
+
+interface SerializationContext {
+  depth: number;
+  maxDepth: number;
+  ancestors: Set<object>;
+}
+
+interface InspectionContext extends SerializationContext {
+  maxBytes: number;
+  maxArrayLength: number;
+  maxObjectKeys: number;
+  bytes: number;
+}
+
+export function canonicalizeJson(
+  value: unknown,
+  {
+    maxDepth = 16
+  }: CanonicalJsonOptions = {}
+): string {
   if (!Number.isInteger(maxDepth) || maxDepth < 0) {
     throw new CanonicalJsonError(
       "CANONICAL_JSON_INVALID",
@@ -17,7 +43,10 @@ export function canonicalizeJson(value, {
   });
 }
 
-export function digestCanonicalJson(value, options) {
+export function digestCanonicalJson(
+  value: unknown,
+  options?: CanonicalJsonOptions
+): string {
   const canonicalJson = canonicalizeJson(value, options);
   const digest = createHash("sha256")
     .update(canonicalJson, "utf8")
@@ -26,18 +55,25 @@ export function digestCanonicalJson(value, options) {
   return `sha256:${digest}`;
 }
 
-export function assertJsonWithinLimits(value, {
-  maxDepth = 16,
-  maxBytes,
-  maxArrayLength,
-  maxObjectKeys
-} = {}) {
-  for (const [name, limit] of [
+export function assertJsonWithinLimits(
+  value: unknown,
+  {
+    maxDepth = 16,
+    maxBytes,
+    maxArrayLength,
+    maxObjectKeys
+  }: JsonLimitOptions = {}
+): void {
+  const limits: ReadonlyArray<
+    readonly [string, number | undefined]
+  > = [
     ["maxDepth", maxDepth],
     ["maxBytes", maxBytes],
     ["maxArrayLength", maxArrayLength],
     ["maxObjectKeys", maxObjectKeys]
-  ]) {
+  ];
+
+  for (const [name, limit] of limits) {
     if (
       limit !== undefined &&
       (!Number.isSafeInteger(limit) || limit < 0)
@@ -62,14 +98,21 @@ export function assertJsonWithinLimits(value, {
   });
 }
 
-function serializeJson(value, context) {
+function serializeJson(
+  value: unknown,
+  context: SerializationContext
+): string {
   if (value === null) {
     return "null";
   }
 
   if (typeof value === "string") {
     requireWellFormedString(value);
-    return JSON.stringify(value);
+    const serialized = JSON.stringify(value);
+    if (serialized === undefined) {
+      throw invalidJson();
+    }
+    return serialized;
   }
 
   if (typeof value === "boolean") {
@@ -81,7 +124,11 @@ function serializeJson(value, context) {
       throw invalidJson();
     }
 
-    return JSON.stringify(value);
+    const serialized = JSON.stringify(value);
+    if (serialized === undefined) {
+      throw invalidJson();
+    }
+    return serialized;
   }
 
   if (typeof value !== "object") {
@@ -117,7 +164,10 @@ function serializeJson(value, context) {
   }
 }
 
-function inspectJson(value, context) {
+function inspectJson(
+  value: unknown,
+  context: InspectionContext
+): void {
   if (value === null) {
     consumeBytes(context, 4);
     return;
@@ -139,10 +189,11 @@ function inspectJson(value, context) {
       throw invalidJson();
     }
 
-    consumeBytes(
-      context,
-      Buffer.byteLength(JSON.stringify(value), "utf8")
-    );
+    const serialized = JSON.stringify(value);
+    if (serialized === undefined) {
+      throw invalidJson();
+    }
+    consumeBytes(context, Buffer.byteLength(serialized, "utf8"));
     return;
   }
 
@@ -184,7 +235,10 @@ function inspectJson(value, context) {
   }
 }
 
-function inspectArray(value, context) {
+function inspectArray(
+  value: readonly unknown[],
+  context: InspectionContext
+): void {
   if (value.length > context.maxArrayLength) {
     throw jsonLimitExceeded("array length");
   }
@@ -219,7 +273,10 @@ function inspectArray(value, context) {
   }
 }
 
-function inspectObject(value, context) {
+function inspectObject(
+  value: object,
+  context: InspectionContext
+): void {
   const prototype = Object.getPrototypeOf(value);
 
   if (
@@ -231,9 +288,7 @@ function inspectObject(value, context) {
 
   const ownKeys = Reflect.ownKeys(value);
 
-  if (
-    ownKeys.some((key) => typeof key !== "string")
-  ) {
+  if (!hasOnlyStringKeys(ownKeys)) {
     throw invalidJson();
   }
 
@@ -249,6 +304,7 @@ function inspectObject(value, context) {
     const descriptor = descriptors[key];
 
     if (
+      !descriptor ||
       !descriptor.enumerable ||
       !("value" in descriptor)
     ) {
@@ -263,11 +319,14 @@ function inspectObject(value, context) {
   }
 }
 
-function jsonStringByteLength(value) {
+function jsonStringByteLength(value: string): number {
   let bytes = 2;
 
   for (const character of value) {
     const codePoint = character.codePointAt(0);
+    if (codePoint === undefined) {
+      throw invalidJson();
+    }
 
     if (character === "\"" || character === "\\") {
       bytes += 2;
@@ -291,7 +350,10 @@ function jsonStringByteLength(value) {
   return bytes;
 }
 
-function consumeBytes(context, bytes) {
+function consumeBytes(
+  context: InspectionContext,
+  bytes: number
+): void {
   context.bytes += bytes;
 
   if (context.bytes > context.maxBytes) {
@@ -299,14 +361,17 @@ function consumeBytes(context, bytes) {
   }
 }
 
-function jsonLimitExceeded(field) {
+function jsonLimitExceeded(field: string): CanonicalJsonError {
   return new CanonicalJsonError(
     "CANONICAL_JSON_LIMIT_EXCEEDED",
     `Canonical JSON ${field} exceeds the configured limit.`
   );
 }
 
-function serializeArray(value, context) {
+function serializeArray(
+  value: readonly unknown[],
+  context: SerializationContext
+): string {
   const ownKeys = Reflect.ownKeys(value);
 
   if (
@@ -320,7 +385,7 @@ function serializeArray(value, context) {
   }
 
   const descriptors = Object.getOwnPropertyDescriptors(value);
-  const items = [];
+  const items: string[] = [];
 
   for (let index = 0; index < value.length; index += 1) {
     const descriptor = descriptors[index];
@@ -339,7 +404,10 @@ function serializeArray(value, context) {
   return `[${items.join(",")}]`;
 }
 
-function serializeObject(value, context) {
+function serializeObject(
+  value: object,
+  context: SerializationContext
+): string {
   const prototype = Object.getPrototypeOf(value);
 
   if (prototype !== Object.prototype && prototype !== null) {
@@ -348,19 +416,20 @@ function serializeObject(value, context) {
 
   const ownKeys = Reflect.ownKeys(value);
 
-  if (ownKeys.some((key) => typeof key !== "string")) {
+  if (!hasOnlyStringKeys(ownKeys)) {
     throw invalidJson();
   }
 
   const descriptors = Object.getOwnPropertyDescriptors(value);
   const keys = ownKeys.sort(compareUtf16CodeUnits);
-  const entries = [];
+  const entries: string[] = [];
 
   for (const key of keys) {
     requireWellFormedString(key);
     const descriptor = descriptors[key];
 
     if (
+      !descriptor ||
       !descriptor.enumerable ||
       !("value" in descriptor)
     ) {
@@ -375,17 +444,20 @@ function serializeObject(value, context) {
   return `{${entries.join(",")}}`;
 }
 
-function compareUtf16CodeUnits(left, right) {
+function compareUtf16CodeUnits(
+  left: string,
+  right: string
+): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function requireWellFormedString(value) {
+function requireWellFormedString(value: string): void {
   if (!value.isWellFormed()) {
     throw invalidJson();
   }
 }
 
-function invalidJson() {
+function invalidJson(): CanonicalJsonError {
   return new CanonicalJsonError(
     "CANONICAL_JSON_INVALID",
     "Canonical JSON accepts only finite, acyclic JSON values."
@@ -393,9 +465,17 @@ function invalidJson() {
 }
 
 export class CanonicalJsonError extends Error {
-  constructor(code, message) {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
     super(message);
     this.name = "CanonicalJsonError";
     this.code = code;
   }
+}
+
+function hasOnlyStringKeys(
+  keys: PropertyKey[]
+): keys is string[] {
+  return keys.every((key) => typeof key === "string");
 }

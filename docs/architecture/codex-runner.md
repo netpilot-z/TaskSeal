@@ -27,14 +27,14 @@ TaskSealService ───────► Dashboard projection
 
 ## 模块与职责
 
-### `storage/event-journal.js`
+### `storage/event-journal.ts`
 
 - 读取和追加 JSONL。
 - 对损坏行给出稳定错误。
 - 单次 append 后同步文件。
 - 不解释业务事件，不创建 dashboard。
 
-### `application/taskseal-service.js`
+### `application/taskseal-service.ts`
 
 - 串行化所有 append。
 - 先用 `applyEvent` 计算候选状态，再持久化，最后替换内存状态。

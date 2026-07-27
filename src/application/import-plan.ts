@@ -2,18 +2,91 @@ import {
   assertJsonWithinLimits,
   canonicalizeJson,
   digestCanonicalJson
-} from "../lib/canonical-json.js";
+} from "../lib/canonical-json.ts";
 import {
   computePolicyDigest,
   normalizePolicyBinding
-} from "./import-policy.js";
+} from "./import-policy.ts";
+import type { PolicyBinding } from "./import-policy.ts";
+import type { Workflow } from "../domain/workflow.ts";
+
+export type ImportEventType =
+  | "work_item.created"
+  | "external_link.linked"
+  | "external_link.observed"
+  | "work_item.updated"
+  | "artifact.linked"
+  | "evidence.recorded";
+
+export type ImportActionKind =
+  | "create"
+  | "link"
+  | "refresh"
+  | "update"
+  | "skip"
+  | "conflict";
+
+export interface ImportAction {
+  actionId: string;
+  kind: ImportActionKind;
+  workItemId: string;
+  sourceObjectKey: string;
+  sourceRevisionId: string;
+  semanticTarget: string;
+  reasonCode: string;
+  eventIds: string[];
+}
+
+export interface ImportPlanEvent {
+  eventId: string;
+  workItemId: string;
+  type: ImportEventType;
+  occurredAt: string;
+  payload: Record<string, unknown>;
+}
+
+export interface ImportConflict {
+  actionId: string;
+  code: string;
+  domainCode?: string;
+}
+
+export interface ImportWarning {
+  actionId: string;
+  code: string;
+}
+
+export interface ImportPlanSummary {
+  create: number;
+  link: number;
+  refresh: number;
+  update: number;
+  skip: number;
+  conflict: number;
+}
+
+export interface ImportPlan {
+  schemaVersion: 1;
+  mode: "preview";
+  snapshotDigest: string;
+  mappingDigest: string;
+  policyBinding: PolicyBinding;
+  policyDigest: string;
+  baseWorkflowDigest: string;
+  planDigest: string;
+  summary: ImportPlanSummary;
+  actions: ImportAction[];
+  events: ImportPlanEvent[];
+  conflicts: ImportConflict[];
+  warnings: ImportWarning[];
+}
 
 const PLAN_BYTE_LIMIT = 2 * 1024 * 1024;
 const PLAN_DEPTH_LIMIT = 16;
 const PLAN_ACTION_LIMIT = 256;
 const PLAN_EVENT_LIMIT = 256;
 const ID_LIMIT = 256;
-const EVENT_ID_PREFIX = new Map([
+const EVENT_ID_PREFIX = new Map<ImportEventType, string>([
   ["work_item.created", "create"],
   ["external_link.linked", "link"],
   ["external_link.observed", "observe"],
@@ -21,7 +94,7 @@ const EVENT_ID_PREFIX = new Map([
   ["artifact.linked", "artifact"],
   ["evidence.recorded", "evidence"]
 ]);
-const EVENT_TYPE_ORDER = new Map([
+const EVENT_TYPE_ORDER = new Map<ImportEventType, number>([
   ["work_item.created", 0],
   ["external_link.linked", 1],
   ["external_link.observed", 2],
@@ -29,7 +102,10 @@ const EVENT_TYPE_ORDER = new Map([
   ["artifact.linked", 4],
   ["evidence.recorded", 5]
 ]);
-const EVENT_ACTION_RULES = new Map([
+const EVENT_ACTION_RULES = new Map<
+  ImportEventType,
+  ReadonlySet<string>
+>([
   [
     "work_item.created",
     new Set(["create|NEW_WORK_ITEM|work-item"])
@@ -131,7 +207,7 @@ const EVENT_FIELDS = [
   "occurredAt",
   "payload"
 ];
-const SUMMARY_KEYS = [
+const SUMMARY_KEYS: ImportActionKind[] = [
   "create",
   "link",
   "refresh",
@@ -139,14 +215,23 @@ const SUMMARY_KEYS = [
   "skip",
   "conflict"
 ];
-const ACTION_KINDS = new Set(SUMMARY_KEYS);
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 
-export function deriveImportEventId(identity) {
+export function deriveImportEventId(identity: unknown): string {
+  const eventType =
+    isPlainRecord(identity) &&
+    isImportEventType(identity.eventType)
+      ? identity.eventType
+      : null;
+  const eventIdPrefix = eventType
+    ? EVENT_ID_PREFIX.get(eventType)
+    : undefined;
+
   if (
     !isPlainRecord(identity) ||
     !hasExactKeys(identity, EVENT_IDENTITY_FIELDS) ||
-    !EVENT_ID_PREFIX.has(identity.eventType) ||
+    !eventType ||
+    !eventIdPrefix ||
     EVENT_IDENTITY_FIELDS.some(
       (field) => !isNonEmptyString(identity[field])
     )
@@ -164,12 +249,12 @@ export function deriveImportEventId(identity) {
     "taskseal",
     "import",
     "v1",
-    EVENT_ID_PREFIX.get(identity.eventType),
+    eventIdPrefix,
     identityDigest
   ].join(":");
 }
 
-export function deriveImportActionId(identity) {
+export function deriveImportActionId(identity: unknown): string {
   if (
     !isPlainRecord(identity) ||
     !hasExactKeys(identity, ACTION_IDENTITY_FIELDS) ||
@@ -186,32 +271,41 @@ export function deriveImportActionId(identity) {
   return digestCanonicalJson(identity);
 }
 
-export function buildImportPlanDigestMaterial(plan) {
+export function buildImportPlanDigestMaterial(
+  plan: unknown
+): Record<string, unknown> {
+  const source: Record<string, unknown> =
+    isPlainRecord(plan) ? plan : {};
   return {
-    schemaVersion: plan?.schemaVersion,
-    snapshotDigest: plan?.snapshotDigest,
-    mappingDigest: plan?.mappingDigest,
-    policyDigest: plan?.policyDigest,
-    baseWorkflowDigest: plan?.baseWorkflowDigest,
-    policyBinding: plan?.policyBinding,
-    actions: plan?.actions,
-    events: plan?.events,
-    conflictCodes: plan?.conflicts,
-    warningCodes: plan?.warnings
+    schemaVersion: source.schemaVersion,
+    snapshotDigest: source.snapshotDigest,
+    mappingDigest: source.mappingDigest,
+    policyDigest: source.policyDigest,
+    baseWorkflowDigest: source.baseWorkflowDigest,
+    policyBinding: source.policyBinding,
+    actions: source.actions,
+    events: source.events,
+    conflictCodes: source.conflicts,
+    warningCodes: source.warnings
   };
 }
 
-export function computeImportPlanDigest(plan) {
+export function computeImportPlanDigest(plan: unknown): string {
   return digestCanonicalJson(
     buildImportPlanDigestMaterial(plan)
   );
 }
 
-export function computeBaseWorkflowDigest(workflow) {
+export function computeBaseWorkflowDigest(
+  workflow: Workflow
+): string {
   return digestCanonicalJson(workflow);
 }
 
-export function compareImportEvents(left, right) {
+export function compareImportEvents(
+  left: ImportPlanEvent,
+  right: ImportPlanEvent
+): number {
   return (
     (EVENT_TYPE_ORDER.get(left.type) ?? 99) -
       (EVENT_TYPE_ORDER.get(right.type) ?? 99) ||
@@ -221,20 +315,26 @@ export function compareImportEvents(left, right) {
 }
 
 export function compareImportActions(
-  left,
-  right,
-  eventTypeById
-) {
+  left: ImportAction,
+  right: ImportAction,
+  eventTypeById: ReadonlyMap<string, ImportEventType>
+): number {
   const leftEventType = left.eventIds[0]
     ? eventTypeById.get(left.eventIds[0])
     : null;
   const rightEventType = right.eventIds[0]
     ? eventTypeById.get(right.eventIds[0])
     : null;
+  const leftEventOrder = leftEventType
+    ? EVENT_TYPE_ORDER.get(leftEventType)
+    : undefined;
+  const rightEventOrder = rightEventType
+    ? EVENT_TYPE_ORDER.get(rightEventType)
+    : undefined;
 
   return (
-    (EVENT_TYPE_ORDER.get(leftEventType) ?? 90) -
-      (EVENT_TYPE_ORDER.get(rightEventType) ?? 90) ||
+    (leftEventOrder ?? 90) -
+      (rightEventOrder ?? 90) ||
     compareStrings(left.kind, right.kind) ||
     compareStrings(
       left.sourceObjectKey,
@@ -249,28 +349,30 @@ export function compareImportActions(
 }
 
 export function compareImportCodeProjections(
-  left,
-  right
-) {
+  left: ImportConflict | ImportWarning,
+  right: ImportConflict | ImportWarning
+): number {
   return (
     compareStrings(left.actionId, right.actionId) ||
     compareStrings(left.code, right.code)
   );
 }
 
-export function normalizeImportPlan(plan) {
+export function normalizeImportPlan(plan: unknown): ImportPlan {
   const safePlan = cloneBoundedPlan(plan);
+  const safeActions = readProperty(safePlan, "actions");
+  const safeEvents = readProperty(safePlan, "events");
 
   if (
-    Array.isArray(safePlan.actions) &&
-    safePlan.actions.length > PLAN_ACTION_LIMIT
+    Array.isArray(safeActions) &&
+    safeActions.length > PLAN_ACTION_LIMIT
   ) {
     throw planLimit("actions", PLAN_ACTION_LIMIT);
   }
 
   if (
-    Array.isArray(safePlan.events) &&
-    safePlan.events.length > PLAN_EVENT_LIMIT
+    Array.isArray(safeEvents) &&
+    safeEvents.length > PLAN_EVENT_LIMIT
   ) {
     throw planLimit("events", PLAN_EVENT_LIMIT);
   }
@@ -318,8 +420,8 @@ export function normalizeImportPlan(plan) {
     normalizeConflict
   );
   const warnings = safePlan.warnings.map(normalizeWarning);
-  const eventById = new Map();
-  const actionById = new Map();
+  const eventById = new Map<string, ImportPlanEvent>();
+  const actionById = new Map<string, ImportAction>();
 
   for (const event of events) {
     if (eventById.has(event.eventId)) {
@@ -337,7 +439,7 @@ export function normalizeImportPlan(plan) {
     actionById.set(action.actionId, action);
   }
 
-  const referencedEventIds = new Set();
+  const referencedEventIds = new Set<string>();
 
   for (const action of actions) {
     const identity = {
@@ -413,7 +515,7 @@ export function normalizeImportPlan(plan) {
     throw planTampered();
   }
 
-  const normalized = {
+  const normalized: ImportPlan = {
     schemaVersion: 1,
     mode: "preview",
     snapshotDigest: safePlan.snapshotDigest,
@@ -440,15 +542,17 @@ export function normalizeImportPlan(plan) {
 }
 
 export class ImportPlanError extends Error {
-  constructor(code, message) {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
     super(message);
     this.name = "ImportPlanError";
     this.code = code;
   }
 }
 
-function cloneBoundedPlan(plan) {
-  let canonical;
+function cloneBoundedPlan(plan: unknown): unknown {
+  let canonical: string;
 
   try {
     rejectKnownOversizedPlanArrays(plan);
@@ -463,23 +567,23 @@ function cloneBoundedPlan(plan) {
     });
   } catch (error) {
     if (
-      error?.code === "IMPORT_PLAN_LIMIT_EXCEEDED"
+      getErrorCode(error) === "IMPORT_PLAN_LIMIT_EXCEEDED"
     ) {
       throw error;
     }
 
     if (
-      error?.code ===
+      getErrorCode(error) ===
         "CANONICAL_JSON_DEPTH_EXCEEDED" ||
-      error?.code ===
+      getErrorCode(error) ===
         "CANONICAL_JSON_LIMIT_EXCEEDED"
     ) {
       throw planLimit(
-        error.code ===
+        getErrorCode(error) ===
           "CANONICAL_JSON_DEPTH_EXCEEDED"
           ? "nesting depth"
           : "encoded structure",
-        error.code ===
+        getErrorCode(error) ===
           "CANONICAL_JSON_DEPTH_EXCEEDED"
           ? PLAN_DEPTH_LIMIT
           : PLAN_BYTE_LIMIT
@@ -496,18 +600,21 @@ function cloneBoundedPlan(plan) {
     throw planLimit("bytes", PLAN_BYTE_LIMIT);
   }
 
-  return JSON.parse(canonical);
+  const parsed: unknown = JSON.parse(canonical);
+  return parsed;
 }
 
-function rejectKnownOversizedPlanArrays(plan) {
+function rejectKnownOversizedPlanArrays(plan: unknown): void {
   if (!isPlainRecord(plan)) {
     return;
   }
 
-  for (const [field, limit] of [
+  const limits: ReadonlyArray<readonly [string, number]> = [
     ["actions", PLAN_ACTION_LIMIT],
     ["events", PLAN_EVENT_LIMIT]
-  ]) {
+  ];
+
+  for (const [field, limit] of limits) {
     const descriptor =
       Object.getOwnPropertyDescriptor(plan, field);
 
@@ -522,49 +629,74 @@ function rejectKnownOversizedPlanArrays(plan) {
   }
 }
 
-function normalizeAction(value) {
-  if (
+function normalizeAction(value: unknown): ImportAction {
+  if (!isNormalizedAction(value)) {
+    throw planTampered();
+  }
+
+  return value;
+}
+
+function isNormalizedAction(
+  value: unknown
+): value is ImportAction {
+  return (
     !isPlainRecord(value) ||
     !hasExactKeys(value, ACTION_FIELDS) ||
     !isDigest(value.actionId) ||
-    !ACTION_KINDS.has(value.kind) ||
+    !isImportActionKind(value.kind) ||
     !isBoundedString(value.workItemId, ID_LIMIT) ||
     !isBoundedString(value.sourceObjectKey, ID_LIMIT) ||
     !isBoundedString(value.sourceRevisionId, ID_LIMIT) ||
     !isBoundedString(value.semanticTarget, ID_LIMIT) ||
     !isBoundedString(value.reasonCode, ID_LIMIT) ||
-    !Array.isArray(value.eventIds) ||
-    value.eventIds.length > PLAN_EVENT_LIMIT ||
-    new Set(value.eventIds).size !== value.eventIds.length ||
-    value.eventIds.some(
-      (eventId) => !isBoundedString(eventId, ID_LIMIT)
+    !isUniqueBoundedStringArray(
+      value.eventIds,
+      PLAN_EVENT_LIMIT,
+      ID_LIMIT
     )
-  ) {
+  )
+    ? false
+    : true;
+}
+
+function normalizeEvent(value: unknown): ImportPlanEvent {
+  if (!isNormalizedEvent(value)) {
     throw planTampered();
   }
 
   return value;
 }
 
-function normalizeEvent(value) {
-  if (
+function isNormalizedEvent(
+  value: unknown
+): value is ImportPlanEvent {
+  return (
     !isPlainRecord(value) ||
     !hasExactKeys(value, EVENT_FIELDS) ||
     !isBoundedString(value.eventId, ID_LIMIT) ||
     !isBoundedString(value.workItemId, ID_LIMIT) ||
-    !EVENT_ID_PREFIX.has(value.type) ||
+    !isImportEventType(value.type) ||
     !isBoundedString(value.occurredAt, ID_LIMIT) ||
     !Number.isFinite(Date.parse(value.occurredAt)) ||
     !isPlainRecord(value.payload)
-  ) {
+  )
+    ? false
+    : true;
+}
+
+function normalizeConflict(value: unknown): ImportConflict {
+  if (!isNormalizedConflict(value)) {
     throw planTampered();
   }
 
   return value;
 }
 
-function normalizeConflict(value) {
-  if (
+function isNormalizedConflict(
+  value: unknown
+): value is ImportConflict {
+  return (
     !isPlainRecord(value) ||
     !hasAllowedExactKeys(
       value,
@@ -575,33 +707,43 @@ function normalizeConflict(value) {
     !isBoundedString(value.code, ID_LIMIT) ||
     (value.domainCode !== undefined &&
       !isBoundedString(value.domainCode, ID_LIMIT))
-  ) {
+  )
+    ? false
+    : true;
+}
+
+function normalizeWarning(value: unknown): ImportWarning {
+  if (!isNormalizedWarning(value)) {
     throw planTampered();
   }
 
   return value;
 }
 
-function normalizeWarning(value) {
-  if (
+function isNormalizedWarning(
+  value: unknown
+): value is ImportWarning {
+  return (
     !isPlainRecord(value) ||
     !hasExactKeys(value, ["actionId", "code"]) ||
     !isDigest(value.actionId) ||
     !isBoundedString(value.code, ID_LIMIT)
-  ) {
-    throw planTampered();
-  }
-
-  return value;
+  )
+    ? false
+    : true;
 }
 
 function validateProjections({
   conflicts,
   warnings,
   actionById
-}) {
-  const seenConflictActions = new Set();
-  const seenWarningActions = new Set();
+}: {
+  conflicts: ImportConflict[];
+  warnings: ImportWarning[];
+  actionById: ReadonlyMap<string, ImportAction>;
+}): void {
+  const seenConflictActions = new Set<string>();
+  const seenWarningActions = new Set<string>();
 
   for (const conflict of conflicts) {
     const action = actionById.get(conflict.actionId);
@@ -669,8 +811,14 @@ function validateCanonicalOrder({
   conflicts,
   warnings,
   eventById
-}) {
-  const eventTypeById = new Map(
+}: {
+  actions: ImportAction[];
+  events: ImportPlanEvent[];
+  conflicts: ImportConflict[];
+  warnings: ImportWarning[];
+  eventById: ReadonlyMap<string, ImportPlanEvent>;
+}): void {
+  const eventTypeById = new Map<string, ImportEventType>(
     [...eventById].map(([eventId, event]) => [
       eventId,
       event.type
@@ -708,7 +856,10 @@ function validateCanonicalOrder({
   }
 }
 
-function eventActionMatches(action, event) {
+function eventActionMatches(
+  action: ImportAction,
+  event: ImportPlanEvent
+): boolean {
   return (
     EVENT_ACTION_RULES.get(event.type)?.has(
       actionRuleKey(action)
@@ -716,7 +867,7 @@ function eventActionMatches(action, event) {
   );
 }
 
-function actionRuleKey(action) {
+function actionRuleKey(action: ImportAction): string {
   return [
     action.kind,
     action.reasonCode,
@@ -724,10 +875,17 @@ function actionRuleKey(action) {
   ].join("|");
 }
 
-export function summarizeImportActions(actions) {
-  const summary = Object.fromEntries(
-    SUMMARY_KEYS.map((key) => [key, 0])
-  );
+export function summarizeImportActions(
+  actions: readonly ImportAction[]
+): ImportPlanSummary {
+  const summary: ImportPlanSummary = {
+    create: 0,
+    link: 0,
+    refresh: 0,
+    update: 0,
+    skip: 0,
+    conflict: 0
+  };
 
   for (const action of actions) {
     summary[action.kind] += 1;
@@ -736,19 +894,27 @@ export function summarizeImportActions(actions) {
   return summary;
 }
 
-function isSummary(value) {
-  return (
-    isPlainRecord(value) &&
-    hasExactKeys(value, SUMMARY_KEYS) &&
-    SUMMARY_KEYS.every(
-      (key) =>
-        Number.isSafeInteger(value[key]) &&
-        value[key] >= 0
-    )
-  );
+function isSummary(value: unknown): value is ImportPlanSummary {
+  if (
+    !isPlainRecord(value) ||
+    !hasExactKeys(value, SUMMARY_KEYS)
+  ) {
+    return false;
+  }
+
+  return SUMMARY_KEYS.every((key) => {
+    const count = value[key];
+    return (
+      typeof count === "number" &&
+      Number.isSafeInteger(count) &&
+      count >= 0
+    );
+  });
 }
 
-function isPlainRecord(value) {
+function isPlainRecord(
+  value: unknown
+): value is Record<string, unknown> {
   if (!value || typeof value !== "object") {
     return false;
   }
@@ -760,7 +926,10 @@ function isPlainRecord(value) {
   );
 }
 
-function hasExactKeys(value, expectedKeys) {
+function hasExactKeys(
+  value: Record<string, unknown>,
+  expectedKeys: readonly string[]
+): boolean {
   const keys = Reflect.ownKeys(value);
 
   return (
@@ -770,10 +939,10 @@ function hasExactKeys(value, expectedKeys) {
 }
 
 function hasAllowedExactKeys(
-  value,
-  requiredKeys,
-  optionalKeys
-) {
+  value: Record<string, unknown>,
+  requiredKeys: readonly string[],
+  optionalKeys: readonly string[]
+): boolean {
   const keys = Reflect.ownKeys(value);
   const allowed = new Set([
     ...requiredKeys,
@@ -789,41 +958,107 @@ function hasAllowedExactKeys(
   );
 }
 
-function isNonEmptyString(value) {
+function isNonEmptyString(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.trim().length > 0
   );
 }
 
-function isBoundedString(value, maximumLength) {
+function isBoundedString(
+  value: unknown,
+  maximumLength: number
+): value is string {
   return (
     isNonEmptyString(value) &&
     [...value].length <= maximumLength
   );
 }
 
-function isDigest(value) {
+function isDigest(value: unknown): value is string {
   return (
     typeof value === "string" &&
     DIGEST_PATTERN.test(value)
   );
 }
 
-function compareStrings(left, right) {
+function compareStrings(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function planTampered() {
+function planTampered(): ImportPlanError {
   return new ImportPlanError(
     "IMPORT_PLAN_TAMPERED",
     "ImportPlan does not match its approved canonical semantics."
   );
 }
 
-function planLimit(field, limit) {
+function planLimit(
+  field: string,
+  limit: number
+): ImportPlanError {
   return new ImportPlanError(
     "IMPORT_PLAN_LIMIT_EXCEEDED",
     `ImportPlan ${field} exceeds limit ${limit}.`
   );
+}
+
+function isUniqueBoundedStringArray(
+  value: unknown,
+  maximumItems: number,
+  maximumStringLength: number
+): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= maximumItems &&
+    value.every((item) =>
+      isBoundedString(item, maximumStringLength)
+    ) &&
+    new Set(value).size === value.length
+  );
+}
+
+function isImportEventType(
+  value: unknown
+): value is ImportEventType {
+  return (
+    value === "work_item.created" ||
+    value === "external_link.linked" ||
+    value === "external_link.observed" ||
+    value === "work_item.updated" ||
+    value === "artifact.linked" ||
+    value === "evidence.recorded"
+  );
+}
+
+function isImportActionKind(
+  value: unknown
+): value is ImportActionKind {
+  return (
+    value === "create" ||
+    value === "link" ||
+    value === "refresh" ||
+    value === "update" ||
+    value === "skip" ||
+    value === "conflict"
+  );
+}
+
+function getErrorCode(error: unknown): unknown {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error
+  )
+    ? error.code
+    : undefined;
+}
+
+function readProperty(value: unknown, key: string): unknown {
+  if (value === null || value === undefined) {
+    throw new TypeError(
+      `Cannot read properties of ${String(value)} (reading '${key}')`
+    );
+  }
+  return Reflect.get(Object(value), key);
 }

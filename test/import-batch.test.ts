@@ -4,7 +4,12 @@ import test from "node:test";
 import {
   computeImportPlanDigest,
   deriveImportActionId
-} from "../src/application/import-plan.js";
+} from "../src/application/import-plan.ts";
+import type {
+  ImportAction,
+  ImportPlan,
+  ImportPlanEvent
+} from "../src/application/import-plan.ts";
 import {
   applyEvent,
   createWorkflow
@@ -13,10 +18,13 @@ import {
   createImportBatchRecord,
   validateImportBatchRecord,
   validateImportPlanForApply
-} from "../src/application/import-batch.js";
+} from "../src/application/import-batch.ts";
+import type {
+  ImportBatchRecord
+} from "../src/application/import-batch.ts";
 import {
   digestCanonicalJson
-} from "../src/lib/canonical-json.js";
+} from "../src/lib/canonical-json.ts";
 import {
   createActor,
   createGitHubIssueSnapshot,
@@ -75,19 +83,20 @@ test("a validated import plan becomes a replayable batch and immutable receipt",
 
 test("plan validation detects digest, event identity, action identity, and summary tampering", () => {
   const original = createPreviewPlan();
-  const mutations = [
+  const mutations: Array<(plan: ImportPlan) => void> = [
     (plan) => {
       plan.planDigest = `sha256:${"0".repeat(64)}`;
     },
     (plan) => {
-      plan.events[0].eventId =
+      const event = getFirstEvent(plan.events);
+      const action = getFirstAction(plan.actions);
+      event.eventId =
         `taskseal:import:v1:create:${"0".repeat(64)}`;
-      plan.actions[0].eventIds[0] =
-        plan.events[0].eventId;
+      action.eventIds[0] = event.eventId;
       plan.planDigest = computeImportPlanDigest(plan);
     },
     (plan) => {
-      plan.actions[0].actionId =
+      getFirstAction(plan.actions).actionId =
         `sha256:${"0".repeat(64)}`;
       plan.planDigest = computeImportPlanDigest(plan);
     },
@@ -122,8 +131,9 @@ test("plan validation detects digest, event identity, action identity, and summa
 
 test("plan validation binds each approved action to its canonical event semantics", () => {
   const plan = createPreviewPlan();
-  plan.actions[0].kind = "update";
-  plan.actions[0].reasonCode = "MANAGED_TITLE_CHANGED";
+  const action = getFirstAction(plan.actions);
+  action.kind = "update";
+  action.reasonCode = "MANAGED_TITLE_CHANGED";
   plan.summary.create = 0;
   plan.summary.update = 1;
   plan.planDigest = computeImportPlanDigest(plan);
@@ -167,17 +177,18 @@ test("plan validation requires canonical ordering and complete stale warning pro
   );
 
   const stalePlan = structuredClone(initial);
+  const staleAction = getFirstAction(stalePlan.actions);
   const staleIdentity = {
-    workItemId: stalePlan.actions[0].workItemId,
+    workItemId: staleAction.workItemId,
     sourceObjectKey:
-      stalePlan.actions[0].sourceObjectKey,
+      staleAction.sourceObjectKey,
     sourceRevisionId:
-      stalePlan.actions[0].sourceRevisionId,
+      staleAction.sourceRevisionId,
     semanticTarget: "external-link-observation"
   };
   stalePlan.actions = [
     {
-      ...stalePlan.actions[0],
+      ...staleAction,
       actionId: deriveImportActionId(staleIdentity),
       kind: "skip",
       semanticTarget: staleIdentity.semanticTarget,
@@ -213,9 +224,11 @@ test("batch replay rejects semantic, audit-summary, and schema tampering", () =>
     actor: createActor(),
     appliedAt: "2026-07-26T08:05:00.000Z"
   });
-  const mutations = [
+  const mutations: Array<
+    (copy: MutableBatchRecord) => void
+  > = [
     (copy) => {
-      copy.events[0].payload.title = "Tampered";
+      getFirstEvent(copy.events).payload.title = "Tampered";
     },
     (copy) => {
       copy.policyDigest = `sha256:${"0".repeat(64)}`;
@@ -245,32 +258,33 @@ test("batch replay rejects semantic, audit-summary, and schema tampering", () =>
 test("plan validation enforces byte, depth, action, and event limits before apply", () => {
   const original = createPreviewPlan();
   const oversizedBytes = structuredClone(original);
-  oversizedBytes.events[0].payload.title =
+  getFirstEvent(oversizedBytes.events).payload.title =
     "x".repeat(2 * 1024 * 1024);
   const excessiveDepth = structuredClone(original);
-  let nested = excessiveDepth.events[0].payload;
+  let nested = getFirstEvent(excessiveDepth.events).payload;
 
   for (let depth = 0; depth < 20; depth += 1) {
-    nested.extra = {};
-    nested = nested.extra;
+    const child: Record<string, unknown> = {};
+    nested.extra = child;
+    nested = child;
   }
 
   const excessiveActions = structuredClone(original);
   excessiveActions.actions = Array.from(
     { length: 257 },
-    () => structuredClone(original.actions[0])
+    () => structuredClone(getFirstAction(original.actions))
   );
   const excessiveEvents = structuredClone(original);
   excessiveEvents.events = Array.from(
     { length: 257 },
-    () => structuredClone(original.events[0])
+    () => structuredClone(getFirstEvent(original.events))
   );
   const excessiveActionsWithPoisonedItem =
     structuredClone(original);
   excessiveActionsWithPoisonedItem.actions =
     Array.from(
       { length: 257 },
-      () => structuredClone(original.actions[0])
+      () => structuredClone(getFirstAction(original.actions))
     );
   Object.defineProperty(
     excessiveActionsWithPoisonedItem.actions,
@@ -323,7 +337,13 @@ test("successful batches require apply authorization and no conflicts", () => {
   );
 });
 
-function recomputeRecordPlanDigest(record) {
+interface MutableBatchRecord extends ImportBatchRecord {
+  secret?: string;
+}
+
+function recomputeRecordPlanDigest(
+  record: ImportBatchRecord
+): string {
   return computeImportPlanDigest({
     schemaVersion: record.schemaVersion,
     snapshotDigest: record.snapshotDigest,
@@ -338,6 +358,25 @@ function recomputeRecordPlanDigest(record) {
   });
 }
 
-function hasCode(code) {
-  return (error) => error?.code === code;
+function getFirstAction(
+  actions: readonly ImportAction[]
+): ImportAction {
+  const action = actions[0];
+  assert.ok(action);
+  return action;
+}
+
+function getFirstEvent(
+  events: readonly ImportPlanEvent[]
+): ImportPlanEvent {
+  const event = events[0];
+  assert.ok(event);
+  return event;
+}
+
+function hasCode(code: string) {
+  return (error: unknown) =>
+    error instanceof Error &&
+    "code" in error &&
+    error.code === code;
 }

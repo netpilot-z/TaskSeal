@@ -9,17 +9,17 @@ import test from "node:test";
 
 import {
   createImportBatchRecord
-} from "../src/application/import-batch.js";
+} from "../src/application/import-batch.ts";
 import {
   TaskSealService
-} from "../src/application/taskseal-service.js";
+} from "../src/application/taskseal-service.ts";
 import {
   applyEvent,
   createWorkflow
 } from "../src/domain/workflow.ts";
 import {
   FileEventJournal
-} from "../src/storage/event-journal.js";
+} from "../src/storage/event-journal.ts";
 import {
   createActor,
   createGitHubIssueSnapshot,

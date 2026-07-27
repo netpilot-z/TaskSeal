@@ -4,7 +4,59 @@ import test from "node:test";
 import {
   computeImportPlanDigest,
   deriveImportEventId
-} from "../src/application/import-plan.js";
+} from "../src/application/import-plan.ts";
+
+interface EventIdentityFixture {
+  eventType: string;
+  workItemId: string;
+  providerObjectKey: string;
+  sourceRevisionId: string;
+  semanticTarget: string;
+}
+
+interface PlanFixture {
+  schemaVersion: number;
+  mode: string;
+  snapshotDigest: string;
+  mappingDigest: string;
+  policyDigest: string;
+  baseWorkflowDigest: string;
+  policyBinding: {
+    schemaVersion: number;
+    provider: string;
+    applyAllowed: boolean;
+  };
+  summary: {
+    create: number;
+  };
+  actions: Array<{
+    actionId: string;
+    kind: string;
+    workItemId: string;
+    sourceObjectKey: string;
+    sourceRevisionId: string;
+    semanticTarget: string;
+    reasonCode: string;
+    eventIds: string[];
+  }>;
+  events: Array<{
+    eventId: string;
+    workItemId: string;
+    type: string;
+    occurredAt: string;
+    payload: {
+      title: string;
+    };
+  }>;
+  conflicts: Array<{
+    actionId: string;
+    code: string;
+  }>;
+  warnings: Array<{
+    actionId: string;
+    code: string;
+  }>;
+}
 
 test("import event identity is stable and binds every semantic identity field", () => {
   const identity = createEventIdentity();
@@ -19,13 +71,17 @@ test("import event identity is stable and binds every semantic identity field", 
     eventId
   );
 
-  for (const [field, replacement] of [
+  const replacements: Array<
+    readonly [keyof EventIdentityFixture, string]
+  > = [
     ["eventType", "external_link.linked"],
     ["workItemId", "TS-2"],
     ["providerObjectKey", "github:issue:502"],
     ["sourceRevisionId", "revision-2"],
     ["semanticTarget", "external-link"]
-  ]) {
+  ];
+
+  for (const [field, replacement] of replacements) {
     assert.notEqual(
       deriveImportEventId({
         ...identity,
@@ -40,7 +96,7 @@ test("import event identity is stable and binds every semantic identity field", 
 test("import plan digest survives JSON round trips and excludes presentation fields", () => {
   const plan = createPlan();
   const planDigest = computeImportPlanDigest(plan);
-  const roundTripped = JSON.parse(JSON.stringify({
+  const roundTripped: unknown = JSON.parse(JSON.stringify({
     ...plan,
     mode: "approval-view",
     planDigest,
@@ -59,12 +115,16 @@ test("import plan digest survives JSON round trips and excludes presentation fie
 test("import plan digest detects semantic event, action, policy, and projection tampering", () => {
   const plan = createPlan();
   const originalDigest = computeImportPlanDigest(plan);
-  const mutations = [
+  const mutations: Array<(copy: PlanFixture) => void> = [
     (copy) => {
-      copy.events[0].payload.title = "Tampered";
+      const event = copy.events[0];
+      assert.ok(event);
+      event.payload.title = "Tampered";
     },
     (copy) => {
-      copy.actions[0].reasonCode = "TAMPERED";
+      const action = copy.actions[0];
+      assert.ok(action);
+      action.reasonCode = "TAMPERED";
     },
     (copy) => {
       copy.policyBinding.applyAllowed = true;
@@ -112,7 +172,7 @@ test("import event identity rejects unsupported or incomplete identities", () =>
   );
 });
 
-function createEventIdentity() {
+function createEventIdentity(): EventIdentityFixture {
   return {
     eventType: "work_item.created",
     workItemId: "TS-1",
@@ -122,7 +182,7 @@ function createEventIdentity() {
   };
 }
 
-function createPlan() {
+function createPlan(): PlanFixture {
   const identity = createEventIdentity();
   const eventId = deriveImportEventId(identity);
 
@@ -169,6 +229,9 @@ function createPlan() {
   };
 }
 
-function hasCode(code) {
-  return (error) => error?.code === code;
+function hasCode(code: string) {
+  return (error: unknown) =>
+    error instanceof Error &&
+    "code" in error &&
+    error.code === code;
 }

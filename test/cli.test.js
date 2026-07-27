@@ -10,7 +10,7 @@ import {
   runCli,
   startPersistentControlRoom
 } from "../src/cli.js";
-import { FileEventJournal } from "../src/storage/event-journal.js";
+import { FileEventJournal } from "../src/storage/event-journal.ts";
 
 test("init creates one local work item and remains idempotent", async (t) => {
   const cwd = await createTemporaryDirectory(t);

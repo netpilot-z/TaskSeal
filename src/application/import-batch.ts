@@ -2,11 +2,19 @@ import {
   assertJsonWithinLimits,
   canonicalizeJson,
   digestCanonicalJson
-} from "../lib/canonical-json.js";
+} from "../lib/canonical-json.ts";
 import {
   normalizeImportPlan,
   summarizeImportActions
-} from "./import-plan.js";
+} from "./import-plan.ts";
+import type {
+  ImportAction,
+  ImportConflict,
+  ImportPlan,
+  ImportPlanEvent,
+  ImportWarning
+} from "./import-plan.ts";
+import type { PolicyBinding } from "./import-policy.ts";
 
 const RECORD_BYTE_LIMIT = 3 * 1024 * 1024;
 const RECORD_DEPTH_LIMIT = 16;
@@ -32,17 +40,70 @@ const RECORD_FIELDS = [
   "summary"
 ];
 
+export interface ImportActor {
+  type: string;
+  id: string;
+}
+
+export interface ImportRecordSummary {
+  eventIds: string[];
+  skippedCodes: string[];
+  warningCodes: string[];
+}
+
+export interface ImportBatchRecord {
+  recordType: "import.batch";
+  schemaVersion: 1;
+  batchId: string;
+  planDigest: string;
+  snapshotDigest: string;
+  mappingDigest: string;
+  policyBinding: PolicyBinding;
+  policyDigest: string;
+  baseWorkflowDigest: string;
+  actions: ImportAction[];
+  conflictCodes: ImportConflict[];
+  warningCodes: ImportWarning[];
+  appliedAt: string;
+  actor: ImportActor;
+  outcome: "applied";
+  events: ImportPlanEvent[];
+  summary: ImportRecordSummary;
+}
+
+export interface ImportReceipt {
+  batchId: string;
+  planDigest: string;
+  snapshotDigest: string;
+  mappingDigest: string;
+  policyDigest: string;
+  baseWorkflowDigest: string;
+  actor: ImportActor;
+  appliedAt: string;
+  outcome: "applied";
+  eventIds: string[];
+  skippedCodes: string[];
+  warningCodes: string[];
+}
+
+export interface ValidatedImportBatch {
+  record: ImportBatchRecord;
+  recordDigest: string;
+  plan: ImportPlan;
+  receipt: ImportReceipt;
+}
+
 export function validateImportPlanForApply(
-  plan,
-  expectedPlanDigest
-) {
-  let normalized;
+  plan: unknown,
+  expectedPlanDigest: unknown
+): ImportPlan {
+  let normalized: ImportPlan;
 
   try {
     normalized = normalizeImportPlan(plan);
   } catch (error) {
     if (
-      error?.code === "IMPORT_PLAN_LIMIT_EXCEEDED"
+      getErrorCode(error) === "IMPORT_PLAN_LIMIT_EXCEEDED"
     ) {
       throw error;
     }
@@ -51,7 +112,7 @@ export function validateImportPlanForApply(
   }
 
   if (
-    !DIGEST_PATTERN.test(expectedPlanDigest ?? "") ||
+    !isDigest(expectedPlanDigest) ||
     normalized.planDigest !== expectedPlanDigest
   ) {
     throw importPlanTampered();
@@ -64,10 +125,14 @@ export function createImportBatchRecord({
   plan,
   actor,
   appliedAt
-}) {
+}: {
+  plan: unknown;
+  actor: unknown;
+  appliedAt: unknown;
+}): ImportBatchRecord {
   const normalizedPlan = validateImportPlanForApply(
     plan,
-    plan?.planDigest
+    readOptionalProperty(plan, "planDigest")
   );
   const normalizedActor = normalizeActor(
     actor,
@@ -95,7 +160,7 @@ export function createImportBatchRecord({
     );
   }
 
-  const record = {
+  const record: ImportBatchRecord = {
     recordType: "import.batch",
     schemaVersion: 1,
     batchId: `import:${normalizedPlan.planDigest}`,
@@ -116,10 +181,12 @@ export function createImportBatchRecord({
     summary: buildRecordSummary(normalizedPlan)
   };
 
-  return cloneCanonical(record);
+  return cloneCanonicalImportBatchRecord(record);
 }
 
-export function validateImportBatchRecord(record) {
+export function validateImportBatchRecord(
+  record: unknown
+): ValidatedImportBatch {
   try {
     const safeRecord = cloneBoundedRecord(record);
 
@@ -179,15 +246,24 @@ export function validateImportBatchRecord(record) {
       throw journalCorrupt();
     }
 
-    const normalizedRecord = {
-      ...safeRecord,
-      actor,
-      policyBinding: plan.policyBinding,
-      actions: plan.actions,
-      conflictCodes: plan.conflicts,
-      warningCodes: plan.warnings,
-      events: plan.events
-    };
+    safeRecord.actor = actor;
+    safeRecord.policyBinding = plan.policyBinding;
+    safeRecord.actions = plan.actions;
+    safeRecord.conflictCodes = plan.conflicts;
+    safeRecord.warningCodes = plan.warnings;
+    safeRecord.events = plan.events;
+
+    if (
+      !isBoundImportBatchRecord(
+        safeRecord,
+        actor,
+        plan
+      )
+    ) {
+      throw journalCorrupt();
+    }
+
+    const normalizedRecord = safeRecord;
 
     return {
       record: normalizedRecord,
@@ -197,7 +273,7 @@ export function validateImportBatchRecord(record) {
       receipt: projectImportReceipt(normalizedRecord)
     };
   } catch (error) {
-    if (error?.code === "JOURNAL_CORRUPT") {
+    if (getErrorCode(error) === "JOURNAL_CORRUPT") {
       throw error;
     }
 
@@ -205,28 +281,37 @@ export function validateImportBatchRecord(record) {
   }
 }
 
-export function computeImportBatchRecordDigest(record) {
+export function computeImportBatchRecordDigest(
+  record: unknown
+): string {
   return digestCanonicalJson(record);
 }
 
-export function projectImportReceipt(record) {
-  return cloneCanonical({
-    batchId: record.batchId,
-    planDigest: record.planDigest,
-    snapshotDigest: record.snapshotDigest,
-    mappingDigest: record.mappingDigest,
-    policyDigest: record.policyDigest,
-    baseWorkflowDigest: record.baseWorkflowDigest,
-    actor: record.actor,
+export function projectImportReceipt(
+  record: ImportBatchRecord
+): ImportReceipt {
+  return {
+    actor: {
+      id: record.actor.id,
+      type: record.actor.type
+    },
     appliedAt: record.appliedAt,
+    baseWorkflowDigest: record.baseWorkflowDigest,
+    batchId: record.batchId,
+    eventIds: [...record.summary.eventIds],
+    mappingDigest: record.mappingDigest,
     outcome: record.outcome,
-    eventIds: record.summary.eventIds,
-    skippedCodes: record.summary.skippedCodes,
-    warningCodes: record.summary.warningCodes
-  });
+    planDigest: record.planDigest,
+    policyDigest: record.policyDigest,
+    skippedCodes: [...record.summary.skippedCodes],
+    snapshotDigest: record.snapshotDigest,
+    warningCodes: [...record.summary.warningCodes]
+  };
 }
 
-function buildRecordSummary(plan) {
+function buildRecordSummary(
+  plan: ImportPlan
+): ImportRecordSummary {
   return {
     eventIds: plan.events.map((event) => event.eventId),
     skippedCodes: plan.actions
@@ -238,7 +323,10 @@ function buildRecordSummary(plan) {
   };
 }
 
-function normalizeActor(value, errorCode) {
+function normalizeActor(
+  value: unknown,
+  errorCode: string
+): ImportActor {
   if (
     !isPlainRecord(value) ||
     !hasExactKeys(value, ["type", "id"]) ||
@@ -261,8 +349,8 @@ function normalizeActor(value, errorCode) {
   };
 }
 
-function cloneBoundedRecord(record) {
-  let canonical;
+function cloneBoundedRecord(record: unknown): unknown {
+  let canonical: string;
 
   try {
     assertJsonWithinLimits(record, {
@@ -285,14 +373,77 @@ function cloneBoundedRecord(record) {
     throw journalCorrupt();
   }
 
-  return JSON.parse(canonical);
+  const parsed: unknown = JSON.parse(canonical);
+  return parsed;
 }
 
-function cloneCanonical(value) {
-  return JSON.parse(canonicalizeJson(value));
+function cloneCanonicalImportBatchRecord(
+  record: ImportBatchRecord
+): ImportBatchRecord {
+  const clone: unknown = JSON.parse(
+    canonicalizeJson(record)
+  );
+
+  if (
+    !isPlainRecord(clone) ||
+    !isCanonicalImportBatchRecordClone(
+      clone,
+      record
+    )
+  ) {
+    throw new TypeError(
+      "Import batch canonical clone failed."
+    );
+  }
+
+  return clone;
 }
 
-function isPlainRecord(value) {
+function isCanonicalImportBatchRecordClone(
+  clone: unknown,
+  source: ImportBatchRecord
+): clone is ImportBatchRecord {
+  return (
+    isPlainRecord(clone) &&
+    clone.recordType === source.recordType &&
+    clone.schemaVersion === source.schemaVersion &&
+    canonicalizeJson(clone) === canonicalizeJson(source)
+  );
+}
+
+function isBoundImportBatchRecord(
+  value: unknown,
+  actor: ImportActor,
+  plan: ImportPlan
+): value is ImportBatchRecord {
+  return (
+    isPlainRecord(value) &&
+    value.recordType === "import.batch" &&
+    value.schemaVersion === 1 &&
+    isDigest(value.planDigest) &&
+    typeof value.batchId === "string" &&
+    value.batchId === `import:${value.planDigest}` &&
+    isDigest(value.snapshotDigest) &&
+    isDigest(value.mappingDigest) &&
+    value.policyBinding === plan.policyBinding &&
+    isDigest(value.policyDigest) &&
+    isDigest(value.baseWorkflowDigest) &&
+    value.actions === plan.actions &&
+    value.conflictCodes === plan.conflicts &&
+    value.warningCodes === plan.warnings &&
+    isTimestamp(value.appliedAt) &&
+    value.actor === actor &&
+    value.outcome === "applied" &&
+    value.events === plan.events &&
+    isPlainRecord(value.summary) &&
+    canonicalizeJson(value.summary) ===
+      canonicalizeJson(buildRecordSummary(plan))
+  );
+}
+
+function isPlainRecord(
+  value: unknown
+): value is Record<string, unknown> {
   if (
     !value ||
     typeof value !== "object" ||
@@ -308,7 +459,10 @@ function isPlainRecord(value) {
   );
 }
 
-function hasExactKeys(value, expectedKeys) {
+function hasExactKeys(
+  value: Record<string, unknown>,
+  expectedKeys: readonly string[]
+): boolean {
   const keys = Reflect.ownKeys(value);
 
   return (
@@ -317,21 +471,24 @@ function hasExactKeys(value, expectedKeys) {
   );
 }
 
-function isDigest(value) {
+function isDigest(value: unknown): value is string {
   return (
     typeof value === "string" &&
     DIGEST_PATTERN.test(value)
   );
 }
 
-function isTimestamp(value) {
+function isTimestamp(value: unknown): value is string {
   return (
     isBoundedString(value, ID_LIMIT) &&
     Number.isFinite(Date.parse(value))
   );
 }
 
-function isBoundedString(value, maximumLength) {
+function isBoundedString(
+  value: unknown,
+  maximumLength: number
+): value is string {
   return (
     typeof value === "string" &&
     value.trim().length > 0 &&
@@ -339,7 +496,9 @@ function isBoundedString(value, maximumLength) {
   );
 }
 
-function importPlanTampered(cause) {
+function importPlanTampered(
+  cause?: unknown
+): ImportBatchError {
   return new ImportBatchError(
     "IMPORT_PLAN_TAMPERED",
     "ImportPlan does not match the approved digest and schema.",
@@ -347,7 +506,7 @@ function importPlanTampered(cause) {
   );
 }
 
-function journalCorrupt(cause) {
+function journalCorrupt(cause?: unknown): ImportBatchError {
   return new ImportBatchError(
     "JOURNAL_CORRUPT",
     "TaskSeal import batch failed integrity validation.",
@@ -356,9 +515,35 @@ function journalCorrupt(cause) {
 }
 
 export class ImportBatchError extends Error {
-  constructor(code, message, options) {
+  readonly code: string;
+
+  constructor(
+    code: string,
+    message: string,
+    options?: ErrorOptions
+  ) {
     super(message, options);
     this.name = "ImportBatchError";
     this.code = code;
   }
+}
+
+function getErrorCode(error: unknown): unknown {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error
+  )
+    ? error.code
+    : undefined;
+}
+
+function readOptionalProperty(
+  value: unknown,
+  key: string
+): unknown {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  return Reflect.get(Object(value), key);
 }
