@@ -13,7 +13,12 @@ import {
   buildPolicyBinding
 } from "./import-policy.js";
 import {
+  compareImportActions,
+  compareImportCodeProjections,
+  compareImportEvents,
+  computeBaseWorkflowDigest,
   computeImportPlanDigest,
+  deriveImportActionId,
   deriveImportEventId
 } from "./import-plan.js";
 
@@ -33,14 +38,6 @@ const CANDIDATE_EVENT_TYPES = new Set([
   "work_item.created",
   "artifact.linked",
   "evidence.recorded"
-]);
-const EVENT_TYPE_ORDER = new Map([
-  ["work_item.created", 0],
-  ["external_link.linked", 1],
-  ["external_link.observed", 2],
-  ["work_item.updated", 3],
-  ["artifact.linked", 4],
-  ["evidence.recorded", 5]
 ]);
 const DIRECT_DOMAIN_CONFLICTS = new Set([
   "EVENT_ID_CONFLICT",
@@ -105,7 +102,8 @@ export function previewSnapshotImport({
     mapping: normalizedSnapshot.mapping,
     facts: normalizedSnapshot.facts
   });
-  const baseWorkflowDigest = digestCanonicalJson(workflow);
+  const baseWorkflowDigest =
+    computeBaseWorkflowDigest(workflow);
   const planned = planSnapshotFacts({
     snapshot: normalizedSnapshot,
     workflow
@@ -115,13 +113,19 @@ export function previewSnapshotImport({
     actions: planned.actions,
     events: planned.events
   });
-  const events = [...simulated.events].sort(compareEvents);
+  const events = [...simulated.events].sort(
+    compareImportEvents
+  );
   const eventTypeById = new Map(
     events.map((event) => [event.eventId, event.type])
   );
   const actions = [...simulated.actions].sort(
     (left, right) =>
-      compareActions(left, right, eventTypeById)
+      compareImportActions(
+        left,
+        right,
+        eventTypeById
+      )
   );
   const conflicts = actions
     .filter((action) => action.kind === "conflict")
@@ -140,7 +144,7 @@ export function previewSnapshotImport({
 
       return conflict;
     })
-    .sort(compareCodeProjections);
+    .sort(compareImportCodeProjections);
   const warnings = actions
     .filter(
       (action) =>
@@ -151,7 +155,7 @@ export function previewSnapshotImport({
       actionId: action.actionId,
       code: "STALE_SOURCE_REVISION"
     }))
-    .sort(compareCodeProjections);
+    .sort(compareImportCodeProjections);
   const semanticPlan = {
     schemaVersion: 1,
     snapshotDigest,
@@ -1056,7 +1060,9 @@ function planSnapshotFacts({
 function projectPlanningEvents(workflow, events) {
   let projected = workflow;
 
-  for (const event of [...events].sort(compareEvents)) {
+  for (
+    const event of [...events].sort(compareImportEvents)
+  ) {
     try {
       projected = applyEvent(projected, event);
     } catch {
@@ -1585,7 +1591,7 @@ function createAction({
     semanticTarget
   };
   const action = {
-    actionId: digestCanonicalJson(identity),
+    actionId: deriveImportActionId(identity),
     kind,
     workItemId: mapping.workItemId,
     sourceObjectKey:
@@ -1604,7 +1610,9 @@ function simulatePlannedEvents({
   actions,
   events
 }) {
-  const sortedEvents = [...events].sort(compareEvents);
+  const sortedEvents = [...events].sort(
+    compareImportEvents
+  );
   const actionByEventId = new Map();
 
   for (const action of actions) {
@@ -1718,50 +1726,6 @@ function compareFacts(left, right) {
       left.candidateEvent.eventId,
       right.candidateEvent.eventId
     )
-  );
-}
-
-function compareEvents(left, right) {
-  return (
-    (EVENT_TYPE_ORDER.get(left.type) ?? 99) -
-      (EVENT_TYPE_ORDER.get(right.type) ?? 99) ||
-    compareStrings(left.occurredAt, right.occurredAt) ||
-    compareStrings(left.eventId, right.eventId)
-  );
-}
-
-function compareActions(
-  left,
-  right,
-  eventTypeById
-) {
-  const leftEventType = left.eventIds[0]
-    ? eventTypeById.get(left.eventIds[0])
-    : null;
-  const rightEventType = right.eventIds[0]
-    ? eventTypeById.get(right.eventIds[0])
-    : null;
-
-  return (
-    (EVENT_TYPE_ORDER.get(leftEventType) ?? 90) -
-      (EVENT_TYPE_ORDER.get(rightEventType) ?? 90) ||
-    compareStrings(left.kind, right.kind) ||
-    compareStrings(
-      left.sourceObjectKey,
-      right.sourceObjectKey
-    ) ||
-    compareStrings(
-      left.sourceRevisionId,
-      right.sourceRevisionId
-    ) ||
-    compareStrings(left.actionId, right.actionId)
-  );
-}
-
-function compareCodeProjections(left, right) {
-  return (
-    compareStrings(left.actionId, right.actionId) ||
-    compareStrings(left.code, right.code)
   );
 }
 

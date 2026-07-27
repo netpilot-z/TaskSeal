@@ -25,6 +25,54 @@ test("service restores the same workflow from a reopened journal", async (t) => 
   assert.equal(reopened.snapshot().workItems[0].status, "running");
 });
 
+test("service reopens oversized legacy events accepted by the domain", async (t) => {
+  const cases = [
+    {
+      name: "extra-envelope-field",
+      workItemId: "TS-extra",
+      mutate(event) {
+        event.legacyMetadata = "accepted-before";
+      }
+    },
+    {
+      name: "long-event-id",
+      workItemId: "TS-long-id",
+      mutate(event) {
+        event.eventId = "e".repeat(513);
+      }
+    }
+  ];
+
+  for (const testCase of cases) {
+    const directory = await createTemporaryDirectory(t);
+    const filePath = join(
+      directory,
+      `${testCase.name}.jsonl`
+    );
+    const first = await TaskSealService.open({
+      journal: new FileEventJournal({ filePath })
+    });
+    const event = createWorkItemEvent(
+      testCase.workItemId
+    );
+    event.payload.title = "x".repeat(
+      3 * 1024 * 1024
+    );
+    testCase.mutate(event);
+
+    await first.append(event);
+
+    const reopened = await TaskSealService.open({
+      journal: new FileEventJournal({ filePath })
+    });
+
+    assert.equal(
+      reopened.getWorkItem(testCase.workItemId).title,
+      event.payload.title
+    );
+  }
+});
+
 test("service does not append duplicate or conflicting event ids", async (t) => {
   const directory = await createTemporaryDirectory(t);
   const journal = new FileEventJournal({
@@ -51,6 +99,30 @@ test("service does not append duplicate or conflicting event ids", async (t) => 
   assert.equal(service.getWorkflow().workItems["TS-1"].title, event.payload.title);
 });
 
+test("service snapshots cannot mutate private workflow state", async (t) => {
+  const directory = await createTemporaryDirectory(t);
+  const journal = new FileEventJournal({
+    filePath: join(directory, "events.jsonl")
+  });
+  const service = await TaskSealService.open({ journal });
+
+  await service.append(createWorkItemEvent());
+  await service.append(createAttemptEvent());
+  const snapshot = service.snapshot();
+
+  snapshot.workItems[0].requiredEvidence.push("forged");
+  snapshot.workItems[0].attempts[0].status = "succeeded";
+  snapshot.workItems[0].externalLinks[0].externalId = "forged";
+
+  const stored = service.getWorkItem("TS-1");
+  assert.deepEqual(stored.requiredEvidence, ["tests"]);
+  assert.equal(stored.attempts[0].status, "running");
+  assert.equal(
+    stored.externalLinks[0].externalId,
+    "TS-1"
+  );
+});
+
 test("service keeps memory unchanged when journal append fails", async () => {
   const journal = {
     async readAll() {
@@ -68,6 +140,25 @@ test("service keeps memory unchanged when journal append fails", async () => {
   );
 
   assert.deepEqual(service.getWorkflow().workItems, {});
+});
+
+test("service rejects oversized events before changing memory or journal", async (t) => {
+  const directory = await createTemporaryDirectory(t);
+  const filePath = join(directory, "events.jsonl");
+  const journal = new FileEventJournal({ filePath });
+  const service = await TaskSealService.open({ journal });
+  const event = createWorkItemEvent();
+  event.payload.title = "x".repeat(
+    4 * 1024 * 1024
+  );
+
+  await assert.rejects(
+    service.append(event),
+    (error) => error.code === "JOURNAL_WRITE_FAILED"
+  );
+
+  assert.deepEqual(service.getWorkflow().workItems, {});
+  assert.deepEqual(await journal.readAll(), []);
 });
 
 test("service recovers unfinished attempts as interrupted after restart", async (t) => {

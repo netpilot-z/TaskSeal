@@ -10,9 +10,9 @@ TaskSeal 让人类和 AI Agent 的“已完成”变成有证据、可验收、�
 
 - fixture：`Linear WorkItem → Codex Attempt → GitHub Artifact/Evidence → AcceptanceDecision`
 - persistent：`Local WorkItem → Codex App Server Attempt → Control Room`
-- provider import：`GitHub/Linear read-only fact → ProviderSnapshot v2 → deterministic ImportPlan preview`
+- provider import：`GitHub/Linear read-only fact → ProviderSnapshot v2 → deterministic ImportPlan → atomic local batch → ImportReceipt`
 
-本阶段不构建通用 Agent 市场、多租户权限、计费、生产数据库或真实外部写入。Linear workspace `netpilot-z`、team `netpilot` 与 project `TaskSeal` 是已只读验证的真实坐标；仓库 tickets 默认不自动同步。
+本阶段不构建通用 Agent 市场、多租户权限、计费、生产数据库或真实外部写入。Snapshot apply 当前只提供默认关闭的 application API；没有可信 ImportPolicy provider 时不能提交，也尚未开放 CLI/HTTP apply 入口。Linear workspace `netpilot-z`、team `netpilot` 与 project `TaskSeal` 是已只读验证的真实坐标；仓库 tickets 默认不自动同步。
 
 当前真实环境中，Linear Issue `NP-1` 已完成成功 snapshot；GitHub Issue `#1`、Draft PR `#2` 与 PR head 上的 `tests` Check 已完成完整只读 snapshot 和真实内存重放。结果进入 `reviewing`，Evidence passed，AcceptanceDecision 仍为空，journal 未变化。Issue、PR 与 CI 的创建均来自操作者明确授权；TaskSeal 不会从只读检查隐式创建、更新、合并或关闭外部对象。
 
