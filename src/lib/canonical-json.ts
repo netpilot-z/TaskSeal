@@ -239,6 +239,10 @@ function inspectArray(
   value: readonly unknown[],
   context: InspectionContext
 ): void {
+  if (Object.getPrototypeOf(value) !== Array.prototype) {
+    throw invalidJson();
+  }
+
   if (value.length > context.maxArrayLength) {
     throw jsonLimitExceeded("array length");
   }
@@ -372,6 +376,10 @@ function serializeArray(
   value: readonly unknown[],
   context: SerializationContext
 ): string {
+  if (Object.getPrototypeOf(value) !== Array.prototype) {
+    throw invalidJson();
+  }
+
   const ownKeys = Reflect.ownKeys(value);
 
   if (

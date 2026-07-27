@@ -8,6 +8,9 @@ import type {
 
 import { projectDashboard } from "./dashboard/projection.ts";
 import { replayDemoSteps } from "./demo/scenario.ts";
+import type {
+  ProviderObservationQueryPort
+} from "./application/provider-observation.ts";
 import type { DashboardProjection } from "./dashboard/projection.ts";
 import type { DemoStep } from "./demo/scenario.ts";
 
@@ -43,11 +46,13 @@ export interface DemoTaskSealServerOptions {
   steps: readonly DemoStep[];
   initialStep?: number | undefined;
   service?: never;
+  providerObservations?: never;
   runWorkItem?: never;
 }
 
 export interface PersistentTaskSealServerOptions {
   service: PersistentServicePort;
+  providerObservations: ProviderObservationQueryPort;
   runWorkItem: RunWorkItem;
   steps?: never;
   initialStep?: never;
@@ -71,6 +76,7 @@ interface DemoRuntime {
 interface PersistentRuntime {
   mode: "persistent";
   service: PersistentServicePort;
+  providerObservations: ProviderObservationQueryPort;
   runWorkItem: RunWorkItem;
   csrfToken: string;
 }
@@ -211,6 +217,18 @@ export function createTaskSealServer(
                 runtime.steps,
                 runtime.currentStep
               )
+        );
+      }
+
+      if (
+        runtime.mode === "persistent" &&
+        request.method === "GET" &&
+        pathname === "/api/providers"
+      ) {
+        return writeJson(
+          response,
+          200,
+          await runtime.providerObservations.list()
         );
       }
 
@@ -437,6 +455,8 @@ function createServerRuntime(
     if (
       typeof service.snapshot !== "function" ||
       typeof service.getWorkItem !== "function" ||
+      !isRecord(options.providerObservations) ||
+      typeof options.providerObservations.list !== "function" ||
       typeof options.runWorkItem !== "function"
     ) {
       throw new TypeError(
@@ -447,6 +467,7 @@ function createServerRuntime(
     return {
       mode: "persistent",
       service,
+      providerObservations: options.providerObservations,
       runWorkItem: options.runWorkItem,
       csrfToken: randomBytes(32).toString("base64url")
     };
@@ -817,6 +838,21 @@ function normalizeResponseError(
         code === "SERVICE_REOPEN_REQUIRED"
           ? "TaskSeal service must be reopened before requests can continue."
           : "TaskSeal service request failed."
+    };
+  }
+
+  if (
+    isRecord(error) &&
+    error.name === "ProviderObservationError"
+  ) {
+    return {
+      statusCode: 503,
+      code: readSafeErrorCode(
+        error,
+        "PROVIDER_OBSERVATION_READ_FAILED"
+      ),
+      message:
+        "TaskSeal provider observations are unavailable and must be reopened."
     };
   }
 

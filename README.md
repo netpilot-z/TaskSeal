@@ -8,7 +8,7 @@ TaskSeal 是一个 AI Delivery Control Plane 技术验证项目。它把外部�
 
 - fixture 证据链：`Linear → Codex → GitHub → Acceptance`
 - 真实运行链：`Local WorkItem → Codex App Server → Attempt terminal state → Control Room`
-- provider 只读链：`GitHub/Linear/Gitee API → explicit mapping → canonical snapshot`
+- provider 只读链：`GitHub/Linear/Gitee API → explicit mapping → canonical snapshot → Provider Observation → Control Room API`
 
 ## 项目坐标
 
@@ -42,7 +42,7 @@ npm start
 
 `doctor` 会检查项目配置、Codex 可执行文件和登录状态。在 Windows 上，TaskSeal 会比较 PATH 与本机 Codex App 的可用版本并选择较新的版本；也可通过 `TASKSEAL_CODEX_BIN` 显式指定。
 
-启动后访问 `http://127.0.0.1:4317`。Control Room 会读取 `.taskseal/events.jsonl` 的持久状态，并可从界面派发一个 Codex Attempt。
+启动后访问 `http://127.0.0.1:4317`。Control Room 会读取 `.taskseal/events.jsonl` 的持久交付状态，并可从界面派发一个 Codex Attempt。`GET /api/providers` 会从独立的 `.taskseal/provider-observations.json` 返回脱敏 Provider 状态；两种存储不会互相重放。
 
 当前 HTTP 控制面只允许 loopback；远程团队访问需要后续先补认证、TLS、租户权限与审计，不能通过修改 `HOST` 直接暴露。
 
@@ -89,7 +89,7 @@ GitHub 公开仓库可以匿名读取，也可通过 `GITHUB_TOKEN` 或 `GH_TOKE
 
 Gitee 首版只支持匿名公开仓库，配置为 `config/project.json` 中的非敏感 `gitee.repository` 坐标，不读取或接受 Token。`gitee-health` 验证精确 repository scope；`inspect gitee` 只接受显式、区分大小写的 Issue reference，并固定输出 ProviderSnapshot v2。公共 `oschina/git-osc#I4` 只用于 smoke，不代表 TaskSeal 项目的 Gitee 坐标。
 
-`inspect github-issue` 用于先验证单个 Issue 到 WorkItem 的映射；`inspect github` 用于验证完整 Issue → PR → Check 交付链。两者都要求显式映射，不通过标题或时间猜测关联。成功时只输出裁剪后的 provider scope、source reference 和 canonical events，不输出 Token、原始响应、本地路径，也不修改 `.taskseal/events.jsonl`。
+`inspect github-issue` 用于先验证单个 Issue 到 WorkItem 的映射；`inspect github` 用于验证完整 Issue → PR → Check 交付链。两者都要求显式映射，不通过标题或时间猜测关联。成功时只输出裁剪后的 provider scope、source reference 和 canonical events，不输出 Token、原始响应或本地路径，也不修改 `.taskseal/events.jsonl`。实际 CLI 会把最新状态、revision/digest、缺失证据和安全诊断码写入独立 observation 读模型；不会保存标题、URL、raw provider body、凭证或错误正文。
 
 当前 Linear 真实只读链已用 `NP-1` 验证成功：Workspace `netpilot-z`、Team `netpilot (NP)`、Project `TaskSeal`。GitHub 真实链已用获授权的 Issue `#1`、Draft PR `#2` 和 PR head 上成功完成的 `tests` Check 验证：完整 snapshot 生成 `work_item.created`、`artifact.linked` 与 `evidence.recorded`，真实内存重放进入 `reviewing`，且 journal 未变化。
 
@@ -116,6 +116,7 @@ node src/cli.ts sync linear --dry-run
 9. Linear、GitHub、Gitee 与飞书仍无真实写入；仓库 tickets 不会自动同步到 Linear。
 10. fixture 仍验证 revision-bound Artifact/Evidence 与幂等验收规则。
 11. Gitee 内置 AdapterManifest v1、`provider.health` 与 `work-item.read` 已实现，并用公共 `oschina/git-osc#I4` 完成匿名 smoke；Gitee preview、apply 与 candidate direct append 均失败关闭，飞书保留为后续异构压力测试。
+12. Provider Observation v1 已建立独立、有界、原子替换的 JSON 读模型；按 operation start freshness 拒绝乱序覆盖，通过 observed snapshot-import façade 组合真实 preview/apply，并以 persistent-only `GET /api/providers` 暴露 `configured`、`scope_mismatch`、`sample_missing`、`snapshot_ready` 与 `sync_failed`。
 
 ## 项目结构
 
@@ -132,11 +133,11 @@ src/
   demo/        可重复演示编排
   domain/      状态与验收不变量
   runners/     Codex App Server transport 与生命周期
-  storage/     本地 append-only journal
+  storage/     canonical journal 与独立只读投影存储
 test-support/  fake App Server
 test/          领域、连接器、集成和 HTTP 测试
 ```
 
 计划内 Node.js 服务端源码已迁移到 TypeScript；浏览器原生脚本 `public/` 暂不进入 TypeScript 构建。当前 `private: true` 包只支持源码 checkout 运行，尚不把 `bin: src/cli.ts` 视为可安装 npm 发布物。TypeScript、NestJS 与 monorepo 的取舍见 `docs/adr/0002-typescript-repository-strategy.md`，迁移规格见 `docs/specs/0005-typescript-migration.md`。
 
-实验结果见 `docs/experiments/`，Runner 设计见 `docs/architecture/codex-runner.md`，连接器演进方向见 `docs/architecture/connectors.md`，现有 Provider 契约见 `docs/research/0001-github-linear-read-contracts.md`，第二 Provider 选择证据见 `docs/research/0002-gitee-feishu-provider-probe.md` 与 `docs/adr/0003-select-gitee-as-second-provider.md`。
+实验结果见 `docs/experiments/`，Runner 设计见 `docs/architecture/codex-runner.md`，连接器演进方向见 `docs/architecture/connectors.md`，现有 Provider 契约见 `docs/research/0001-github-linear-read-contracts.md`，第二 Provider 选择证据见 `docs/research/0002-gitee-feishu-provider-probe.md` 与 `docs/adr/0003-select-gitee-as-second-provider.md`。Provider Observation 的边界与持久化决策见 `docs/specs/0007-provider-observation-read-model.md` 和 `docs/adr/0004-provider-observation-read-model.md`。

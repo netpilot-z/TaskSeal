@@ -60,13 +60,13 @@
 
 ## T10 — 在 Control Room 展示 Provider 与同步状态
 
-- 状态：待执行。
+- 状态：读侧基础已完成；GitHub Issue `#23` 已实现 Provider Observation 持久化与 `GET /api/providers`，前端 `#24` 和 operation projection `#29` 待执行。
 - 目的：让操作者从总览看到 scope 健康、snapshot 时间、映射、缺失证据、dry-run 数量和待审批写操作。
 - 范围：只读投影、诊断卡片、事件时间线、审批前摘要；默认不在浏览器展示原始 Token 或 raw payload。
 - 不包含：公网部署、多租户 RBAC、完整日志终端和批量无人审批。
-- 依赖：T08；写操作面板依赖 T09。
+- 依赖：T08；Provider 五态 API 已不依赖外部写入，写操作面板依赖 T09。
 - 验收标准：Control Room 能区分 `configured`、`scope mismatch`、`sample missing`、`snapshot ready`、`approval required` 和 `sync failed`。
-- 验证：投影测试、HTTP 集成测试、桌面与移动浏览器走查、控制台检查。
+- 验证：observation/store freshness、重启、损坏与 HTTP 集成测试已完成；桌面/移动浏览器走查在 `#24`，审批/失败合并在 `#29`。
 - 风险与回退：UI 只能投影 application 状态，不能直接调用 provider 或绕过审批服务。
 
 ## T11.1 — 用契约探针选择第二个 Provider

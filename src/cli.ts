@@ -13,7 +13,26 @@ import {
   inspectLinearProvider
 } from "./application/provider-inspection.ts";
 import { createLinearTicketDryRun } from "./application/linear-ticket-dry-run.ts";
+import {
+  configuredTargetForProvider,
+  fallbackConfiguredTarget,
+  projectProviderConfiguration,
+  ProviderObservationCoordinator
+} from "./application/provider-observation-coordinator.ts";
+import {
+  projectProviderFailure,
+  ProviderObservationReadModel
+} from "./application/provider-observation.ts";
+import {
+  ObservedSnapshotImportFacade
+} from "./application/observed-snapshot-import.ts";
 import { TaskSealService } from "./application/taskseal-service.ts";
+import {
+  readProjectConfiguration
+} from "./config/project-config.ts";
+import type {
+  ProjectConfiguration
+} from "./config/project-config.ts";
 import {
   isGiteeIssueReference
 } from "./connectors/gitee-read-client.ts";
@@ -22,6 +41,9 @@ import { CodexAppServerClient } from "./runners/codex-app-server-client.ts";
 import { CodexRunner } from "./runners/codex-runner.ts";
 import { createTaskSealServer } from "./server.ts";
 import { FileEventJournal } from "./storage/event-journal.ts";
+import {
+  FileProviderObservationStorage
+} from "./storage/provider-observation-store.ts";
 import type {
   ManagedField,
   WorkItem,
@@ -39,6 +61,21 @@ import type {
   PersistentServicePort,
   RunWorkItemOptions
 } from "./server.ts";
+import type {
+  ProviderObservationInput,
+  ProviderObservationScope,
+  ProviderObservationTarget,
+  ProviderObservationQueryPort
+} from "./application/provider-observation.ts";
+import type {
+  SnapshotImportApplyPort
+} from "./application/observed-snapshot-import.ts";
+import type {
+  ImportProvider
+} from "./application/import-policy.ts";
+import type {
+  ProviderName
+} from "./lib/provider-snapshot.ts";
 
 export type CliExitCode = 0 | 1 | 2;
 
@@ -115,7 +152,10 @@ type LinearCommandOptions = {
 } & InspectVersionOptions;
 
 type LinearInspectOptions =
-  LinearCommandOptions & { cwd: string };
+  LinearCommandOptions & {
+    cwd: string;
+    configuration?: ProjectConfiguration | undefined;
+  };
 
 type GiteeCommandOptions = {
   issueReference: string;
@@ -156,6 +196,11 @@ type CreateLinearDryRun = (
   options: LinearDryRunOptions
 ) => unknown | Promise<unknown>;
 
+type ProviderObservationCoordinatorFactory = (options: {
+  cwd: string;
+  clock: () => unknown;
+}) => ProviderObservationCoordinator | Promise<ProviderObservationCoordinator>;
+
 interface StartControlRoomOptions {
   cwd: string;
   output: OutputPort;
@@ -180,6 +225,9 @@ export interface RunCliOptions {
   inspectGitee?: InspectGitee | undefined;
   inspectGiteeHealth?: InspectGiteeHealth | undefined;
   createLinearDryRun?: CreateLinearDryRun | undefined;
+  providerObservationCoordinatorFactory?:
+    | ProviderObservationCoordinatorFactory
+    | undefined;
 }
 
 interface RunLocalCodexWorkItemOptions {
@@ -310,10 +358,25 @@ interface StartPersistentControlRoomOptions {
         options: CreateLocalCodexRuntimeOptions
       ) => ControlRoomRuntime | Promise<ControlRoomRuntime>)
     | undefined;
+  providerObservationRuntimeFactory?:
+    | ((
+        options: {
+          cwd: string;
+          clock?: (() => unknown) | undefined;
+        }
+      ) =>
+        | {
+            readModel: ProviderObservationQueryPort;
+          }
+        | Promise<{
+            readModel: ProviderObservationQueryPort;
+          }>)
+    | undefined;
   serverFactory?:
     | ((
         options: {
           service: PersistentServicePort;
+          providerObservations: ProviderObservationQueryPort;
           runWorkItem: (
             options: RunWorkItemOptions
           ) => unknown | Promise<unknown>;
@@ -369,7 +432,8 @@ export async function runCli({
   inspectLinear,
   inspectGitee,
   inspectGiteeHealth,
-  createLinearDryRun
+  createLinearDryRun,
+  providerObservationCoordinatorFactory
 }: RunCliOptions = {}): Promise<CliExitCode> {
   const command = args[0] ?? "start";
 
@@ -446,7 +510,17 @@ export async function runCli({
       try {
         const execute =
           inspectGitHubIssue ?? inspectGitHubIssueProvider;
-        const snapshot = await execute({ cwd, ...options });
+        const snapshot =
+          await executeObservedProviderInspection({
+            cwd,
+            clock: now,
+            provider: "github",
+            kind: "snapshot",
+            missingEvidence: options.requiredEvidence,
+            coordinatorFactory:
+              providerObservationCoordinatorFactory,
+            execute: () => execute({ cwd, ...options })
+          });
         output.write(`${JSON.stringify(snapshot, null, 2)}\n`);
         return 0;
       } catch (error) {
@@ -465,7 +539,17 @@ export async function runCli({
 
       try {
         const execute = inspectGitHub ?? inspectGitHubProvider;
-        const snapshot = await execute({ cwd, ...options });
+        const snapshot =
+          await executeObservedProviderInspection({
+            cwd,
+            clock: now,
+            provider: "github",
+            kind: "snapshot",
+            missingEvidence: [options.criterionKey],
+            coordinatorFactory:
+              providerObservationCoordinatorFactory,
+            execute: () => execute({ cwd, ...options })
+          });
         output.write(`${JSON.stringify(snapshot, null, 2)}\n`);
         return 0;
       } catch (error) {
@@ -484,7 +568,24 @@ export async function runCli({
 
       try {
         const execute = inspectLinear ?? inspectLinearProvider;
-        const snapshot = await execute({ cwd, ...options });
+        const snapshot =
+          await executeObservedProviderInspection({
+            cwd,
+            clock: now,
+            provider: "linear",
+            kind: "snapshot",
+            missingEvidence: options.requiredEvidence,
+            coordinatorFactory:
+              providerObservationCoordinatorFactory,
+            execute: (configuration) =>
+              execute({
+                cwd,
+                ...options,
+                ...(configuration === null
+                  ? {}
+                  : { configuration })
+              })
+          });
         output.write(`${JSON.stringify(snapshot, null, 2)}\n`);
         return 0;
       } catch (error) {
@@ -502,7 +603,16 @@ export async function runCli({
       try {
         const execute =
           inspectGiteeHealth ?? inspectGiteeHealthProvider;
-        const health = await execute({ cwd });
+        const health =
+          await executeObservedProviderInspection({
+            cwd,
+            clock: now,
+            provider: "gitee",
+            kind: "health",
+            coordinatorFactory:
+              providerObservationCoordinatorFactory,
+            execute: () => execute({ cwd })
+          });
         output.write(`${JSON.stringify(health, null, 2)}\n`);
         return 0;
       } catch (error) {
@@ -524,10 +634,21 @@ export async function runCli({
       try {
         const execute =
           inspectGitee ?? inspectGiteeProvider;
-        const snapshot = await execute({
-          cwd,
-          ...options
-        });
+        const snapshot =
+          await executeObservedProviderInspection({
+            cwd,
+            clock: now,
+            provider: "gitee",
+            kind: "snapshot",
+            missingEvidence: options.requiredEvidence,
+            coordinatorFactory:
+              providerObservationCoordinatorFactory,
+            execute: () =>
+              execute({
+                cwd,
+                ...options
+              })
+          });
         output.write(`${JSON.stringify(snapshot, null, 2)}\n`);
         return 0;
       } catch (error) {
@@ -566,6 +687,65 @@ export async function runCli({
 
   output.write(USAGE);
   return 2;
+}
+
+async function executeObservedProviderInspection<T>({
+  cwd,
+  clock,
+  provider,
+  kind,
+  missingEvidence = [],
+  coordinatorFactory,
+  execute
+}: {
+  cwd: string;
+  clock: () => unknown;
+  provider: ProviderName;
+  kind: "health" | "snapshot";
+  missingEvidence?: string[] | undefined;
+  coordinatorFactory:
+    | ProviderObservationCoordinatorFactory
+    | undefined;
+  execute: (
+    configuration: ProjectConfiguration | null
+  ) => T | Promise<T>;
+}): Promise<T> {
+  if (!coordinatorFactory) {
+    return execute(null);
+  }
+
+  let coordinator: ProviderObservationCoordinator;
+  try {
+    coordinator = await coordinatorFactory({
+      cwd,
+      clock
+    });
+  } catch {
+    return execute(null);
+  }
+
+  let configuredTarget = fallbackConfiguredTarget(provider);
+  let configuration: ProjectConfiguration | null = null;
+  try {
+    configuration =
+      await readProjectConfiguration({ cwd });
+    configuredTarget = configuredTargetForProvider(
+      configuration,
+      provider
+    );
+  } catch {
+    // The provider operation supplies the authoritative config error.
+  }
+
+  return coordinator.inspect({
+    provider,
+    configuredTarget,
+    kind,
+    missingEvidence,
+    verifiedLinearScopeBinding:
+      provider === "linear" && configuration !== null,
+    execute: () => execute(configuration)
+  });
 }
 
 export async function runLocalCodexWorkItem({
@@ -641,6 +821,164 @@ export async function createLocalCodexRuntime({
     service,
     runner
   };
+}
+
+export async function createLocalProviderObservationRuntime({
+  cwd,
+  clock = () => new Date()
+}: {
+  cwd: string;
+  clock?: (() => unknown) | undefined;
+}): Promise<{
+  readModel: ProviderObservationReadModel;
+  coordinator: ProviderObservationCoordinator;
+  createSnapshotImportFacade(options: {
+    provider: ImportProvider;
+    imports: SnapshotImportApplyPort;
+  }): Promise<ObservedSnapshotImportFacade>;
+}> {
+  const storage = new FileProviderObservationStorage({
+    workspaceRoot: cwd,
+    filePath: join(
+      cwd,
+      ".taskseal",
+      "provider-observations.json"
+    )
+  });
+  const readModel =
+    await ProviderObservationReadModel.open({ storage });
+  const coordinator = new ProviderObservationCoordinator({
+    observations: readModel,
+    clock
+  });
+  const importTargets =
+    new Map<ImportProvider, ProviderObservationTarget>();
+  const createSnapshotImportFacade = async ({
+    provider,
+    imports
+  }: {
+    provider: ImportProvider;
+    imports: SnapshotImportApplyPort;
+  }): Promise<ObservedSnapshotImportFacade> => {
+    const configuredTarget = importTargets.get(provider);
+    if (!configuredTarget) {
+      throw new TypeError(
+        `Provider ${provider} is not configured for observed snapshot import.`
+      );
+    }
+
+    let boundScope: ProviderObservationScope;
+    if (
+      provider === "github" &&
+      configuredTarget.kind === "repository"
+    ) {
+      boundScope = {
+        kind: "repository",
+        key: configuredTarget.key,
+        parentKey: null
+      };
+    } else {
+      const observation = (
+        await readModel.list()
+      ).providers.find(
+        (candidate) =>
+          candidate.provider === provider &&
+          candidate.configuredTarget.key ===
+            configuredTarget.key &&
+          candidate.status === "snapshot_ready" &&
+          candidate.observedScope !== null
+      );
+      if (!observation?.observedScope) {
+        throw new TypeError(
+          `Provider ${provider} does not have a verified scope binding.`
+        );
+      }
+      boundScope = observation.observedScope;
+    }
+
+    return new ObservedSnapshotImportFacade({
+      provider,
+      configuredTarget,
+      boundScope,
+      coordinator,
+      imports
+    });
+  };
+  let configuration;
+
+  try {
+    configuration =
+      await readProjectConfiguration({ cwd });
+  } catch {
+    return {
+      readModel,
+      coordinator,
+      createSnapshotImportFacade
+    };
+  }
+
+  for (const provider of [
+    "github",
+    "linear",
+    "gitee"
+  ] as const) {
+    if (configuration[provider] === undefined) {
+      continue;
+    }
+
+    const observedAt =
+      captureConfigurationSeedTimestamp(clock);
+    let input: ProviderObservationInput;
+
+    try {
+      const configuredTarget =
+        configuredTargetForProvider(
+          configuration,
+          provider
+        );
+      if (provider !== "gitee") {
+        importTargets.set(provider, configuredTarget);
+      }
+      input = projectProviderConfiguration({
+        provider,
+        configuredTarget,
+        observedAt
+      });
+    } catch (error) {
+      input = projectProviderFailure({
+        operation: "configuration",
+        provider,
+        configuredTarget:
+          fallbackConfiguredTarget(provider),
+        startedAt: observedAt,
+        observedAt,
+        error
+      });
+    }
+
+    await readModel.ensure(input);
+  }
+
+  return {
+    readModel,
+    coordinator,
+    createSnapshotImportFacade
+  };
+}
+
+function captureConfigurationSeedTimestamp(
+  clock: () => unknown
+): string {
+  const value = clock();
+  if (
+    !(value instanceof Date) ||
+    !Number.isFinite(value.getTime())
+  ) {
+    throw new TypeError(
+      "Provider observation clock must return a valid Date."
+    );
+  }
+  return new Date(value.getTime() - 1).toISOString();
 }
 
 export async function initializeProject({
@@ -1551,6 +1889,8 @@ export async function startPersistentControlRoom({
   commandRunner = runCommand,
   initialize = initializeProject,
   runtimeFactory = createLocalCodexRuntime,
+  providerObservationRuntimeFactory =
+    createLocalProviderObservationRuntime,
   serverFactory = createTaskSealServer,
   signalSource = processSignalSource
 }: StartPersistentControlRoomOptions): Promise<
@@ -1572,13 +1912,19 @@ export async function startPersistentControlRoom({
   }
 
   await initialize({ cwd });
-  const { service, runner } = await runtimeFactory({
+  const { readModel: providerObservations } =
+    await providerObservationRuntimeFactory({ cwd });
+  const {
+    service,
+    runner
+  } = await runtimeFactory({
     cwd,
     commandRunner,
     environment
   });
   const server = serverFactory({
     service,
+    providerObservations,
     runWorkItem: (options) =>
       runner.run({
         ...options,
@@ -1720,5 +2066,16 @@ const isMain =
   import.meta.url === pathToFileURL(invokedPath).href;
 
 if (isMain) {
-  process.exitCode = await runCli();
+  process.exitCode = await runCli({
+    providerObservationCoordinatorFactory: async ({
+      cwd,
+      clock
+    }) =>
+      (
+        await createLocalProviderObservationRuntime({
+          cwd,
+          clock
+        })
+      ).coordinator
+  });
 }
