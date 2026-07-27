@@ -387,6 +387,15 @@ test("persistent start wires one service and runner into the Control Room", asyn
       return { outcome: "completed" };
     }
   };
+  const providerObservations = {
+    async list() {
+      return {
+        schemaVersion: 1 as const,
+        revision: `sha256:${"0".repeat(64)}`,
+        providers: []
+      };
+    }
+  };
   let initialized = false;
   let shutDown = false;
   let serverOptions:
@@ -421,6 +430,9 @@ test("persistent start wires one service and runner into the Control Room", asyn
       initialized = true;
     },
     runtimeFactory: async () => ({ service, runner }),
+    providerObservationRuntimeFactory: async () => ({
+      readModel: providerObservations
+    }),
     serverFactory: (options) => {
       serverOptions = options;
       return new FakeServer();
@@ -431,6 +443,10 @@ test("persistent start wires one service and runner into the Control Room", asyn
   assert.equal(server instanceof FakeServer, true);
   assert.ok(serverOptions);
   assert.equal(serverOptions.service, service);
+  assert.equal(
+    serverOptions.providerObservations,
+    providerObservations
+  );
   const signal = new AbortController().signal;
   await serverOptions.runWorkItem({
     workItemId: "TS-1",

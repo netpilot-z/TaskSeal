@@ -4,6 +4,9 @@ import {
   getLinearCoordinates,
   readProjectConfiguration
 } from "../config/project-config.ts";
+import type {
+  ProjectConfiguration
+} from "../config/project-config.ts";
 import {
   createGiteeAdapter
 } from "../connectors/gitee.ts";
@@ -117,6 +120,7 @@ type GitHubDeliveryInspectionOptions =
 
 interface LinearInspectionBaseOptions {
   cwd: string;
+  configuration?: ProjectConfiguration | undefined;
   issueReference: string;
   workItemId: string;
   requiredEvidence: string[];
@@ -564,6 +568,7 @@ export function inspectLinearProvider(
 ): Promise<LinearSnapshotV1 | LinearSnapshotV2>;
 export async function inspectLinearProvider({
   cwd,
+  configuration: providedConfiguration,
   issueReference,
   workItemId,
   requiredEvidence,
@@ -583,7 +588,8 @@ export async function inspectLinearProvider({
     managedFields
   });
   const configuration =
-    await readProjectConfiguration({ cwd });
+    providedConfiguration ??
+    (await readProjectConfiguration({ cwd }));
   const { workspace, team } =
     getLinearCoordinates(configuration);
   const facts = await readLinearIssue({
