@@ -739,7 +739,7 @@ provider read client
 | `src/application/snapshot-import.js` | snapshot 校验、digest、纯 preview、ImportPlan |
 | `src/application/import-policy.js` | ImportPolicy v1 规范化、PolicyBinding 与 policyDigest |
 | `src/application/import-batch.js` | ImportBatchRecord 语义校验、planDigest 重算与 receipt 投影 |
-| `src/domain/workflow.js` | ExternalLink 唯一性、字段管理权、legacy upcast、新 canonical events 与全部领域不变量 |
+| `src/domain/workflow.ts` | ExternalLink 唯一性、字段管理权、legacy upcast、新 canonical events 与全部领域不变量 |
 | `src/application/taskseal-service.js` | write queue、policy/plan/revision 校验、完整 replay 编排、内存候选状态、receipt 幂等 |
 | `src/storage/event-journal.js` | record 字节读写、格式边界与原子 batch commit；不解释 WorkItem 或字段权威 |
 | `src/dashboard/*` | 后续只读投影 ImportPlan/Receipt；不得直接调用 provider 或 journal |

@@ -5,7 +5,7 @@ import {
   loadDemoSteps,
   replayDemoSteps
 } from "../src/demo/scenario.js";
-import { projectDashboard } from "../src/dashboard/projection.js";
+import { projectDashboard } from "../src/dashboard/projection.ts";
 
 test("the complete fixture chain produces a reproducible accepted dashboard", async () => {
   const steps = await loadDemoSteps();

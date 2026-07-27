@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyEvent, createWorkflow } from "../src/domain/workflow.js";
+import { applyEvent, createWorkflow } from "../src/domain/workflow.ts";
+import type {
+  AcceptanceDecision,
+  ActiveArtifact,
+  Attempt,
+  Workflow,
+  WorkItem
+} from "../src/domain/workflow.ts";
 
 test("a new work item starts in planned state", () => {
   const initial = createWorkflow();
@@ -21,7 +28,7 @@ test("a new work item starts in planned state", () => {
     }
   });
 
-  assert.equal(next.workItems["TS-1"].status, "planned");
+  assert.equal(getWorkItem(next, "TS-1").status, "planned");
 });
 
 test("an agent attempt moves work to running and duplicate events are idempotent", () => {
@@ -54,8 +61,8 @@ test("an agent attempt moves work to running and duplicate events are idempotent
   const running = applyEvent(created, startedEvent);
   const replayed = applyEvent(running, startedEvent);
 
-  assert.equal(running.workItems["TS-1"].status, "running");
-  assert.equal(replayed.workItems["TS-1"].attempts.length, 1);
+  assert.equal(getWorkItem(running, "TS-1").status, "running");
+  assert.equal(getWorkItem(replayed, "TS-1").attempts.length, 1);
   assert.strictEqual(replayed, running);
 });
 
@@ -89,7 +96,8 @@ test("acceptance is rejected when artifact or required evidence is missing", () 
           reason: "Looks good"
         }
       }),
-    (error) => error.code === "ACCEPTANCE_EVIDENCE_INCOMPLETE"
+    (error) =>
+      hasErrorCode(error, "ACCEPTANCE_EVIDENCE_INCOMPLETE")
   );
 });
 
@@ -173,10 +181,14 @@ test("a matching artifact and required evidence allow human acceptance", () => {
 
   const accepted = events.reduce(applyEvent, createWorkflow());
 
-  assert.equal(accepted.workItems["TS-1"].status, "accepted");
-  assert.equal(accepted.workItems["TS-1"].artifacts.length, 1);
-  assert.equal(accepted.workItems["TS-1"].evidence.length, 1);
-  assert.equal(accepted.workItems["TS-1"].acceptanceDecision.actor, "owner");
+  const acceptedWorkItem = getWorkItem(accepted, "TS-1");
+  assert.equal(acceptedWorkItem.status, "accepted");
+  assert.equal(acceptedWorkItem.artifacts.length, 1);
+  assert.equal(acceptedWorkItem.evidence.length, 1);
+  assert.equal(
+    getAcceptanceDecision(acceptedWorkItem).actor,
+    "owner"
+  );
 });
 
 test("event ids are required and conflicting payloads are rejected", () => {
@@ -199,7 +211,7 @@ test("event ids are required and conflicting payloads are rejected", () => {
 
   assert.throws(
     () => applyEvent(createWorkflow(), { ...createdEvent, eventId: "" }),
-    (error) => error.code === "EVENT_ENVELOPE_INVALID"
+    (error) => hasErrorCode(error, "EVENT_ENVELOPE_INVALID")
   );
   assert.throws(
     () =>
@@ -210,7 +222,7 @@ test("event ids are required and conflicting payloads are rejected", () => {
           title: "Conflicting title"
         }
       }),
-    (error) => error.code === "EVENT_ID_CONFLICT"
+    (error) => hasErrorCode(error, "EVENT_ID_CONFLICT")
   );
 });
 
@@ -253,9 +265,9 @@ test("a later create revision cannot overwrite an existing work item", () => {
           title: "Updated title"
         }
       }),
-    (error) => error.code === "WORK_ITEM_ALREADY_EXISTS"
+    (error) => hasErrorCode(error, "WORK_ITEM_ALREADY_EXISTS")
   );
-  assert.equal(running.workItems["TS-1"].status, "running");
+  assert.equal(getWorkItem(running, "TS-1").status, "running");
 });
 
 test("a stale artifact revision cannot replace the current revision", () => {
@@ -314,7 +326,9 @@ test("a stale artifact revision cannot replace the current revision", () => {
   });
 
   assert.equal(
-    withStaleRevision.workItems["TS-1"].activeArtifact.revision,
+    getActiveArtifact(
+      getWorkItem(withStaleRevision, "TS-1")
+    ).revision,
     "new-sha"
   );
 });
@@ -357,10 +371,12 @@ test("starting a new attempt supersedes the previous running attempt", () => {
   });
 
   assert.deepEqual(
-    second.workItems["TS-1"].attempts.map((attempt) => attempt.status),
+    getWorkItem(second, "TS-1").attempts.map(
+      (attempt) => attempt.status
+    ),
     ["superseded", "running"]
   );
-  assert.equal(second.workItems["TS-1"].activeAttemptId, "run-2");
+  assert.equal(getWorkItem(second, "TS-1").activeAttemptId, "run-2");
 });
 
 test("a completed attempt moves to review but cannot bypass evidence acceptance", () => {
@@ -405,10 +421,12 @@ test("a completed attempt moves to review but cannot bypass evidence acceptance"
     }
   });
 
-  assert.equal(completed.workItems["TS-1"].status, "reviewing");
-  assert.equal(completed.workItems["TS-1"].attempts[0].status, "completed");
-  assert.equal(completed.workItems["TS-1"].attempts[0].threadId, "thread-1");
-  assert.equal(completed.workItems["TS-1"].attempts[0].turnId, "turn-1");
+  const completedWorkItem = getWorkItem(completed, "TS-1");
+  const completedAttempt = getAttempt(completedWorkItem, 0);
+  assert.equal(completedWorkItem.status, "reviewing");
+  assert.equal(completedAttempt.status, "completed");
+  assert.equal(completedAttempt.threadId, "thread-1");
+  assert.equal(completedAttempt.turnId, "turn-1");
   assert.throws(
     () =>
       applyEvent(completed, {
@@ -422,7 +440,8 @@ test("a completed attempt moves to review but cannot bypass evidence acceptance"
           reason: "Agent said it completed"
         }
       }),
-    (error) => error.code === "ACCEPTANCE_EVIDENCE_INCOMPLETE"
+    (error) =>
+      hasErrorCode(error, "ACCEPTANCE_EVIDENCE_INCOMPLETE")
   );
 });
 
@@ -479,7 +498,7 @@ test("an attempt terminal outcome cannot be rewritten by a later event", () => {
           summary: "Conflicting terminal fact"
         }
       }),
-    (error) => error.code === "ATTEMPT_TERMINAL_CONFLICT"
+    (error) => hasErrorCode(error, "ATTEMPT_TERMINAL_CONFLICT")
   );
 });
 
@@ -524,9 +543,13 @@ test("failed and interrupted attempts block the work item", () => {
       }
     });
 
-    assert.equal(finished.workItems[`TS-${outcome}`].status, "blocked");
+    const finishedWorkItem = getWorkItem(
+      finished,
+      `TS-${outcome}`
+    );
+    assert.equal(finishedWorkItem.status, "blocked");
     assert.equal(
-      finished.workItems[`TS-${outcome}`].attempts[0].status,
+      getAttempt(finishedWorkItem, 0).status,
       outcome
     );
   }
@@ -574,9 +597,10 @@ test("an artifact does not complete an attempt before its failed terminal event"
     }
   ].reduce(applyEvent, createWorkflow());
 
-  assert.equal(withArtifact.workItems["TS-1"].status, "running");
+  const withArtifactWorkItem = getWorkItem(withArtifact, "TS-1");
+  assert.equal(withArtifactWorkItem.status, "running");
   assert.equal(
-    withArtifact.workItems["TS-1"].attempts[0].status,
+    getAttempt(withArtifactWorkItem, 0).status,
     "running"
   );
 
@@ -592,10 +616,12 @@ test("an artifact does not complete an attempt before its failed terminal event"
     }
   });
 
-  assert.equal(failed.workItems["TS-1"].status, "blocked");
-  assert.equal(failed.workItems["TS-1"].attempts[0].status, "failed");
+  const failedWorkItem = getWorkItem(failed, "TS-1");
+  const failedAttempt = getAttempt(failedWorkItem, 0);
+  assert.equal(failedWorkItem.status, "blocked");
+  assert.equal(failedAttempt.status, "failed");
   assert.equal(
-    failed.workItems["TS-1"].attempts[0].runtimeOutcome,
+    failedAttempt.runtimeOutcome,
     "failed"
   );
 });
@@ -668,9 +694,15 @@ test("a late artifact cannot reopen a failed attempt for acceptance", () => {
     }
   });
 
-  assert.equal(withLateArtifact.workItems["TS-1"].status, "blocked");
-  assert.equal(withLateArtifact.workItems["TS-1"].artifacts.length, 1);
-  assert.equal(withEvidence.workItems["TS-1"].status, "blocked");
+  assert.equal(
+    getWorkItem(withLateArtifact, "TS-1").status,
+    "blocked"
+  );
+  assert.equal(
+    getWorkItem(withLateArtifact, "TS-1").artifacts.length,
+    1
+  );
+  assert.equal(getWorkItem(withEvidence, "TS-1").status, "blocked");
 
   assert.throws(
     () =>
@@ -685,7 +717,8 @@ test("a late artifact cannot reopen a failed attempt for acceptance", () => {
           reason: "The late evidence passed"
         }
       }),
-    (error) => error.code === "ACCEPTANCE_ATTEMPT_INCOMPLETE"
+    (error) =>
+      hasErrorCode(error, "ACCEPTANCE_ATTEMPT_INCOMPLETE")
   );
 });
 
@@ -705,10 +738,13 @@ test("a late artifact preserves a newer rejected decision", () => {
     }
   });
 
-  assert.equal(withLateArtifact.workItems["TS-1"].status, "blocked");
+  assert.equal(
+    getWorkItem(withLateArtifact, "TS-1").status,
+    "blocked"
+  );
   assert.deepEqual(
-    withLateArtifact.workItems["TS-1"].acceptanceDecision,
-    rejected.workItems["TS-1"].acceptanceDecision
+    getWorkItem(withLateArtifact, "TS-1").acceptanceDecision,
+    getWorkItem(rejected, "TS-1").acceptanceDecision
   );
 });
 
@@ -732,10 +768,13 @@ test("late evidence preserves a newer rejected decision", () => {
     }
   });
 
-  assert.equal(withLateEvidence.workItems["TS-1"].status, "blocked");
+  assert.equal(
+    getWorkItem(withLateEvidence, "TS-1").status,
+    "blocked"
+  );
   assert.deepEqual(
-    withLateEvidence.workItems["TS-1"].acceptanceDecision,
-    rejected.workItems["TS-1"].acceptanceDecision
+    getWorkItem(withLateEvidence, "TS-1").acceptanceDecision,
+    getWorkItem(rejected, "TS-1").acceptanceDecision
   );
 });
 
@@ -769,7 +808,8 @@ test("acceptance decisions require a valid decision and accountable actor", () =
           reason: "Typo"
         }
       }),
-    (error) => error.code === "ACCEPTANCE_DECISION_INVALID"
+    (error) =>
+      hasErrorCode(error, "ACCEPTANCE_DECISION_INVALID")
   );
 });
 
@@ -855,7 +895,7 @@ test("late stale evidence cannot override a newer failed result", () => {
     }
   ].reduce(applyEvent, createWorkflow());
 
-  assert.equal(reviewing.workItems["TS-1"].status, "blocked");
+  assert.equal(getWorkItem(reviewing, "TS-1").status, "blocked");
   assert.throws(
     () =>
       applyEvent(reviewing, {
@@ -869,7 +909,8 @@ test("late stale evidence cannot override a newer failed result", () => {
           reason: "Should not pass"
         }
       }),
-    (error) => error.code === "ACCEPTANCE_EVIDENCE_INCOMPLETE"
+    (error) =>
+      hasErrorCode(error, "ACCEPTANCE_EVIDENCE_INCOMPLETE")
   );
 });
 
@@ -916,7 +957,7 @@ test("artifact and evidence events require explicit revision fields", () => {
           url: "https://github.com/example/repo/pull/1"
         }
       }),
-    (error) => error.code === "EVENT_PAYLOAD_INVALID"
+    (error) => hasErrorCode(error, "EVENT_PAYLOAD_INVALID")
   );
 });
 
@@ -994,7 +1035,8 @@ test("conflicting evidence at the same provider timestamp is rejected", () => {
           url: "https://github.com/example/repo/actions/runs/2"
         }
       }),
-    (error) => error.code === "EVIDENCE_ORDER_AMBIGUOUS"
+    (error) =>
+      hasErrorCode(error, "EVIDENCE_ORDER_AMBIGUOUS")
   );
 });
 
@@ -1018,7 +1060,8 @@ test("equivalent timestamps with different offsets still reject conflicting evid
           url: "https://github.com/example/repo/actions/runs/2"
         }
       }),
-    (error) => error.code === "EVIDENCE_ORDER_AMBIGUOUS"
+    (error) =>
+      hasErrorCode(error, "EVIDENCE_ORDER_AMBIGUOUS")
   );
 });
 
@@ -1053,14 +1096,22 @@ test("late historical artifact and evidence do not revoke an accepted decision",
     }
   });
 
-  assert.equal(withHistoricalArtifact.workItems["TS-1"].status, "accepted");
+  const historicalArtifactWorkItem = getWorkItem(
+    withHistoricalArtifact,
+    "TS-1"
+  );
+  const historicalEvidenceWorkItem = getWorkItem(
+    withHistoricalEvidence,
+    "TS-1"
+  );
+  assert.equal(historicalArtifactWorkItem.status, "accepted");
   assert.equal(
-    withHistoricalArtifact.workItems["TS-1"].acceptanceDecision.decision,
+    getAcceptanceDecision(historicalArtifactWorkItem).decision,
     "accepted"
   );
-  assert.equal(withHistoricalEvidence.workItems["TS-1"].status, "accepted");
+  assert.equal(historicalEvidenceWorkItem.status, "accepted");
   assert.equal(
-    withHistoricalEvidence.workItems["TS-1"].acceptanceDecision.decision,
+    getAcceptanceDecision(historicalEvidenceWorkItem).decision,
     "accepted"
   );
 });
@@ -1083,12 +1134,16 @@ test("late evidence for the current revision does not revoke a newer accepted re
     }
   });
 
-  assert.equal(withLateFailure.workItems["TS-1"].status, "accepted");
+  const withLateFailureWorkItem = getWorkItem(
+    withLateFailure,
+    "TS-1"
+  );
+  assert.equal(withLateFailureWorkItem.status, "accepted");
   assert.equal(
-    withLateFailure.workItems["TS-1"].acceptanceDecision.decision,
+    getAcceptanceDecision(withLateFailureWorkItem).decision,
     "accepted"
   );
-  assert.equal(withLateFailure.workItems["TS-1"].evidence.length, 2);
+  assert.equal(withLateFailureWorkItem.evidence.length, 2);
 });
 
 test("a metadata refresh for the accepted artifact revision preserves acceptance", () => {
@@ -1107,16 +1162,17 @@ test("a metadata refresh for the accepted artifact revision preserves acceptance
     }
   });
 
-  assert.equal(refreshed.workItems["TS-1"].status, "accepted");
+  const refreshedWorkItem = getWorkItem(refreshed, "TS-1");
+  assert.equal(refreshedWorkItem.status, "accepted");
   assert.equal(
-    refreshed.workItems["TS-1"].acceptanceDecision.decision,
+    getAcceptanceDecision(refreshedWorkItem).decision,
     "accepted"
   );
   assert.equal(
-    refreshed.workItems["TS-1"].activeArtifact.linkedAt,
+    getActiveArtifact(refreshedWorkItem).linkedAt,
     "2026-07-26T08:03:00.000Z"
   );
-  assert.equal(refreshed.workItems["TS-1"].artifacts.length, 1);
+  assert.equal(refreshedWorkItem.artifacts.length, 1);
 });
 
 test("a late older attempt cannot replace the active attempt", () => {
@@ -1155,20 +1211,20 @@ test("a late older attempt cannot replace the active attempt", () => {
       agentId: "codex-product-engineer"
     }
   });
-  const attempts = Object.fromEntries(
-    withOlder.workItems["TS-1"].attempts.map((attempt) => [
-      attempt.id,
-      attempt
-    ])
-  );
+  const withOlderWorkItem = getWorkItem(withOlder, "TS-1");
+  const newerAttempt = getAttemptById(withOlderWorkItem, "run-2");
+  const olderAttempt = getAttemptById(withOlderWorkItem, "run-1");
 
-  assert.equal(withOlder.workItems["TS-1"].activeAttemptId, "run-2");
-  assert.equal(attempts["run-2"].status, "running");
-  assert.equal(attempts["run-1"].status, "superseded");
-  assert.equal(attempts["run-1"].completedAt, "2026-07-26T08:02:00.000Z");
+  assert.equal(
+    withOlderWorkItem.activeAttemptId,
+    "run-2"
+  );
+  assert.equal(newerAttempt.status, "running");
+  assert.equal(olderAttempt.status, "superseded");
+  assert.equal(olderAttempt.completedAt, "2026-07-26T08:02:00.000Z");
 });
 
-function createAcceptedWorkflow() {
+function createAcceptedWorkflow(): Workflow {
   return [
     {
       eventId: "linear:TS-1:created",
@@ -1249,8 +1305,10 @@ function createAcceptedWorkflow() {
 
 function createFailedRejectedWorkflow({
   includeArtifact = false
-} = {}) {
-  const events = [
+}: {
+  includeArtifact?: boolean;
+} = {}): Workflow {
+  const events: unknown[] = [
     {
       eventId: "local:TS-1:created",
       workItemId: "TS-1",
@@ -1319,5 +1377,62 @@ function createFailedRejectedWorkflow({
     }
   );
 
-  return events.reduce(applyEvent, createWorkflow());
+  return events.reduce<Workflow>(
+    (workflow, event) => applyEvent(workflow, event),
+    createWorkflow()
+  );
+}
+
+function getWorkItem(
+  workflow: Workflow,
+  workItemId: string
+): WorkItem {
+  const workItem = workflow.workItems[workItemId];
+  assert.ok(workItem);
+  return workItem;
+}
+
+function getAttempt(
+  workItem: WorkItem,
+  index: number
+): Attempt {
+  const attempt = workItem.attempts[index];
+  assert.ok(attempt);
+  return attempt;
+}
+
+function getAttemptById(
+  workItem: WorkItem,
+  attemptId: string
+): Attempt {
+  const attempt = workItem.attempts.find(
+    (item) => item.id === attemptId
+  );
+  assert.ok(attempt);
+  return attempt;
+}
+
+function getAcceptanceDecision(
+  workItem: WorkItem
+): AcceptanceDecision {
+  assert.ok(workItem.acceptanceDecision);
+  return workItem.acceptanceDecision;
+}
+
+function getActiveArtifact(
+  workItem: WorkItem
+): ActiveArtifact {
+  assert.ok(workItem.activeArtifact);
+  return workItem.activeArtifact;
+}
+
+function hasErrorCode(
+  error: unknown,
+  code: string
+): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === code
+  );
 }

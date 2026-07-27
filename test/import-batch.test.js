@@ -8,7 +8,7 @@ import {
 import {
   applyEvent,
   createWorkflow
-} from "../src/domain/workflow.js";
+} from "../src/domain/workflow.ts";
 import {
   createImportBatchRecord,
   validateImportBatchRecord,

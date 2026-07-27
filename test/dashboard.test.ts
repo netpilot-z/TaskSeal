@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { projectDashboard } from "../src/dashboard/projection.js";
-import { applyEvent, createWorkflow } from "../src/domain/workflow.js";
+import { projectDashboard } from "../src/dashboard/projection.ts";
+import { applyEvent, createWorkflow } from "../src/domain/workflow.ts";
 
 test("dashboard projection does not present previous attempt evidence as current", () => {
   const workflow = [
@@ -74,6 +74,8 @@ test("dashboard projection does not present previous attempt evidence as current
   const dashboard = projectDashboard(workflow);
   const workItem = dashboard.workItems[0];
 
+  assert.ok(workItem);
+  assert.ok(workItem.activeAttempt);
   assert.equal(dashboard.summary.activeAgents, 1);
   assert.equal(workItem.activeAttempt.id, "run-2");
   assert.equal(workItem.activeArtifact, null);
