@@ -41,6 +41,26 @@ const READ_ISSUE_QUERY = `query TaskSealReadIssue($id: String!) {
   }
 }`;
 
+const READ_ISSUE_IDENTITY_QUERY =
+  `query TaskSealReadIssueIdentity($id: String!) {
+  organization {
+    id
+  }
+  issue(id: $id) {
+    id
+    identifier
+    title
+    description
+    url
+    createdAt
+    updatedAt
+    team {
+      id
+      key
+    }
+  }
+}`;
+
 export interface LinearFetchRequestOptions {
   method: "POST";
   headers: {
@@ -99,6 +119,19 @@ export interface ReadLinearIssueOptions {
   accessToken?: string | undefined;
   fetchImpl?: LinearFetchLike;
   timeoutMs?: number;
+}
+
+export interface ReadLinearIssueIdentityOptions {
+  issueId: string;
+  apiKey?: string | undefined;
+  accessToken?: string | undefined;
+  fetchImpl?: LinearFetchLike;
+  timeoutMs?: number;
+}
+
+export interface LinearIssueIdentityReadResult {
+  organizationId: string;
+  issue: LinearIssue;
 }
 
 interface GraphqlRequest {
@@ -330,6 +363,64 @@ export async function readLinearIssue({
     organization,
     team: resolvedTeam,
     issue
+  };
+}
+
+export async function readLinearIssueIdentity({
+  issueId,
+  apiKey,
+  accessToken,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = 15_000
+}: ReadLinearIssueIdentityOptions):
+  Promise<LinearIssueIdentityReadResult> {
+  if (!isUuid(issueId)) {
+    throw invalidIssueReference();
+  }
+
+  requireFetch(fetchImpl);
+  validateTimeout(timeoutMs);
+  const authorization = resolveAuthorization({
+    apiKey,
+    accessToken
+  });
+  const data = await postGraphql({
+    query: READ_ISSUE_IDENTITY_QUERY,
+    variables: {
+      id: issueId.toLowerCase()
+    },
+    authorization,
+    fetchImpl,
+    timeoutMs
+  });
+  const organization = data.organization;
+  const rawIssue = data.issue;
+
+  if (
+    !isRecord(organization) ||
+    !isNonEmptyString(organization.id)
+  ) {
+    throw invalidResponse(
+      "Linear returned an invalid organization identity."
+    );
+  }
+
+  if (rawIssue === null || rawIssue === undefined) {
+    throw linearError(
+      "LINEAR_ISSUE_NOT_FOUND",
+      "The requested Linear issue was not found or is not accessible."
+    );
+  }
+
+  if (!isLinearIssue(rawIssue)) {
+    throw invalidResponse(
+      "Linear returned an invalid issue."
+    );
+  }
+
+  return {
+    organizationId: organization.id,
+    issue: rawIssue
   };
 }
 
@@ -753,6 +844,15 @@ function invalidResponse(
 
 function isString(value: unknown): value is string {
   return typeof value === "string";
+}
+
+function isUuid(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      value
+    )
+  );
 }
 
 function isNonEmptyString(

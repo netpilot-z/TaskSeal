@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  readGitHubCheckRun,
   readGitHubDelivery,
-  readGitHubIssue
+  readGitHubIssue,
+  readGitHubPullRequest
 } from "../src/connectors/github-read-client.ts";
 import type {
   FetchLike,
@@ -116,6 +118,107 @@ test("GitHub issue inspection fails closed for a PR or missing issue", async (t)
       hasCode("GITHUB_NOT_FOUND")
     );
   });
+});
+
+test("GitHub provenance reads one PR or Check Run from a repository-scoped endpoint", async () => {
+  const calls: RequestCall[] = [];
+  const responses = [
+    jsonResponse(PULL_REQUEST),
+    jsonResponse(CHECK)
+  ];
+  const fetchImpl: FetchLike = async (
+    url,
+    options
+  ) => {
+    calls.push({ url, options });
+    return responses.shift();
+  };
+
+  const pullRequest = await readGitHubPullRequest({
+    repository: "netpilot-z/TaskSeal",
+    pullRequestNumber: 1,
+    fetchImpl
+  });
+  const check = await readGitHubCheckRun({
+    repository: "netpilot-z/TaskSeal",
+    checkRunId: "2001",
+    fetchImpl
+  });
+
+  assert.deepEqual(pullRequest, PULL_REQUEST);
+  assert.deepEqual(check, CHECK);
+  assert.equal(
+    calls[0]?.url,
+    "https://api.github.com/repos/netpilot-z/TaskSeal/pulls/1"
+  );
+  assert.equal(
+    calls[1]?.url,
+    "https://api.github.com/repos/netpilot-z/TaskSeal/check-runs/2001"
+  );
+  assert.equal(
+    calls.every(
+      (call) =>
+        call.options.method === "GET" &&
+        call.options.redirect === "error"
+    ),
+    true
+  );
+});
+
+test("GitHub Check Run reads reject unknown enums and impossible lifecycle combinations", async (t) => {
+  const cases = [
+    {
+      name: "unknown status",
+      body: {
+        ...CHECK,
+        status: "not-a-github-status"
+      }
+    },
+    {
+      name: "unknown conclusion",
+      body: {
+        ...CHECK,
+        conclusion:
+          "not-a-github-conclusion"
+      }
+    },
+    {
+      name: "completed without conclusion",
+      body: {
+        ...CHECK,
+        conclusion: null
+      }
+    },
+    {
+      name: "incomplete with conclusion",
+      body: {
+        ...CHECK,
+        status: "in_progress"
+      }
+    },
+    {
+      name: "incomplete with completed timestamp",
+      body: {
+        ...CHECK,
+        status: "queued",
+        conclusion: null
+      }
+    }
+  ] as const;
+
+  for (const scenario of cases) {
+    await t.test(scenario.name, async () => {
+      await assert.rejects(
+        readGitHubCheckRun({
+          repository: "netpilot-z/TaskSeal",
+          checkRunId: "2001",
+          fetchImpl: async () =>
+            jsonResponse(scenario.body)
+        }),
+        hasCode("GITHUB_RESPONSE_INVALID")
+      );
+    });
+  }
 });
 
 test("GitHub rejects primitive, null, and array JSON bodies", async (t) => {

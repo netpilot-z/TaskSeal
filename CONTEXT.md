@@ -10,12 +10,12 @@ TaskSeal 让人类和 AI Agent 的“已完成”变成有证据、可验收、�
 
 - fixture：`Linear WorkItem → Codex Attempt → GitHub Artifact/Evidence → AcceptanceDecision`
 - persistent：`Local WorkItem → Codex App Server Attempt → Control Room`
-- provider import：`GitHub/Linear/Gitee read-only fact → trusted ingress registry → per-scope ImportPolicy v2 → deterministic ImportPlan → atomic local batch → ImportReceipt`
+- provider import：`GitHub/Linear/Gitee read-only fact → trusted ingress registry → per-scope ImportPolicy v2 → deterministic ImportPlan → GitHub/Linear apply-time provenance re-read → atomic local batch → ImportReceipt`
 - provider extension：已以 Gitee 提取内置 Adapter Contract v1，并验证 Provider-neutral rich link 与受控本地 import；下一步用飞书多维表格做异构压力测试
 - provider observation：`inspection/preview/import → redacted latest-state model → GET /api/providers`，独立于 canonical journal
 - controlled external write（fake 验证中）：`OperationPlan → human approval → versioned Operation Journal → fake submit → client UUID reconciliation → safe Control Room projection`
 
-本阶段不构建通用 Agent 市场、多租户权限、计费、生产数据库或真实外部写入。Snapshot apply 当前只提供默认关闭的 application API；没有可信 ImportPolicy provider 时不能提交，也尚未开放 CLI/HTTP apply 入口。当前 registry 证明 Provider/scope 授权和离线可验证的 locator 结构，不把公开 plan digest 当作 GitHub/Linear 远端 ID↔URL provenance；该能力由 Issue `#48` 另行设计。Linear workspace `netpilot-z`、team `netpilot` 与 project `TaskSeal` 是已只读验证的真实坐标；仓库 tickets 默认不自动同步。
+本阶段不构建通用 Agent 市场、多租户权限、计费、生产数据库或真实外部写入。Snapshot apply 当前只提供默认关闭的 application API；没有可信 ImportPolicy provider 时不能提交，也尚未开放 CLI/HTTP apply 入口。Registry 证明 Provider/scope 授权和离线可验证的 locator 结构；GitHub/Linear 新 apply 还必须通过显式注入的只读 verifier，以短生命周期 `ProviderFactProvenanceClaim v1` 从精确 plan event 对账远端 stable ID、locator、scope、revision、source/event time、content binding 与 digest。公开 plan digest 不被当作来源证明；未注入 verifier、远端不可用或 Plan v1 remote no-event 时失败关闭。单次最多 8 个 claim、4 路并发、单请求最多 15 秒并受 30 秒总 deadline 约束；已提交 receipt 与历史 batch replay 保持离线。Linear workspace `netpilot-z`、team `netpilot` 与 project `TaskSeal` 是已只读验证的真实坐标；仓库 tickets 默认不自动同步。
 
 当前真实环境中，Linear Issue `NP-1` 已完成成功 snapshot；GitHub Issue `#1`、Draft PR `#2` 与 PR head 上的 `tests` Check 已完成完整只读 snapshot 和真实内存重放。Gitee 公共 `oschina/git-osc#I4` 已完成匿名 health/read smoke；自动化测试已证明它只有在 trusted registry 与精确 per-scope policy 同时允许时才能执行本地 preview/apply，direct rich append 仍固定拒绝。该 apply 只写本地 canonical journal，不写回 Gitee。Issue、PR 与 CI 的创建均来自操作者明确授权；TaskSeal 不会从只读检查隐式创建、更新、合并或关闭外部对象。
 
@@ -42,6 +42,7 @@ Provider status v2 已由 application façade 并行读取 Provider Observation 
 | `ProviderObjectKey` | Connector 根据 provider、对象类型与 provider 定义的 scope/object reference 生成稳定对象身份；不使用标题或 URL 作为身份。Gitee 使用 repository-scoped、区分大小写的 Issue reference。 |
 | `SourceRevision` | Provider 对象的一次可排序版本，由稳定 revision ID、来源更新时间和规范化内容摘要组成。 |
 | `ProviderSnapshot` | 只读 Connector 输出的、经过裁剪且带来源版本的外部事实集合；snapshot 本身不获得写权限。 |
+| `ProviderFactProvenanceClaim` | 新 snapshot apply 在内存中从本次 action 绑定的精确 plan event 生成的版本化远端事实主张；由可信只读 verifier 对账 stable ID、locator、scope、revision、source/event time 与 content，结果不进入历史 journal。 |
 | `ProviderAdapter` | 仓库内受信任的 Provider 边界，实现 manifest 声明的窄 health/read ports；不直接拥有领域 append、snapshot apply 或未声明的外部写能力。 |
 | `AdapterManifest` | 版本化声明 Provider ID、capabilities、配置、credential mode、scope 和 object type 的静态契约；当前不代表可动态安装的第三方代码。 |
 | `Capability` | 可独立授权的操作能力，例如 `provider.health`、`work-item.read`；读能力不会隐式获得 transition、apply、comment、close 或 acceptance write。 |
@@ -71,3 +72,4 @@ Provider status v2 已由 application façade 并行读取 Provider Observation 
 14. Provider Observation 的损坏、越界路径、写失败或未知提交结果不得改变 inspection、preview、import 或 Workflow 的业务结果；它只能让 Provider 查询面降级或要求重新打开。
 15. 外部写必须先持久化审批与 submitting version，再消费一次 transport call；无法证明未派发的结果一律进入 OutcomeUnknown，重启或重试不得绕过 client UUID 对账。Operation Journal replay 必须同时校验单条 snapshot 和相邻状态转换，不能只凭 version 连续接受审批人、plan 或既有审计字段漂移。
 16. Provider status 组合必须保持 Observation 与 Operation 的独立所有权和 source-local freshness；不得跨来源比较时间戳、把写状态覆盖到 Observation 五态、返回 partial success，或把 combined revision 描述成全局可排序版本。
+17. GitHub/Linear 新 snapshot apply 必须在 journal commit 前由显式注入的可信只读 verifier 覆盖从精确 plan event 生成的全部 provenance claim；缺失、部分结果、远端不可用、scope/ID/locator/revision/source time/event time/content 漂移、未经验证的嵌套 observation locator 和 remote no-event 均失败关闭。验真最多 8 claim、4 路并发、单请求 15 秒并受 30 秒总 deadline 约束。Committed receipt retry 与历史 batch replay 不得访问 Provider 或要求凭证。

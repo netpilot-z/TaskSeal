@@ -22,7 +22,8 @@ import type {
   SnapshotImportApplyResult
 } from "../src/application/taskseal-service.ts";
 import {
-  computeImportPlanDigest
+  computeImportPlanDigest,
+  deriveImportActionId
 } from "../src/application/import-plan.ts";
 import type {
   ImportPlan
@@ -49,6 +50,9 @@ import {
   createImportPolicy,
   createPreviewPlan
 } from "../test-support/snapshot-import-fixtures.ts";
+import {
+  createTrustedTestProvenanceVerifier
+} from "../test-support/provider-fact-provenance.ts";
 
 const APPLIED_AT = "2026-07-26T08:05:00.000Z";
 
@@ -104,7 +108,7 @@ test("service atomically applies a plan, returns one immutable receipt, and repl
   );
 });
 
-test("no-op imports still commit one recoverable receipt", async () => {
+test("new remote no-event plans fail closed without another batch", async () => {
   const journal = new MemoryJournal();
   const service = await openService(journal);
   const initialPlan = createPreviewPlan();
@@ -113,13 +117,46 @@ test("no-op imports still commit one recoverable receipt", async () => {
     workflow: service.getWorkflow()
   });
 
-  const committed = await applyPlan(service, noOpPlan);
-  const retried = await applyPlan(service, noOpPlan);
-
   assert.equal(noOpPlan.events.length, 0);
-  assert.equal(committed.receipt.eventIds.length, 0);
-  assert.equal(retried.resolution, "idempotent");
-  assert.equal(journal.commitCalls, 2);
+  await assert.rejects(
+    applyPlan(service, noOpPlan),
+    hasCode("IMPORT_PROVENANCE_UNAVAILABLE")
+  );
+  assert.equal(journal.commitCalls, 1);
+  assert.equal(
+    service.getImportReceipt({
+      planDigest: noOpPlan.planDigest
+    }),
+    null
+  );
+});
+
+test("forging a no-event remote action revision cannot create a receipt", async () => {
+  const journal = new MemoryJournal();
+  const service = await openService(journal);
+  await applyPlan(service, createPreviewPlan());
+  const plan = structuredClone(
+    createPreviewPlan({
+      workflow: service.getWorkflow()
+    })
+  );
+  const action = required(plan.actions[0]);
+
+  action.sourceRevisionId =
+    "2026-07-26T09:59:00.000Z";
+  action.actionId = deriveImportActionId({
+    workItemId: action.workItemId,
+    sourceObjectKey: action.sourceObjectKey,
+    sourceRevisionId: action.sourceRevisionId,
+    semanticTarget: action.semanticTarget
+  });
+  plan.planDigest = computeImportPlanDigest(plan);
+
+  await assert.rejects(
+    applyPlan(service, plan),
+    hasCode("IMPORT_PROVENANCE_UNAVAILABLE")
+  );
+  assert.equal(journal.commitCalls, 1);
 });
 
 test("provider updates and additional links apply as complete replayable batches", async (t) => {
@@ -761,6 +798,8 @@ async function openService(
     journal,
     importPolicyProvider: async () =>
       structuredClone(policy),
+    providerFactProvenanceVerifier:
+      createTrustedTestProvenanceVerifier(),
     clock: () => new Date(APPLIED_AT)
   });
 }

@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { readLinearIssue } from "../src/connectors/linear-read-client.ts";
+import {
+  readLinearIssue,
+  readLinearIssueIdentity
+} from "../src/connectors/linear-read-client.ts";
 import type {
   LinearFetchLike,
   LinearFetchRequestOptions
@@ -52,6 +55,13 @@ const ISSUE = {
     key: "NET"
   }
 };
+
+const ISSUE_UUID =
+  "11111111-1111-4111-8111-111111111111";
+const TEAM_UUID =
+  "22222222-2222-4222-8222-222222222222";
+const ORGANIZATION_UUID =
+  "33333333-3333-4333-8333-333333333333";
 
 test("Linear reads paginated scope then one issue with an API key", async () => {
   const calls: LinearRequestCall[] = [];
@@ -176,6 +186,58 @@ test("Linear distinguishes OAuth and API key authentication", async () => {
     true
   );
   assert.doesNotMatch(JSON.stringify(result), new RegExp(accessToken));
+});
+
+test("Linear provenance reads one Issue by UUID with its Organization and Team identity", async () => {
+  const calls: LinearRequestCall[] = [];
+  const issue = {
+    ...ISSUE,
+    id: ISSUE_UUID,
+    team: {
+      id: TEAM_UUID,
+      key: "NET"
+    }
+  };
+  const result = await readLinearIssueIdentity({
+    issueId: ISSUE_UUID,
+    apiKey: "linear-api-key",
+    fetchImpl: async (url, options) => {
+      calls.push({
+        url,
+        options,
+        body: parseGraphqlRequestBody(options.body)
+      });
+      return jsonResponse({
+        data: {
+          organization: {
+            id: ORGANIZATION_UUID
+          },
+          issue
+        }
+      });
+    }
+  });
+
+  assert.deepEqual(result, {
+    organizationId: ORGANIZATION_UUID,
+    issue
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(
+    requireRequestBody(requireCall(calls, 0))
+      .variables.id,
+    ISSUE_UUID
+  );
+  assert.match(
+    requireRequestBody(requireCall(calls, 0))
+      .query,
+    /organization\s*\{\s*id\s*\}/
+  );
+  assert.doesNotMatch(
+    requireRequestBody(requireCall(calls, 0))
+      .query,
+    /\bmutation\b/i
+  );
 });
 
 test("Linear fails closed for credentials, GraphQL errors, and scope drift", async (t) => {
