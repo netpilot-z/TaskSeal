@@ -32,7 +32,9 @@ prepare → approval → submit → created
 - transport 必须以可判别结果区分 `not_dispatched` 与 `outcome_unknown`；任何派发后不确定性都不能归为 terminal failed。
 - transport port 由 application 层拥有；首个 Linear adapter 只接受显式注入的 fake GraphQL exchange，没有 global fetch、凭证或真实 endpoint fallback。create 侧只有 exchange 明确返回未派发才能终止为 failed，其他请求/响应不确定性一律进入 unknown；query 侧只有合法 null 才是 absent。
 - Operation Journal 不复用 canonical workflow journal，也不写入 Provider Observation。
-- `#29` 只依赖窄 query port，组合安全 projection；不解析 operation 文件。
+- `#29` 只依赖窄 query port，组合安全 latest projection；不解析 operation 文件，不依赖 coordinator 或 transport。
+- `GET /api/providers` v2 同时返回 Observation 与 Operation 两个 component revision，以及只绑定这两个内容指纹的 combined revision；它不是跨文件原子快照，也不是可排序的全局版本。
+- 浏览器分别以 Observation 的 `provider + configuredTarget.key / startedAt` 和 Operation 的 `operationKey / version` 防回退；不得跨来源比较时间戳或让写状态覆盖 Observation 五态。
 - 首个 file adapter 固定使用 `.taskseal/provider-operations.json`、16 MiB / 512 records 硬边界和 whole-file atomic replace；达到上限时失败关闭，不淘汰历史。
 
 ## 选择理由
@@ -65,6 +67,7 @@ prepare → approval → submit → created
 - 新增一套独立状态模型与持久化文件，增加实现和审查成本。
 - 两个本地 store 的组合查询不是跨文件 point-in-time snapshot，只保证下次轮询收敛。
 - operation journal 损坏时 Provider v2 组合 API 应失败关闭并让前端保留 last-known projection。
+- v2 对 payload、client UUID、resolved UUID、plan digest、actor、Issue identity、原始响应、异常正文和本地路径做字段白名单裁剪；任一 source 失败时返回固定 503，不提供 partial 200。
 - 首版只保证单 Control Room 实例写入；多进程 writer 仍需后续锁或单写服务。
 - reconciliation absent 保持未解决且禁止 create；允许显式再次 query，但不自动提交或重试，避免在尚未验证 Provider 查询一致性时扩大重复写风险。
 - 固定 `wx` temporary slot 把 rename 前残留限制为一个且不做路径清理；合法 orphan 只有在目录、lstat/open、single-link 与权限复核后才能原位复用，异常 temp 需要人工处理。首版也不提供 hash chain，拥有本地写权限的操作者删除完整合法 suffix 无法仅靠 replay 检出。

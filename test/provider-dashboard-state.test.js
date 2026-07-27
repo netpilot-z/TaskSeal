@@ -82,11 +82,156 @@ test("Provider panel maps all five observation states without inventing approval
   assert.deepEqual(model.summary, {
     total: 5,
     ready: 1,
-    attention: 4
+    attention: 4,
+    operations: 0,
+    approvalRequired: 0,
+    uncertain: 0,
+    syncFailed: 0
   });
   assert.equal(
     model.cards[3]?.approvalLabel,
     "Operation journal not connected"
+  );
+});
+
+test("Provider panel v2 maps every controlled operation state without mixing observation status", () => {
+  const statuses = [
+    "approval_required",
+    "approved",
+    "rejected",
+    "submitting",
+    "created",
+    "outcome_unknown",
+    "reconciling",
+    "reconciliation_absent",
+    "reconciled",
+    "sync_failed"
+  ];
+  const model = createProviderPanelModel({
+    schemaVersion: 2,
+    revision: digest("f"),
+    observationRevision: digest("e"),
+    operationRevision: digest("d"),
+    providers: [
+      observation({
+        provider: "linear",
+        status: "snapshot_ready",
+        snapshotDigest: digest("b"),
+        mappingDigest: digest("c")
+      })
+    ],
+    operations: statuses.map(
+      (status, index) =>
+        controlledOperation({
+          status,
+          operationKey: digest(
+            index.toString(16)
+          ),
+          version: index + 1,
+          updatedAt:
+            `2026-07-27T10:00:${String(
+              index
+            ).padStart(2, "0")}.000Z`
+        })
+    )
+  });
+
+  assert.equal(model.cards[0]?.status, "snapshot_ready");
+  assert.equal(
+    model.cards[0]?.controlledOperations.length,
+    10
+  );
+  assert.equal(
+    model.cards[0]?.approvalLabel,
+    "Outcome unknown"
+  );
+  assert.deepEqual(
+    Object.fromEntries(
+      model.operations.map((operation) => [
+        operation.status,
+        [
+          operation.statusLabel,
+          operation.tone
+        ]
+      ])
+    ),
+    {
+      approval_required: [
+        "Approval required",
+        "warning"
+      ],
+      approved: ["Approved", "neutral"],
+      rejected: ["Rejected", "neutral"],
+      submitting: ["Submitting", "active"],
+      created: ["Created", "ready"],
+      outcome_unknown: [
+        "Outcome unknown",
+        "danger"
+      ],
+      reconciling: ["Reconciling", "active"],
+      reconciliation_absent: [
+        "Not found; decision required",
+        "warning"
+      ],
+      reconciled: [
+        "Reconciled",
+        "ready"
+      ],
+      sync_failed: ["Sync failed", "danger"]
+    }
+  );
+  assert.deepEqual(model.summary, {
+    total: 1,
+    ready: 1,
+    attention: 0,
+    operations: 10,
+    approvalRequired: 1,
+    uncertain: 2,
+    syncFailed: 1
+  });
+  assert.equal(
+    JSON.stringify(model).includes(
+      "SECRET_ACTOR"
+    ),
+    false
+  );
+});
+
+test("Provider panel treats operation-only v2 content as ready and accessible", () => {
+  const model = createProviderPanelModel({
+    schemaVersion: 2,
+    revision: digest("f"),
+    observationRevision: digest("e"),
+    operationRevision: digest("d"),
+    providers: [],
+    operations: [
+      controlledOperation({
+        status: "approval_required"
+      })
+    ]
+  });
+  const ready = reduceProviderPanelState(
+    createProviderPanelState(),
+    {
+      type: "success",
+      model
+    }
+  );
+
+  assert.equal(ready.phase, "ready");
+  assert.equal(model.cards.length, 0);
+  assert.equal(model.operations.length, 1);
+  assert.equal(
+    createProviderContentRenderKey(ready),
+    `provider-status:${digest("f")}`
+  );
+  assert.match(
+    createProviderAccessibleSummary(ready),
+    /1 controlled operations/
+  );
+  assert.match(
+    createProviderAccessibleSummary(ready),
+    /1 require approval/
   );
 });
 
@@ -179,6 +324,225 @@ test("Provider panel state covers loading, empty, first error, and stale last-kn
   assert.equal(stale.model, readyModel);
   assert.equal(recovered.phase, "ready");
   assert.equal(recovered.message, null);
+});
+
+test("Provider panel rejects source-local version regression and keeps the complete last-known v2 model", () => {
+  const currentModel = createProviderPanelModel({
+    schemaVersion: 2,
+    revision: digest("1"),
+    observationRevision: digest("2"),
+    operationRevision: digest("3"),
+    providers: [
+      observation({
+        provider: "linear",
+        startedAt:
+          "2026-07-27T10:00:00.000Z",
+        observedAt:
+          "2026-07-27T10:00:00.000Z"
+      })
+    ],
+    operations: [
+      controlledOperation({
+        version: 4,
+        status: "outcome_unknown"
+      })
+    ]
+  });
+  const ready = reduceProviderPanelState(
+    createProviderPanelState(),
+    {
+      type: "success",
+      model: currentModel
+    }
+  );
+  const regressions = [
+    {
+      schemaVersion: 2,
+      revision: digest("4"),
+      observationRevision: digest("2"),
+      operationRevision: digest("4"),
+      providers: [
+        observation({
+          provider: "linear",
+          startedAt:
+            "2026-07-27T10:00:00.000Z",
+          observedAt:
+            "2026-07-27T10:00:00.000Z"
+        })
+      ],
+      operations: [
+        controlledOperation({
+          version: 3,
+          status: "submitting"
+        })
+      ]
+    },
+    {
+      schemaVersion: 2,
+      revision: digest("5"),
+      observationRevision: digest("2"),
+      operationRevision: digest("5"),
+      providers: [
+        observation({
+          provider: "linear",
+          startedAt:
+            "2026-07-27T10:00:00.000Z",
+          observedAt:
+            "2026-07-27T10:00:00.000Z"
+        })
+      ],
+      operations: []
+    },
+    {
+      schemaVersion: 2,
+      revision: digest("7"),
+      observationRevision: digest("7"),
+      operationRevision: digest("3"),
+      providers: [
+        observation({
+          provider: "linear",
+          startedAt:
+            "2026-07-27T09:59:59.000Z",
+          observedAt:
+            "2026-07-27T09:59:59.000Z"
+        })
+      ],
+      operations: [
+        controlledOperation({
+          version: 4,
+          status: "outcome_unknown"
+        })
+      ]
+    },
+    {
+      schemaVersion: 2,
+      revision: digest("8"),
+      observationRevision: digest("8"),
+      operationRevision: digest("3"),
+      providers: [
+        observation({
+          provider: "linear",
+          status: "sample_missing",
+          diagnosticCode:
+            "LINEAR_ISSUE_NOT_FOUND",
+          startedAt:
+            "2026-07-27T10:00:00.000Z",
+          observedAt:
+            "2026-07-27T10:00:00.000Z"
+        })
+      ],
+      operations: [
+        controlledOperation({
+          version: 4,
+          status: "outcome_unknown"
+        })
+      ]
+    },
+    {
+      schemaVersion: 2,
+      revision: digest("9"),
+      observationRevision: digest("2"),
+      operationRevision: digest("9"),
+      providers: [
+        observation({
+          provider: "linear",
+          startedAt:
+            "2026-07-27T10:00:00.000Z",
+          observedAt:
+            "2026-07-27T10:00:00.000Z"
+        })
+      ],
+      operations: [
+        controlledOperation({
+          version: 4,
+          status: "reconciliation_absent"
+        })
+      ]
+    },
+    {
+      schemaVersion: 1,
+      revision: digest("6"),
+      providers: [
+        observation({
+          provider: "linear"
+        })
+      ]
+    }
+  ];
+
+  for (const projection of regressions) {
+    const incoming =
+      createProviderPanelModel(projection);
+    const stale = reduceProviderPanelState(
+      ready,
+      {
+        type: "success",
+        model: incoming
+      }
+    );
+    assert.equal(stale.phase, "stale");
+    assert.equal(stale.model, currentModel);
+    assert.match(stale.message, /older/i);
+  }
+});
+
+test("Provider panel accepts semantically identical observations with reordered JSON fields", () => {
+  const value = observation({
+    provider: "linear"
+  });
+  const reordered = {
+    status: value.status,
+    provider: value.provider,
+    schemaVersion: value.schemaVersion,
+    configuredTarget: value.configuredTarget,
+    observationId: value.observationId,
+    operation: value.operation,
+    observedScope: value.observedScope,
+    observedAt: value.observedAt,
+    startedAt: value.startedAt,
+    sourceRevisions: value.sourceRevisions,
+    mappingDigest: value.mappingDigest,
+    snapshotDigest: value.snapshotDigest,
+    missingEvidence: value.missingEvidence,
+    diagnosticCode: value.diagnosticCode,
+    planDigest: value.planDigest,
+    resolution: value.resolution
+  };
+  assert.deepEqual(reordered, value);
+
+  const current = createProviderPanelModel({
+    schemaVersion: 2,
+    revision: digest("1"),
+    observationRevision: digest("2"),
+    operationRevision: digest("3"),
+    providers: [value],
+    operations: []
+  });
+  const incoming = createProviderPanelModel({
+    schemaVersion: 2,
+    revision: digest("1"),
+    observationRevision: digest("2"),
+    operationRevision: digest("3"),
+    providers: [reordered],
+    operations: []
+  });
+  const ready = reduceProviderPanelState(
+    createProviderPanelState(),
+    {
+      type: "success",
+      model: current
+    }
+  );
+  const refreshed = reduceProviderPanelState(
+    ready,
+    {
+      type: "success",
+      model: incoming
+    }
+  );
+
+  assert.equal(refreshed.phase, "ready");
+  assert.equal(refreshed.model, incoming);
 });
 
 test("Provider content render key preserves interactive DOM across same-revision refreshes", () => {
@@ -316,6 +680,85 @@ test("Provider panel rejects malformed or unknown observation projections", () =
   );
 });
 
+test("Provider panel rejects malformed, duplicate, and semantically inconsistent operations", () => {
+  const valid = controlledOperation();
+  const invalidCases = [
+    {
+      ...valid,
+      status: "unknown"
+    },
+    {
+      ...valid,
+      version: 0
+    },
+    {
+      ...valid,
+      rawPayload: "SECRET"
+    },
+    {
+      ...valid,
+      status: "rejected",
+      approval: {
+        decision: "approved",
+        decidedAt:
+          "2026-07-27T10:00:01.000Z"
+      }
+    },
+    {
+      ...valid,
+      status: "sync_failed",
+      diagnosticCode: null
+    },
+    {
+      ...valid,
+      configuredTarget: {
+        kind: "team",
+        key: "linear:not-a-team-ref"
+      }
+    }
+  ];
+
+  for (const operation of invalidCases) {
+    assert.throws(
+      () =>
+        createProviderPanelModel({
+          schemaVersion: 2,
+          revision: digest("1"),
+          observationRevision: digest("2"),
+          operationRevision: digest("3"),
+          providers: [],
+          operations: [operation]
+        }),
+      /projection is invalid/
+    );
+  }
+
+  assert.throws(
+    () =>
+      createProviderPanelModel({
+        schemaVersion: 2,
+        revision: digest("1"),
+        observationRevision: digest("2"),
+        operationRevision: digest("3"),
+        providers: [],
+        operations: [valid, valid]
+      }),
+    /projection is invalid/
+  );
+  assert.throws(
+    () =>
+      createProviderPanelModel({
+        schemaVersion: 2,
+        revision: digest("8"),
+        observationRevision: digest("9"),
+        operationRevision: null,
+        providers: [],
+        operations: []
+      }),
+    /projection is invalid/
+  );
+});
+
 test("Provider panel fails closed for unsafe diagnostics and inconsistent observation semantics", () => {
   const unsafeCases = [
     {
@@ -421,6 +864,50 @@ function observation(overrides = {}) {
     missingEvidence: [],
     diagnosticCode: null,
     resolution: null,
+    ...overrides
+  };
+}
+
+function controlledOperation(overrides = {}) {
+  const status =
+    overrides.status ?? "approval_required";
+  const approval =
+    status === "approval_required"
+      ? null
+      : {
+          decision:
+            status === "rejected"
+              ? "rejected"
+              : "approved",
+          decidedAt:
+            "2026-07-27T10:00:01.000Z"
+        };
+  const diagnosticCode =
+    status === "sync_failed"
+      ? "LINEAR_WRITE_NOT_DISPATCHED"
+      : status === "outcome_unknown" ||
+          status === "reconciling"
+        ? "LINEAR_WRITE_OUTCOME_UNKNOWN"
+        : null;
+
+  return {
+    schemaVersion: 1,
+    provider: "linear",
+    operationKey: digest("a"),
+    configuredTarget: {
+      kind: "team",
+      key: "linear:team-ref:netpilot-z/netpilot"
+    },
+    version: 1,
+    status,
+    approval,
+    diagnosticCode,
+    createdAt:
+      "2026-07-27T10:00:00.000Z",
+    updatedAt:
+      status === "approval_required"
+        ? "2026-07-27T10:00:00.000Z"
+        : "2026-07-27T10:00:01.000Z",
     ...overrides
   };
 }

@@ -123,7 +123,7 @@
               <p class="section-kicker">PROVIDER CONTROL</p>
               <h2 id="provider-heading">Provider operations</h2>
               <p class="panel-description">
-                Latest safe observations for each configured target.
+                Latest safe observations and controlled writes.
               </p>
             </div>
             <div class="provider-heading-actions">
@@ -164,16 +164,30 @@
                 <span>Not a history log</span>
               </div>
               <ol id="provider-latest" class="provider-latest-list"></ol>
-              <div class="provider-approval-boundary">
-                <span aria-hidden="true">◇</span>
-                <div>
-                  <strong>Approval state is not connected</strong>
-                  <small>
-                    The operation journal in #6 and #29 will provide
-                    approval-required and reconciliation state.
-                  </small>
+              <section
+                class="provider-controlled-operations"
+                aria-labelledby="provider-operations-heading"
+              >
+                <div class="provider-latest-heading">
+                  <div>
+                    <span class="detail-label">OPERATION JOURNAL</span>
+                    <h3 id="provider-operations-heading">
+                      Latest controlled writes
+                    </h3>
+                  </div>
+                  <span>Read-only</span>
                 </div>
-              </div>
+                <ol
+                  id="provider-operations"
+                  class="provider-latest-list"
+                ></ol>
+                <p
+                  id="provider-operations-empty"
+                  class="provider-operation-empty"
+                >
+                  No controlled write operations yet.
+                </p>
+              </section>
             </aside>
           </div>
           <p

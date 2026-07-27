@@ -9,17 +9,22 @@ import type {
   TaskSealServer
 } from "../src/server.ts";
 import type {
-  ProviderObservationProjection
-} from "../src/application/provider-observation.ts";
+  ProviderSyncProjection
+} from "../src/application/provider-sync-projection.ts";
 
-test("persistent GET /api/providers exposes only the no-store observation projection", async (t) => {
-  const projection: ProviderObservationProjection = {
-    schemaVersion: 1 as const,
+test("persistent GET /api/providers exposes only the no-store Provider sync v2 projection", async (t) => {
+  const projection: ProviderSyncProjection = {
+    schemaVersion: 2 as const,
     revision: `sha256:${"a".repeat(64)}`,
+    observationRevision:
+      `sha256:${"b".repeat(64)}`,
+    operationRevision:
+      `sha256:${"c".repeat(64)}`,
     providers: [
       {
         schemaVersion: 1,
-        observationId: `sha256:${"b".repeat(64)}`,
+        observationId:
+          `sha256:${"d".repeat(64)}`,
         operation: "configuration",
         provider: "github",
         configuredTarget: {
@@ -38,12 +43,33 @@ test("persistent GET /api/providers exposes only the no-store observation projec
         diagnosticCode: null,
         resolution: null
       }
+    ],
+    operations: [
+      {
+        schemaVersion: 1,
+        provider: "linear",
+        operationKey:
+          `sha256:${"e".repeat(64)}`,
+        configuredTarget: {
+          kind: "team",
+          key:
+            "linear:team-ref:taskseal/netpilot"
+        },
+        version: 1,
+        status: "approval_required",
+        approval: null,
+        diagnosticCode: null,
+        createdAt:
+          "2026-07-27T10:00:00.000Z",
+        updatedAt:
+          "2026-07-27T10:00:00.000Z"
+      }
     ]
   };
   let calls = 0;
   const server = createTaskSealServer({
     service: createService(),
-    providerObservations: {
+    providerStatus: {
       async list() {
         calls += 1;
         return projection;
@@ -70,17 +96,18 @@ test("persistent GET /api/providers exposes only the no-store observation projec
   assert.equal(calls, 1);
 });
 
-test("Provider observation API returns a fixed safe 503 for corrupt storage", async (t) => {
+test("Provider sync API returns a fixed safe 503 without leaking either source", async (t) => {
   const secret = "path-and-token-secret";
   const server = createTaskSealServer({
     service: createService(),
-    providerObservations: {
+    providerStatus: {
       async list() {
         throw Object.assign(
           new Error(`Corrupt state at ${secret}`),
           {
-            name: "ProviderObservationError",
-            code: "PROVIDER_OBSERVATION_STORE_CORRUPT",
+            name: "ProviderSyncProjectionError",
+            code:
+              "PROVIDER_SYNC_PROJECTION_UNAVAILABLE",
             token: secret
           }
         );
@@ -95,11 +122,41 @@ test("Provider observation API returns a fixed safe 503 for corrupt storage", as
 
   assert.equal(response.status, 503);
   assert.deepEqual(JSON.parse(text), {
-    error: "PROVIDER_OBSERVATION_STORE_CORRUPT",
+    error:
+      "PROVIDER_SYNC_PROJECTION_UNAVAILABLE",
     message:
-      "TaskSeal provider observations are unavailable and must be reopened."
+      "TaskSeal provider status is unavailable and must be reopened."
   });
   assert.doesNotMatch(text, new RegExp(secret));
+});
+
+test("Provider sync API allowlists public projection error codes", async (t) => {
+  const server = createTaskSealServer({
+    service: createService(),
+    providerStatus: {
+      async list() {
+        throw Object.assign(
+          new Error("must remain private"),
+          {
+            name: "ProviderSyncProjectionError",
+            code: "SECRET_API_KEY"
+          }
+        );
+      }
+    },
+    runWorkItem: async () => {}
+  });
+  const baseUrl = await listen(server, t);
+
+  const response = await fetch(`${baseUrl}/api/providers`);
+
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {
+    error:
+      "PROVIDER_SYNC_PROJECTION_UNAVAILABLE",
+    message:
+      "TaskSeal provider status is unavailable and must be reopened."
+  });
 });
 
 function createService() {
