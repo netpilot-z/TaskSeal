@@ -13,6 +13,7 @@ TaskSeal 让人类和 AI Agent 的“已完成”变成有证据、可验收、�
 - provider import：`GitHub/Linear read-only fact → ProviderSnapshot v2 → deterministic ImportPlan → atomic local batch → ImportReceipt`
 - provider extension：已以 Gitee 的匿名 `provider.health`/`work-item.read` 提取内置 Adapter Contract v1；下一步用飞书多维表格做异构压力测试
 - provider observation：`inspection/preview/import → redacted latest-state model → GET /api/providers`，独立于 canonical journal
+- controlled external write（离线验证中）：`OperationPlan → human approval → versioned Operation Journal → fake submit → client UUID reconciliation`
 
 本阶段不构建通用 Agent 市场、多租户权限、计费、生产数据库或真实外部写入。Snapshot apply 当前只提供默认关闭的 application API；没有可信 ImportPolicy provider 时不能提交，也尚未开放 CLI/HTTP apply 入口。Linear workspace `netpilot-z`、team `netpilot` 与 project `TaskSeal` 是已只读验证的真实坐标；仓库 tickets 默认不自动同步。
 
@@ -37,6 +38,10 @@ Provider Observation v1 已使用独立 `.taskseal/provider-observations.json` �
 | `AdapterManifest` | 版本化声明 Provider ID、capabilities、配置、credential mode、scope 和 object type 的静态契约；当前不代表可动态安装的第三方代码。 |
 | `Capability` | 可独立授权的操作能力，例如 `provider.health`、`work-item.read`；读能力不会隐式获得 transition、apply、comment、close 或 acceptance write。 |
 | `ProviderObservation` | application-owned 的 Provider 最新状态摘要，绑定 configured target 与 observed scope；只用于查询和展示，不是 DomainEvent 或外部审计副本。 |
+| `OperationPlan` | 一次受控外部写的不可变意图，绑定固定 capability/action、持久 client UUID、resolved scope、payload digest 与 plan digest。 |
+| `OperationJournal` | 独立于 Workflow journal 和 Provider Observation 的 versioned 外部写审计；记录审批、提交、未知结果与对账状态。 |
+| `OutcomeUnknown` | Provider 请求可能已生效但本地没有可信结果的受控写状态；禁止再次提交，只能按持久 client UUID 对账。 |
+| `Reconciliation` | 使用显式 provider identity 查询未知写入结果；found、absent、ambiguous 与失败都必须明确建模，不按标题或时间猜测。 |
 | `ImportPlan` | ProviderSnapshot 与当前 Workflow 经纯函数预览后形成的确定性计划，列出追加、更新、跳过和冲突。 |
 | `ImportReceipt` | ImportPlan 原子应用后的本地审计回执，绑定 plan digest、操作者和实际提交的 canonical events。 |
 
@@ -56,3 +61,4 @@ Provider Observation v1 已使用独立 `.taskseal/provider-observations.json` �
 12. 一个 ImportPlan 要么连同审计回执完整提交，要么完全不可见；WorkItem/ExternalLink 元数据更新不得绕过专用 canonical events 修改或清空 Attempt、Artifact、Evidence 或 AcceptanceDecision。
 13. 在所有 ExternalLink journal ingress 都具备可信 registry gate 前，领域层继续显式拒绝未知 Provider 的 rich/managed link；既有 legacy reference 保持非托管且不可 baseline。Provider-agnostic 重构必须与 per-provider/per-scope apply 授权一起完成，不能先放宽领域再补门禁。
 14. Provider Observation 的损坏、越界路径、写失败或未知提交结果不得改变 inspection、preview、import 或 Workflow 的业务结果；它只能让 Provider 查询面降级或要求重新打开。
+15. 外部写必须先持久化审批与 submitting version，再消费一次 transport call；无法证明未派发的结果一律进入 OutcomeUnknown，重启或重试不得绕过 client UUID 对账。Operation Journal replay 必须同时校验单条 snapshot 和相邻状态转换，不能只凭 version 连续接受审批人、plan 或既有审计字段漂移。
