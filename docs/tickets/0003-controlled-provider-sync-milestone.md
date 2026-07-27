@@ -69,13 +69,42 @@
 - 验证：投影测试、HTTP 集成测试、桌面与移动浏览器走查、控制台检查。
 - 风险与回退：UI 只能投影 application 状态，不能直接调用 provider 或绕过审批服务。
 
-## T11 — 提取第二个 Provider 后的插件契约
+## T11.1 — 用契约探针选择第二个 Provider
 
-- 状态：待验证。
-- 目的：在 GitHub/Linear 真实闭环稳定后，为 Gitee、飞书多维表格或其他 Agent Runtime 提供可扩展接入边界。
-- 范围：能力声明、read/write 权限分离、配置 schema、credential reference、health check、snapshot/dry-run/apply 契约和版本兼容。
-- 不包含：先验设计完整插件市场、远程代码执行、第三方不受信任插件沙箱和计费。
-- 依赖：T09 或至少两个真实 provider 的重复模式证据。
-- 验收标准：第二个 provider 不修改领域不变量即可接入；只读插件不能调用写 capability；适配器 contract 有独立测试包。
-- 验证：以 Gitee 或飞书中的一个最小只读适配器作为反证实验。
-- 风险与回退：如果第二个 provider 没有形成稳定重复结构，继续保留窄适配器，不提前抽象通用 SDK。
+- 状态：已完成；GitHub Issue `#9`，ADR 0003 选择 Gitee。
+- 目的：用最小官方契约和公开只读探针对 Gitee 与飞书做可证伪比较。
+- 范围：认证、scope、分页、错误、WorkItem 语义、公开样本和停止条件。
+- 不包含：生产 adapter、凭证、外部写入、通用插件市场或远程代码执行。
+- 依赖：ProviderSnapshot v2 与原子 import 边界。
+- 验收标准：选定 Provider，明确 read/health contract、样本、权限和停止条件。
+- 验证：Gitee 官方 schema `5.4.92`、匿名 repository/Issue HTTP 200 探针、飞书官方 token/record/error 契约和 ADR 审查。
+
+## T11.2 — 接入 Gitee 并提取内置插件契约
+
+- 状态：待执行；GitHub Issue `#10`。
+- 目的：实现 Gitee `provider.health`/`work-item.read`，并从第三个现有实现中提取最小 `AdapterManifest`/ports。
+- 范围：Gitee config/read/normalizer/inspection、静态 `AdapterManifest`、capability 与 contract tests。
+- 不包含：私有仓库 token、PR/CI、Webhook、外部写入、动态插件代码或市场。
+- 依赖：T11.1。
+- 验收标准：Gitee 不改变领域/import allowlist即可产生可展示的 ProviderSnapshot v2；snapshot candidate 使用 rich link 而非 legacy link；只读 manifest 没有写 port；Gitee preview/apply/自带 candidate direct append 失败关闭；GitHub/Linear 与 legacy replay 兼容。
+- 验证：TDD、fake contract、公开 Issue `I4` smoke、全量回归、架构与安全审查。
+
+## T11.3 — 用飞书多维表格压力测试插件边界
+
+- 状态：等待 T11.2 和操作者提供专用只读应用/资源；GitHub Issue `#25`。
+- 目的：用 token 生命周期、app/table/record scope、POST-read、业务 error code 和动态字段反证 `AdapterManifest v1`。
+- 范围：固定资源、显式字段 mapping、`provider.health`/`work-item.read` 和裁剪 snapshot。
+- 不包含：创建/更新记录、动态 schema 引擎、远程插件代码或生产租户。
+- 依赖：T11.2；真实 probe 需要新的飞书只读凭证与资源授权。
+- 验收标准：不修改领域不变量即可读取固定 record；凭证和 raw 动态字段不进入 snapshot。
+- 验证：fake contract、单记录真实只读 smoke、业务错误与字段脱敏、兼容性审查。
+
+## T11.4 — 建立 Provider ingress gate 与 per-scope import 授权
+
+- 状态：等待 T11.2；GitHub Issue `#34`。
+- 目的：在开放 Gitee/第三方 import 前，关闭 direct append 绕过，并把全局 apply 开关收敛为 per-provider/per-scope 授权。
+- 范围：可信 Adapter registry gate、rich ExternalLink journal ingress、per-scope policy、撤销与 stale binding。
+- 不包含：Provider API read、外部写回、动态代码加载、插件市场或默认开启 apply。
+- 依赖：T11.2 的 `AdapterManifest v1`；Gitee read 不依赖本票。
+- 验收标准：新增 Provider 不能仅靠 canonical event 或 allowed scope 获得 rich link/apply；未知/撤销/stale 全部零写入。
+- 验证：direct append 绕过回归、policy 矩阵、并发/重启/legacy 全量回归和安全审查。

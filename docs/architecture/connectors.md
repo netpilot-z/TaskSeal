@@ -20,8 +20,9 @@ External provider
 - Linear Organization/Team/Issue 的真实 GraphQL 只读客户端。
 - 显式映射后的裁剪 snapshot 与内存重放。
 - 仓库 tickets 到 Linear Issue 草案的离线 dry-run。
+- ProviderSnapshot v2 的 preview、受策略约束的原子 apply 与可恢复 receipt。
 
-当前没有 snapshot import、Webhook 或任何外部写入。
+当前没有 Provider Webhook 或任何外部写入。
 
 ## 稳定事件契约
 
@@ -49,6 +50,7 @@ External provider
 
 | 能力 | 用途 | 示例提供方 |
 | --- | --- | --- |
+| `provider.health` | 验证配置、凭证与精确 scope 是否可读 | GitHub、Linear、Gitee、飞书 |
 | `work-item.read` | 读取任务和验收条件 | Linear、GitHub Issues、Gitee Issues、飞书多维表格 |
 | `work-item.transition` | 更新任务状态 | Linear、GitHub Issues、Gitee Issues |
 | `attempt.observe` | 读取 Agent 执行状态 | Codex、其他 Agent Runtime |
@@ -71,18 +73,28 @@ External provider
 
 Linear 真实环境已用 `NP-1` 完成成功 snapshot，并确认 journal 未变化。GitHub 已用 Issue `#1`、Draft PR `#2` 和 PR head 上成功完成的 `tests` Check 完成完整 snapshot；三事件与显式 Attempt 在内存重放后进入 `reviewing`，Evidence passed，journal 未变化。
 
-## 下一阶段：Snapshot import 与受控写回
+## 已实现阶段：Snapshot import
 
-Snapshot import 契约已由 `docs/specs/0004-snapshot-import.md` 与 `docs/adr/0001-snapshot-import-contract.md` 决定，但尚未实现：
+Snapshot import 契约已由 `docs/specs/0004-snapshot-import.md` 与 `docs/adr/0001-snapshot-import-contract.md` 决定并实现：
 
 - 用 `ProviderObjectKey` 和 `external_link.linked` 支持一个 WorkItem 关联 Linear 与 GitHub Issue。
 - 用显式 `managedFields` 决定 canonical 字段归属，禁止按 provider 类型或导入顺序覆盖。
 - 用 `SourceRevision`、`external_link.observed` 和严格限定的 `work_item.updated` 表达 provider 编辑。
 - 先生成零写入 ImportPlan，再把 canonical events 与 ImportReceipt 作为一个 journal batch 原子提交。
 
-在 atomic apply 通过故障注入和重启验证前，系统继续保持 inspection/preview-only。
+Atomic apply 已通过故障注入、并发、未知提交结果 fencing 和重启恢复验证；apply capability 默认关闭，只有可信 ImportPolicy 明确允许的 scope 才可写入本地 journal。
 
-只有成功样本与 import 语义验证后才考虑：
+## 下一阶段：第二 Provider 与受控写回
+
+ADR 0003 已选择 Gitee Issue 作为第二个只读 Provider：
+
+1. 先实现匿名公开仓库的 `provider.health` 与单 Issue `work-item.read`；
+2. 从 GitHub/Linear/Gitee 的真实重复模式提取内置 `AdapterManifest`/ports；
+3. 首个 Gitee 切片不修改领域/import allowlist；snapshot 自带 rich candidateEvent，所有 Gitee preview/apply 与该 candidate 的 direct append 都失败关闭；
+4. Gitee 不获得 transition/comment/close 或 snapshot apply 能力；GitHub Issue `#34` 跟踪统一 ingress registry gate、per-scope apply 与后续 Provider-agnostic domain；
+5. Gitee 契约稳定后，再用飞书多维表格的 token、动态字段和业务 error envelope 做异构压力测试。
+
+只有成功样本与插件边界验证后才考虑：
 
 - 将验收结果回写 Linear。
 - 自动评论或关闭 GitHub/Gitee Issue。
@@ -100,4 +112,4 @@ Snapshot import 契约已由 `docs/specs/0004-snapshot-import.md` 与 `docs/adr/
 
 ## 主要取舍
 
-当前没有建立通用 `BaseAdapter`、事件总线或插件市场。原因是首个实验只需要证明证据闭环；等第二个真实提供方（例如 Gitee 或飞书）接入后，再根据重复代码提取公共插件接口，证据会比预设抽象更可靠。
+当前没有建立通用 `BaseAdapter`、事件总线或插件市场。第二 Provider 只提取受信任的版本化 `AdapterManifest` 和窄 ports；动态代码加载、签名、沙箱、分发和计费仍需独立需求与安全设计。

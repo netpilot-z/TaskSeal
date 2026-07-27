@@ -104,6 +104,7 @@ node src/cli.ts sync linear --dry-run
 8. Linear ticket dry-run 对相同输入确定性输出八个草案，网络请求与外部写入均为零。
 9. Linear、GitHub、Gitee 与飞书仍无真实写入；仓库 tickets 不会自动同步到 Linear。
 10. fixture 仍验证 revision-bound Artifact/Evidence 与幂等验收规则。
+11. ADR 0003 已选择 Gitee Issue 作为第二个只读 Provider；生产 adapter 尚未实现，飞书保留为后续异构压力测试。
 
 ## 项目结构
 
@@ -127,4 +128,4 @@ test/          领域、连接器、集成和 HTTP 测试
 
 计划内 Node.js 服务端源码已迁移到 TypeScript；浏览器原生脚本 `public/` 暂不进入 TypeScript 构建。当前 `private: true` 包只支持源码 checkout 运行，尚不把 `bin: src/cli.ts` 视为可安装 npm 发布物。TypeScript、NestJS 与 monorepo 的取舍见 `docs/adr/0002-typescript-repository-strategy.md`，迁移规格见 `docs/specs/0005-typescript-migration.md`。
 
-实验结果见 `docs/experiments/`，Runner 设计见 `docs/architecture/codex-runner.md`，连接器演进方向见 `docs/architecture/connectors.md`，Provider 契约见 `docs/research/0001-github-linear-read-contracts.md`。
+实验结果见 `docs/experiments/`，Runner 设计见 `docs/architecture/codex-runner.md`，连接器演进方向见 `docs/architecture/connectors.md`，现有 Provider 契约见 `docs/research/0001-github-linear-read-contracts.md`，第二 Provider 选择证据见 `docs/research/0002-gitee-feishu-provider-probe.md` 与 `docs/adr/0003-select-gitee-as-second-provider.md`。

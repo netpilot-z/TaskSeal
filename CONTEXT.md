@@ -11,6 +11,7 @@ TaskSeal 让人类和 AI Agent 的“已完成”变成有证据、可验收、�
 - fixture：`Linear WorkItem → Codex Attempt → GitHub Artifact/Evidence → AcceptanceDecision`
 - persistent：`Local WorkItem → Codex App Server Attempt → Control Room`
 - provider import：`GitHub/Linear read-only fact → ProviderSnapshot v2 → deterministic ImportPlan → atomic local batch → ImportReceipt`
+- provider extension：先以 Gitee 的匿名 `provider.health`/`work-item.read` 提取内置 Adapter Contract v1，再用飞书多维表格做异构压力测试
 
 本阶段不构建通用 Agent 市场、多租户权限、计费、生产数据库或真实外部写入。Snapshot apply 当前只提供默认关闭的 application API；没有可信 ImportPolicy provider 时不能提交，也尚未开放 CLI/HTTP apply 入口。Linear workspace `netpilot-z`、team `netpilot` 与 project `TaskSeal` 是已只读验证的真实坐标；仓库 tickets 默认不自动同步。
 
@@ -29,6 +30,9 @@ TaskSeal 让人类和 AI Agent 的“已完成”变成有证据、可验收、�
 | `ProviderObjectKey` | Connector 根据 provider、对象类型与不可变外部 ID 生成的稳定对象身份；不使用标题、名称或 URL 作为身份。 |
 | `SourceRevision` | Provider 对象的一次可排序版本，由稳定 revision ID、来源更新时间和规范化内容摘要组成。 |
 | `ProviderSnapshot` | 只读 Connector 输出的、经过裁剪且带来源版本的外部事实集合；snapshot 本身不获得写权限。 |
+| `ProviderAdapter` | 仓库内受信任的 Provider 边界，实现 manifest 声明的窄 health/read ports；不直接拥有领域 append、snapshot apply 或未声明的外部写能力。 |
+| `AdapterManifest` | 版本化声明 Provider ID、capabilities、配置、credential mode、scope 和 object type 的静态契约；当前不代表可动态安装的第三方代码。 |
+| `Capability` | 可独立授权的操作能力，例如 `provider.health`、`work-item.read`；读能力不会隐式获得 transition、apply、comment、close 或 acceptance write。 |
 | `ImportPlan` | ProviderSnapshot 与当前 Workflow 经纯函数预览后形成的确定性计划，列出追加、更新、跳过和冲突。 |
 | `ImportReceipt` | ImportPlan 原子应用后的本地审计回执，绑定 plan digest、操作者和实际提交的 canonical events。 |
 
@@ -46,3 +50,4 @@ TaskSeal 让人类和 AI Agent 的“已完成”变成有证据、可验收、�
 10. `ProviderObjectKey` 在全部 WorkItem 中唯一；一个 WorkItem 可以有多个 ExternalLink，但同一个 canonical 字段最多由一个 ExternalLink 管理。
 11. snapshot import 只能追加 canonical events，不能直接覆盖 Workflow；preview 永远零写入，apply 必须绑定已审查的 plan digest 和当前 Workflow digest。
 12. 一个 ImportPlan 要么连同审计回执完整提交，要么完全不可见；WorkItem/ExternalLink 元数据更新不得绕过专用 canonical events 修改或清空 Attempt、Artifact、Evidence 或 AcceptanceDecision。
+13. 在所有 ExternalLink journal ingress 都具备可信 registry gate 前，领域层继续显式拒绝未知 Provider 的 rich/managed link；既有 legacy reference 保持非托管且不可 baseline。Provider-agnostic 重构必须与 per-provider/per-scope apply 授权一起完成，不能先放宽领域再补门禁。
