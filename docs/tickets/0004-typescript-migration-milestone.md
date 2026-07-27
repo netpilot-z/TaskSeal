@@ -74,13 +74,13 @@
 
 ## T12.8 — 迁移 CLI 与 Bin
 
-- 状态：实现与本地验证已完成，等待 Ubuntu CI 实际执行 raw source entry；GitHub Issue `#28`。
+- 状态：已完成；GitHub Issue `#28`，CLI、源码入口与直接测试已进入 strict TypeScript 门禁。
 - 目的：迁移正式入口并类型化命令参数、环境变量、退出码和 shutdown 调用。
 - 范围：CLI、CLI 集成测试与 `package.json` 的 bin/start/taskseal 入口。
 - 不包含：HTTP Server/Demo、浏览器构建、远程暴露、认证、NestJS、monorepo，以及可安装 npm 发布物。
 - 依赖：T12.5、T12.6、T12.7。
 - 验收标准：CLI 参数与错误码兼容；private/source checkout 的 shebang、直接入口和 npm scripts 在 Windows 与 POSIX 语义下可执行。
-- 验证：CLI/doctor/inspect/sync/run 定向测试 25/25、全量测试 249/249、Windows 直接/npm script smoke、POSIX shebang/LF/Git mode 契约与 pack 内容审计通过；Ubuntu CI raw source entry 是合并门禁。
+- 验证：CLI/doctor/inspect/sync/run 定向测试 25/25、全量测试 249/249、Windows 直接/npm script smoke、pack 内容审计和独立审查通过；PR `#33` 的 Ubuntu CI 实际执行 POSIX raw source entry 并通过。
 
 ## T12.9 — 建立可分发的跨平台 CLI 发布物
 

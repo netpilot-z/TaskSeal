@@ -2,7 +2,7 @@
 
 ## 状态
 
-代码审查通过，等待 Ubuntu CI raw source entry 证据。对应 GitHub Issue `#28`；审查对象是 CLI、三个直接测试、private package 入口、README 与迁移记录。
+通过。对应 GitHub Issue `#28`；审查对象是 CLI、三个直接测试、private package 入口、README 与迁移记录。
 
 ## 独立审查范围
 
@@ -37,6 +37,7 @@ Windows 的 `npm pack --dry-run --json` 把 `src/cli.ts` 报告为 `0644`，且 
 - Windows direct/npm unknown command：均为 exit 2 且输出 Usage。
 - Windows direct/npm Linear dry-run：均为 exit 0、8 个 drafts、0 network request、0 external write。
 - CLI 文件：正确 shebang、LF only、结尾 LF、Git mode `100755`。
+- PR `#33` Ubuntu CI 实际执行 POSIX raw `src/cli.ts`，验证 exit 2 与 Usage 并通过。
 - pack 预览：包含 `src/cli.ts`，不包含 `src/cli.js`，未产生 tarball；`0644` 限制已进入 Issue `#32`。
 - `git diff --check`：通过。
 - 目标文件 `any`、类型断言、TypeScript ignore、测试 skip/only、本地绝对路径、私钥/token/credential/Bearer literal：0。
@@ -44,11 +45,10 @@ Windows 的 `npm pack --dry-run --json` 把 `src/cli.ts` 报告为 `0644`，且 
 
 ## 剩余风险
 
-- POSIX raw executable 需要 Ubuntu CI 作为实际平台证据；Windows 本地只能验证 Git mode、shebang 与 LF。
 - package 不能发布或从 `node_modules` 运行原生 `.ts`；可分发 CLI 不是 Issue `#28` 的能力。
 - npm pack 仍提示没有 `.npmignore` 并包含测试等开发文件；发布 files/exports 清单必须在 Issue `#32` 收敛。
 - main guard 面向源码直接执行；npm 安装 shim/symlink 行为也必须在 Issue `#32` 的隔离安装测试中验证。
 
 ## 结论
 
-Issue `#28` 的 private/source-checkout CLI strict TypeScript 实现和本地审查已完成，保持命令与安全边界，并把可安装发布物从源码运行能力中明确分离。Ubuntu raw-entry 进程测试通过后才可以标记完成并合并。
+Issue `#28` 已完成 private/source-checkout CLI 的 strict TypeScript 迁移，保持命令与安全边界，并把可安装发布物从源码运行能力中明确分离；Windows 与 Ubuntu source entry 均已获得进程级验证。

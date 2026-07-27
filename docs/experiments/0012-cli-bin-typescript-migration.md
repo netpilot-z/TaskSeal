@@ -48,6 +48,7 @@
 - `npm test`：249/249 通过，0 fail、0 skipped、0 todo。
 - Windows：直接 `node src/cli.ts unknown` 与 npm script 均返回 exit 2 和 Usage；两种 Linear dry-run 均返回 exit 0、`networkRequests: 0`、`externalWrites: 0`、`mutationReady: false`。
 - POSIX 源码文件契约：shebang 正确、CRLF 为 0、文件以 LF 结尾、Git mode 为 `100755`。
+- PR `#33` Ubuntu CI：`npm test` 实际通过 raw `./src/cli.ts unknown` 启动，验证 executable mode、shebang、Node 原生 TypeScript、main guard、exit 2 与 Usage。
 - `npm pack --dry-run --json`：通过；包含一个 `src/cli.ts`，不包含 `src/cli.js`，没有生成 tarball。
 - `git diff --check`：通过。
 - 目标 TypeScript 文件中 `any`、类型断言、类型忽略、测试 skip/only、本地绝对路径和凭证扫描均为 0。
@@ -55,10 +56,9 @@
 
 ## 剩余风险
 
-- 本地 Windows 没有直接执行 POSIX shebang；已增加非 Windows raw-entry 进程测试，必须由 Ubuntu CI 实际通过后才能合并。
 - `bin: src/cli.ts` 只服务 private/source checkout，不支持安装到 `node_modules` 后执行；仓库外分发必须完成 Issue `#32`。
 - Control Room 仍是 loopback 单进程原型；本切片没有增加认证、远程 daemon 或多租户能力。
 
 ## 结论
 
-本地证据支持 private/source-checkout 假设。计划内 Node.js 服务端源码已进入 strict TypeScript，Windows 本地入口与 POSIX 源码文件契约可复核；Ubuntu raw-entry 进程测试仍是合并门禁。可安装 CLI 被明确隔离为后续发布切片，没有把 pack 预览误报为分发能力。
+支持 private/source-checkout 假设。计划内 Node.js 服务端源码已进入 strict TypeScript，Windows 本地入口与 Ubuntu POSIX raw-entry 均有进程级证据；可安装 CLI 被明确隔离为后续发布切片，没有把 pack 预览误报为分发能力。
