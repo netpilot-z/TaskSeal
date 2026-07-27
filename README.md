@@ -33,10 +33,10 @@ TaskSeal 是一个 AI Delivery Control Plane 技术验证项目。它把外部�
 npm ci
 npm run typecheck
 npm test
-node src/cli.js init
-node src/cli.js doctor
-node src/cli.js run TS-1 --read-only --prompt "Reply with a short status."
-node src/cli.js sync linear --dry-run
+node src/cli.ts init
+node src/cli.ts doctor
+node src/cli.ts run TS-1 --read-only --prompt "Reply with a short status."
+node src/cli.ts sync linear --dry-run
 npm start
 ```
 
@@ -57,12 +57,12 @@ npm test
 TaskSeal 可以预览 GitHub 与 Linear 的真实只读事实，但不会把 snapshot 写入 journal：
 
 ```bash
-node src/cli.js inspect github-issue \
+node src/cli.ts inspect github-issue \
   --issue 1 \
   --work-item TS-1 \
   --criterion tests
 
-node src/cli.js inspect github \
+node src/cli.ts inspect github \
   --issue 1 \
   --pr 1 \
   --check tests \
@@ -70,7 +70,7 @@ node src/cli.js inspect github \
   --attempt run-1 \
   --criterion tests
 
-node src/cli.js inspect linear \
+node src/cli.ts inspect linear \
   --issue NP-1 \
   --work-item TS-1 \
   --criterion tests
@@ -87,7 +87,7 @@ GitHub 公开仓库可以匿名读取，也可通过 `GITHUB_TOKEN` 或 `GH_TOKE
 以下命令把仓库 tickets 转为可审查草案：
 
 ```bash
-node src/cli.js sync linear --dry-run
+node src/cli.ts sync linear --dry-run
 ```
 
 输出明确标记 `mutationReady: false`、`networkRequests: 0` 和 `externalWrites: 0`。它不会连接 Linear，更不会创建、更新或关闭 Issue。真实同步需要先修正 scope、完成 UUID/幂等对账设计，并由操作者另行明确授权。
@@ -125,6 +125,6 @@ test-support/  fake App Server
 test/          领域、连接器、集成和 HTTP 测试
 ```
 
-服务端目录允许 `.js` 与 `.ts` 在迁移期共存；浏览器原生脚本 `public/` 暂不进入 TypeScript 构建。TypeScript、NestJS 与 monorepo 的取舍见 `docs/adr/0002-typescript-repository-strategy.md`，迁移规格见 `docs/specs/0005-typescript-migration.md`。
+计划内 Node.js 服务端源码已迁移到 TypeScript；浏览器原生脚本 `public/` 暂不进入 TypeScript 构建。当前 `private: true` 包只支持源码 checkout 运行，尚不把 `bin: src/cli.ts` 视为可安装 npm 发布物。TypeScript、NestJS 与 monorepo 的取舍见 `docs/adr/0002-typescript-repository-strategy.md`，迁移规格见 `docs/specs/0005-typescript-migration.md`。
 
 实验结果见 `docs/experiments/`，Runner 设计见 `docs/architecture/codex-runner.md`，连接器演进方向见 `docs/architecture/connectors.md`，Provider 契约见 `docs/research/0001-github-linear-read-contracts.md`。

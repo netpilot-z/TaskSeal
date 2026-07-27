@@ -17,6 +17,300 @@ import { CodexAppServerClient } from "./runners/codex-app-server-client.ts";
 import { CodexRunner } from "./runners/codex-runner.ts";
 import { createTaskSealServer } from "./server.ts";
 import { FileEventJournal } from "./storage/event-journal.ts";
+import type {
+  ManagedField,
+  WorkItem,
+  WorkItemCreatedEvent
+} from "./domain/workflow.ts";
+import type {
+  CodexAppServerInvocation,
+  CodexSandbox
+} from "./runners/codex-app-server-client.ts";
+import type {
+  CodexRunnerResult,
+  CodexRunnerRunOptions
+} from "./runners/codex-runner.ts";
+import type {
+  PersistentServicePort,
+  RunWorkItemOptions
+} from "./server.ts";
+
+export type CliExitCode = 0 | 1 | 2;
+
+export interface OutputPort {
+  write(value: string): unknown;
+}
+
+export interface CommandResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+export type CommandRunner = (
+  command: string,
+  args: string[],
+  options: { cwd: string }
+) => unknown | Promise<unknown>;
+
+interface RunCliWorkItemOptions {
+  cwd: string;
+  workItemId: string;
+  prompt: string | undefined;
+  sandbox: "read-only" | "workspace-write";
+}
+
+interface CliRunResult {
+  attemptId: string;
+  outcome: "completed" | "failed" | "interrupted";
+  threadId?: string | undefined;
+  turnId?: string | undefined;
+  summary?: string | undefined;
+}
+
+type RunCliWorkItem = (
+  options: RunCliWorkItemOptions
+) => unknown | Promise<unknown>;
+
+type InspectVersionOptions =
+  | {
+      snapshotVersion?: 1 | undefined;
+      managedFields?: never;
+    }
+  | {
+      snapshotVersion: 2;
+      managedFields: ManagedField[];
+    };
+
+type GitHubIssueCommandOptions = {
+  issueNumber: number;
+  workItemId: string;
+  requiredEvidence: string[];
+} & InspectVersionOptions;
+
+type GitHubIssueInspectOptions =
+  GitHubIssueCommandOptions & { cwd: string };
+
+type GitHubCommandOptions = {
+  issueNumber: number;
+  pullRequestNumber: number;
+  checkName: string;
+  workItemId: string;
+  attemptId: string;
+  criterionKey: string;
+} & InspectVersionOptions;
+
+type GitHubInspectOptions =
+  GitHubCommandOptions & { cwd: string };
+
+type LinearCommandOptions = {
+  issueReference: string;
+  workItemId: string;
+  requiredEvidence: string[];
+} & InspectVersionOptions;
+
+type LinearInspectOptions =
+  LinearCommandOptions & { cwd: string };
+
+interface LinearDryRunOptions {
+  cwd: string;
+  source?: string | undefined;
+}
+
+type InspectGitHubIssue = (
+  options: GitHubIssueInspectOptions
+) => unknown | Promise<unknown>;
+type InspectGitHub = (
+  options: GitHubInspectOptions
+) => unknown | Promise<unknown>;
+type InspectLinear = (
+  options: LinearInspectOptions
+) => unknown | Promise<unknown>;
+type CreateLinearDryRun = (
+  options: LinearDryRunOptions
+) => unknown | Promise<unknown>;
+
+interface StartControlRoomOptions {
+  cwd: string;
+  output: OutputPort;
+}
+
+type StartControlRoom = (
+  options: StartControlRoomOptions
+) => unknown | Promise<unknown>;
+
+export interface RunCliOptions {
+  args?: string[] | undefined;
+  cwd?: string | undefined;
+  output?: OutputPort | undefined;
+  now?: (() => Date) | undefined;
+  commandRunner?: CommandRunner | undefined;
+  nodeVersion?: unknown;
+  startControlRoom?: StartControlRoom | undefined;
+  runWorkItem?: RunCliWorkItem | undefined;
+  inspectGitHubIssue?: InspectGitHubIssue | undefined;
+  inspectGitHub?: InspectGitHub | undefined;
+  inspectLinear?: InspectLinear | undefined;
+  createLinearDryRun?: CreateLinearDryRun | undefined;
+}
+
+interface RunLocalCodexWorkItemOptions {
+  cwd: string;
+  workItemId: string;
+  prompt?: string | undefined;
+  sandbox?: CodexSandbox | undefined;
+  commandRunner?: CommandRunner | undefined;
+}
+
+interface CreateLocalCodexRuntimeOptions {
+  cwd: string;
+  commandRunner?: CommandRunner | undefined;
+  environment?: NodeJS.ProcessEnv | undefined;
+}
+
+interface InitializeProjectOptions {
+  cwd: string;
+  now?: (() => Date) | undefined;
+}
+
+interface InitializeProjectResult {
+  created: boolean;
+  workItemId: string;
+}
+
+interface CollectDiagnosticsOptions {
+  cwd: string;
+  commandRunner?: CommandRunner | undefined;
+  nodeVersion?: unknown;
+}
+
+interface CodexDiagnostic {
+  available: boolean;
+  loggedIn: boolean;
+  version: string | null;
+}
+
+interface Diagnostics {
+  node: {
+    ready: boolean;
+    version: string;
+  };
+  project: {
+    ready: boolean;
+  };
+  codex: CodexDiagnostic;
+  ready: boolean;
+}
+
+interface ResolveCodexInvocationOptions {
+  cwd: string;
+  commandRunner?: CommandRunner | undefined;
+  environment?: NodeJS.ProcessEnv | undefined;
+  platform?: NodeJS.Platform | undefined;
+  appExecutables?: readonly string[] | undefined;
+}
+
+interface SelectNewestCodexInvocationOptions {
+  invocations: readonly CodexAppServerInvocation[];
+  cwd: string;
+  commandRunner: CommandRunner;
+}
+
+interface ParsedRunArguments {
+  workItemId: string;
+  prompt?: string | undefined;
+  readOnly: boolean;
+}
+
+interface ParsedVersionedArguments {
+  values: Record<string, string>;
+  versionOptions: InspectVersionOptions;
+}
+
+interface ControlRoomRunnerPort {
+  run(
+    options: CodexRunnerRunOptions
+  ): unknown | Promise<unknown>;
+}
+
+interface ControlRoomRuntime {
+  service: PersistentServicePort;
+  runner: ControlRoomRunnerPort;
+}
+
+interface ControlRoomServerPort {
+  listen(
+    port: number,
+    host: string,
+    callback: () => void
+  ): unknown;
+  once(
+    event: "error",
+    listener: (error: unknown) => void
+  ): unknown;
+  once(event: "close", listener: () => void): unknown;
+  close?(
+    callback: (error?: Error | undefined) => void
+  ): unknown;
+  shutdown?(): unknown;
+}
+
+interface SignalSourcePort {
+  exitCode?: string | number | null | undefined;
+  once(
+    event: "SIGINT" | "SIGTERM",
+    listener: () => void
+  ): unknown;
+  removeListener(
+    event: "SIGINT" | "SIGTERM",
+    listener: () => void
+  ): unknown;
+}
+
+interface StartPersistentControlRoomOptions {
+  cwd: string;
+  output: OutputPort;
+  environment?: NodeJS.ProcessEnv | undefined;
+  commandRunner?: CommandRunner | undefined;
+  initialize?:
+    | ((
+        options: InitializeProjectOptions
+      ) => unknown | Promise<unknown>)
+    | undefined;
+  runtimeFactory?:
+    | ((
+        options: CreateLocalCodexRuntimeOptions
+      ) => ControlRoomRuntime | Promise<ControlRoomRuntime>)
+    | undefined;
+  serverFactory?:
+    | ((
+        options: {
+          service: PersistentServicePort;
+          runWorkItem: (
+            options: RunWorkItemOptions
+          ) => unknown | Promise<unknown>;
+        }
+      ) => ControlRoomServerPort)
+    | undefined;
+  signalSource?: SignalSourcePort | undefined;
+}
+
+const processSignalSource: SignalSourcePort = {
+  get exitCode() {
+    return process.exitCode;
+  },
+  set exitCode(
+    value: string | number | null | undefined
+  ) {
+    process.exitCode = value;
+  },
+  once(event, listener) {
+    return process.once(event, listener);
+  },
+  removeListener(event, listener) {
+    return process.removeListener(event, listener);
+  }
+};
 
 const MINIMUM_NODE_VERSION = [24, 12, 0];
 const MINIMUM_NODE_VERSION_LABEL = "24.12.0";
@@ -44,7 +338,7 @@ export async function runCli({
   inspectGitHub,
   inspectLinear,
   createLinearDryRun
-} = {}) {
+}: RunCliOptions = {}): Promise<CliExitCode> {
   const command = args[0] ?? "start";
 
   if (command === "init") {
@@ -81,19 +375,23 @@ export async function runCli({
     }
 
     try {
-      const execute =
+      const execute: RunCliWorkItem =
         runWorkItem ??
         ((runOptions) =>
           runLocalCodexWorkItem({
             ...runOptions,
             commandRunner
           }));
-      const result = await execute({
-        cwd,
-        workItemId: options.workItemId,
-        prompt: options.prompt,
-        sandbox: options.readOnly ? "read-only" : "workspace-write"
-      });
+      const result = readCliRunResult(
+        await execute({
+          cwd,
+          workItemId: options.workItemId,
+          prompt: options.prompt,
+          sandbox: options.readOnly
+            ? "read-only"
+            : "workspace-write"
+        })
+      );
       output.write(renderRunResult(result));
       return result.outcome === "completed" ? 0 : 1;
     } catch (error) {
@@ -201,7 +499,7 @@ export async function runLocalCodexWorkItem({
   prompt,
   sandbox = "workspace-write",
   commandRunner = runCommand
-}) {
+}: RunLocalCodexWorkItemOptions): Promise<CodexRunnerResult> {
   const { service, runner } = await createLocalCodexRuntime({
     cwd,
     commandRunner
@@ -209,11 +507,12 @@ export async function runLocalCodexWorkItem({
   const workItem = service.getWorkItem(workItemId);
 
   if (!workItem) {
-    const error = new Error(
-      `TaskSeal work item ${workItemId} does not exist. Run taskseal init first.`
+    throw Object.assign(
+      new Error(
+        `TaskSeal work item ${workItemId} does not exist. Run taskseal init first.`
+      ),
+      { code: "WORK_ITEM_NOT_FOUND" }
     );
-    error.code = "WORK_ITEM_NOT_FOUND";
-    throw error;
   }
 
   return runner.run({
@@ -229,7 +528,10 @@ export async function createLocalCodexRuntime({
   cwd,
   commandRunner = runCommand,
   environment = process.env
-}) {
+}: CreateLocalCodexRuntimeOptions): Promise<{
+  service: TaskSealService;
+  runner: CodexRunner;
+}> {
   const journal = new FileEventJournal({
     filePath: join(cwd, ".taskseal", "events.jsonl")
   });
@@ -242,11 +544,12 @@ export async function createLocalCodexRuntime({
   });
 
   if (!invocation) {
-    const error = new Error(
-      "Codex executable was not found. Run taskseal doctor for details."
+    throw Object.assign(
+      new Error(
+        "Codex executable was not found. Run taskseal doctor for details."
+      ),
+      { code: "CODEX_NOT_AVAILABLE" }
     );
-    error.code = "CODEX_NOT_AVAILABLE";
-    throw error;
   }
 
   const runner = new CodexRunner({
@@ -265,7 +568,10 @@ export async function createLocalCodexRuntime({
   };
 }
 
-export async function initializeProject({ cwd, now = () => new Date() }) {
+export async function initializeProject({
+  cwd,
+  now = () => new Date()
+}: InitializeProjectOptions): Promise<InitializeProjectResult> {
   const journal = new FileEventJournal({
     filePath: join(cwd, ".taskseal", "events.jsonl")
   });
@@ -279,7 +585,7 @@ export async function initializeProject({ cwd, now = () => new Date() }) {
     };
   }
 
-  const event = {
+  const event: WorkItemCreatedEvent = {
     eventId: "taskseal:TS-1:local-created",
     workItemId: "TS-1",
     type: "work_item.created",
@@ -307,7 +613,7 @@ export async function collectDiagnostics({
   cwd,
   commandRunner = runCommand,
   nodeVersion = process.versions.node
-}) {
+}: CollectDiagnosticsOptions): Promise<Diagnostics> {
   const parsedNodeVersion = parseNodeVersion(nodeVersion);
   const node = {
     ready:
@@ -324,7 +630,7 @@ export async function collectDiagnostics({
         : String(nodeVersion)
   };
   const project = await inspectProjectConfiguration(cwd);
-  let codex;
+  let codex: CodexDiagnostic;
 
   try {
     const codexInvocation = await resolveCodexInvocation({
@@ -336,10 +642,12 @@ export async function collectDiagnostics({
       throw new Error("Codex executable not found.");
     }
 
-    const versionResult = await commandRunner(
-      codexInvocation.command,
-      [...codexInvocation.argsPrefix, "--version"],
-      { cwd }
+    const versionResult = readCommandResult(
+      await commandRunner(
+        codexInvocation.command,
+        [...codexInvocation.argsPrefix, "--version"],
+        { cwd }
+      )
     );
 
     if (versionResult.exitCode !== 0) {
@@ -349,10 +657,12 @@ export async function collectDiagnostics({
         version: null
       };
     } else {
-      const loginResult = await commandRunner(
-        codexInvocation.command,
-        [...codexInvocation.argsPrefix, "login", "status"],
-        { cwd }
+      const loginResult = readCommandResult(
+        await commandRunner(
+          codexInvocation.command,
+          [...codexInvocation.argsPrefix, "login", "status"],
+          { cwd }
+        )
       );
       codex = {
         available: true,
@@ -390,7 +700,9 @@ export async function resolveCodexInvocation({
   environment = process.env,
   platform = process.platform,
   appExecutables
-}) {
+}: ResolveCodexInvocationOptions): Promise<
+  CodexAppServerInvocation | null
+> {
   if (
     typeof environment.TASKSEAL_CODEX_BIN === "string" &&
     environment.TASKSEAL_CODEX_BIN.trim().length > 0
@@ -405,10 +717,16 @@ export async function resolveCodexInvocation({
     };
   }
 
-  const candidates = [];
+  const candidates: string[] = [];
 
   try {
-    const result = await commandRunner("where.exe", ["codex"], { cwd });
+    const result = readCommandResult(
+      await commandRunner(
+        "where.exe",
+        ["codex"],
+        { cwd }
+      )
+    );
 
     if (result.exitCode === 0) {
       candidates.push(
@@ -431,7 +749,7 @@ export async function resolveCodexInvocation({
       (await discoverCodexAppExecutables(environment.LOCALAPPDATA)))
   );
 
-  const invocations = [];
+  const invocations: CodexAppServerInvocation[] = [];
 
   for (const candidate of [...new Set(candidates)]) {
     const invocation = await invocationForCandidate(candidate);
@@ -448,7 +766,9 @@ export async function resolveCodexInvocation({
   });
 }
 
-async function discoverCodexAppExecutables(localAppData) {
+async function discoverCodexAppExecutables(
+  localAppData: unknown
+): Promise<string[]> {
   if (typeof localAppData !== "string" || localAppData.length === 0) {
     return [];
   }
@@ -477,22 +797,32 @@ async function discoverCodexAppExecutables(localAppData) {
       }
     })
   );
-  return usable.filter(Boolean);
+  return usable.filter(
+    (candidate): candidate is string =>
+      candidate !== null
+  );
 }
 
 async function selectNewestCodexInvocation({
   invocations,
   cwd,
   commandRunner
-}) {
-  let selected = null;
+}: SelectNewestCodexInvocationOptions): Promise<
+  CodexAppServerInvocation | null
+> {
+  let selected: {
+    invocation: CodexAppServerInvocation;
+    version: number[];
+  } | null = null;
 
   for (const invocation of invocations) {
     try {
-      const result = await commandRunner(
-        invocation.command,
-        [...invocation.argsPrefix, "--version"],
-        { cwd }
+      const result = readCommandResult(
+        await commandRunner(
+          invocation.command,
+          [...invocation.argsPrefix, "--version"],
+          { cwd }
+        )
       );
       const version = parseCodexVersion(result.stdout);
 
@@ -514,12 +844,16 @@ async function selectNewestCodexInvocation({
   return selected?.invocation ?? null;
 }
 
-function parseCodexVersion(value) {
+function parseCodexVersion(value: unknown): number[] | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
   const match = /\b(\d+)\.(\d+)\.(\d+)/.exec(value);
   return match ? match.slice(1).map(Number) : null;
 }
 
-function parseNodeVersion(value) {
+function parseNodeVersion(value: unknown): number[] | null {
   if (typeof value !== "string") {
     return null;
   }
@@ -528,7 +862,10 @@ function parseNodeVersion(value) {
   return match ? match.slice(1).map(Number) : null;
 }
 
-function compareVersions(left, right) {
+function compareVersions(
+  left: readonly number[],
+  right: readonly number[]
+): number {
   for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
     const difference = (left[index] ?? 0) - (right[index] ?? 0);
 
@@ -540,7 +877,9 @@ function compareVersions(left, right) {
   return 0;
 }
 
-async function invocationForCandidate(candidate) {
+async function invocationForCandidate(
+  candidate: string
+): Promise<CodexAppServerInvocation | null> {
   if (!candidate.toLowerCase().endsWith(".cmd")) {
     return {
       command: candidate,
@@ -568,13 +907,16 @@ async function invocationForCandidate(candidate) {
   }
 }
 
-async function inspectProjectConfiguration(cwd) {
+async function inspectProjectConfiguration(
+  cwd: string
+): Promise<{ ready: boolean }> {
   try {
     const content = await readFile(join(cwd, "config", "project.json"), "utf8");
-    const configuration = JSON.parse(content);
+    const configuration: unknown = JSON.parse(content);
 
     return {
       ready:
+        isRecord(configuration) &&
         typeof configuration.project === "string" &&
         configuration.project.length > 0
     };
@@ -583,7 +925,9 @@ async function inspectProjectConfiguration(cwd) {
   }
 }
 
-function renderDiagnostics(diagnostics) {
+function renderDiagnostics(
+  diagnostics: Diagnostics
+): string {
   const lines = [
     formatDiagnostic(
       diagnostics.node.ready,
@@ -608,7 +952,9 @@ function renderDiagnostics(diagnostics) {
   return `${lines.join("\n")}\n`;
 }
 
-function parseRunArguments(args) {
+function parseRunArguments(
+  args: readonly string[]
+): ParsedRunArguments | null {
   const [workItemId, ...options] = args;
 
   if (
@@ -619,7 +965,7 @@ function parseRunArguments(args) {
     return null;
   }
 
-  let prompt;
+  let prompt: string | undefined;
   let readOnly = false;
 
   for (let index = 0; index < options.length; index += 1) {
@@ -646,12 +992,14 @@ function parseRunArguments(args) {
 
   return {
     workItemId,
-    prompt,
+    ...(prompt === undefined ? {} : { prompt }),
     readOnly
   };
 }
 
-function createDefaultPrompt(workItem) {
+function createDefaultPrompt(
+  workItem: Pick<WorkItem, "id" | "title">
+): string {
   return [
     `Work on TaskSeal work item ${workItem.id}: ${workItem.title}.`,
     "Stay inside the current project, report the result concisely, and do not access external issue trackers.",
@@ -659,7 +1007,79 @@ function createDefaultPrompt(workItem) {
   ].join("\n");
 }
 
-function renderRunResult(result) {
+function readCliRunResult(value: unknown): CliRunResult {
+  if (
+    !isRecord(value) ||
+    typeof value.attemptId !== "string" ||
+    !["completed", "failed", "interrupted"].includes(
+      typeof value.outcome === "string"
+        ? value.outcome
+        : ""
+    )
+  ) {
+    throw new TypeError(
+      "TaskSeal runner returned an invalid result."
+    );
+  }
+
+  const threadId = readOptionalResultString(
+    value,
+    "threadId"
+  );
+  const turnId = readOptionalResultString(
+    value,
+    "turnId"
+  );
+  const summary = readOptionalResultString(
+    value,
+    "summary",
+    true
+  );
+  const outcome = value.outcome;
+
+  if (
+    outcome !== "completed" &&
+    outcome !== "failed" &&
+    outcome !== "interrupted"
+  ) {
+    throw new TypeError(
+      "TaskSeal runner returned an invalid result."
+    );
+  }
+
+  return {
+    attemptId: value.attemptId,
+    outcome,
+    ...(threadId === undefined ? {} : { threadId }),
+    ...(turnId === undefined ? {} : { turnId }),
+    ...(summary === undefined ? {} : { summary })
+  };
+}
+
+function readOptionalResultString(
+  value: Record<string, unknown>,
+  key: string,
+  allowNull = false
+): string | undefined {
+  const candidate = value[key];
+
+  if (
+    candidate === undefined ||
+    (allowNull && candidate === null)
+  ) {
+    return undefined;
+  }
+
+  if (typeof candidate !== "string") {
+    throw new TypeError(
+      "TaskSeal runner returned an invalid result."
+    );
+  }
+
+  return candidate;
+}
+
+function renderRunResult(result: CliRunResult): string {
   const lines = [
     `Attempt ${result.attemptId}: ${result.outcome}`,
     ...(result.threadId ? [`Codex thread: ${result.threadId}`] : []),
@@ -669,19 +1089,18 @@ function renderRunResult(result) {
   return `${lines.join("\n")}\n`;
 }
 
-function renderRunError(error) {
-  const code =
-    typeof error?.code === "string" && error.code.length > 0
-      ? ` [${error.code}]`
-      : "";
-  const message =
-    typeof error?.message === "string" && error.message.length > 0
-      ? error.message
-      : "Unknown runner error.";
+function renderRunError(error: unknown): string {
+  const code = renderErrorCode(error);
+  const message = readErrorMessage(
+    error,
+    "Unknown runner error."
+  );
   return `TaskSeal run failed${code}: ${message.slice(0, 2_000)}\n`;
 }
 
-function parseGitHubInspectArguments(args) {
+function parseGitHubInspectArguments(
+  args: readonly string[]
+): GitHubCommandOptions | null {
   const parsed = parseVersionedInspectArguments(args, [
     "--issue",
     "--pr",
@@ -696,8 +1115,12 @@ function parseGitHubInspectArguments(args) {
   }
 
   const { values, versionOptions } = parsed;
-  const issueNumber = parsePositiveInteger(values["--issue"]);
-  const pullRequestNumber = parsePositiveInteger(values["--pr"]);
+  const issueNumber = parsePositiveInteger(
+    readNamedArgument(values, "--issue")
+  );
+  const pullRequestNumber = parsePositiveInteger(
+    readNamedArgument(values, "--pr")
+  );
 
   if (!issueNumber || !pullRequestNumber) {
     return null;
@@ -706,15 +1129,17 @@ function parseGitHubInspectArguments(args) {
   return {
     issueNumber,
     pullRequestNumber,
-    checkName: values["--check"],
-    workItemId: values["--work-item"],
-    attemptId: values["--attempt"],
-    criterionKey: values["--criterion"],
+    checkName: readNamedArgument(values, "--check"),
+    workItemId: readNamedArgument(values, "--work-item"),
+    attemptId: readNamedArgument(values, "--attempt"),
+    criterionKey: readNamedArgument(values, "--criterion"),
     ...versionOptions
   };
 }
 
-function parseGitHubIssueInspectArguments(args) {
+function parseGitHubIssueInspectArguments(
+  args: readonly string[]
+): GitHubIssueCommandOptions | null {
   const parsed = parseVersionedInspectArguments(args, [
     "--issue",
     "--work-item",
@@ -726,7 +1151,9 @@ function parseGitHubIssueInspectArguments(args) {
   }
 
   const { values, versionOptions } = parsed;
-  const issueNumber = parsePositiveInteger(values["--issue"]);
+  const issueNumber = parsePositiveInteger(
+    readNamedArgument(values, "--issue")
+  );
 
   if (!issueNumber) {
     return null;
@@ -734,13 +1161,17 @@ function parseGitHubIssueInspectArguments(args) {
 
   return {
     issueNumber,
-    workItemId: values["--work-item"],
-    requiredEvidence: [values["--criterion"]],
+    workItemId: readNamedArgument(values, "--work-item"),
+    requiredEvidence: [
+      readNamedArgument(values, "--criterion")
+    ],
     ...versionOptions
   };
 }
 
-function parseLinearInspectArguments(args) {
+function parseLinearInspectArguments(
+  args: readonly string[]
+): LinearCommandOptions | null {
   const parsed = parseVersionedInspectArguments(args, [
     "--issue",
     "--work-item",
@@ -752,20 +1183,30 @@ function parseLinearInspectArguments(args) {
   }
 
   const { values, versionOptions } = parsed;
-  if (!isLinearIssueReference(values["--issue"])) {
+  const issueReference = readNamedArgument(
+    values,
+    "--issue"
+  );
+
+  if (!isLinearIssueReference(issueReference)) {
     return null;
   }
 
   return {
-    issueReference: values["--issue"],
-    workItemId: values["--work-item"],
-    requiredEvidence: [values["--criterion"]],
+    issueReference,
+    workItemId: readNamedArgument(values, "--work-item"),
+    requiredEvidence: [
+      readNamedArgument(values, "--criterion")
+    ],
     ...versionOptions
   };
 }
 
-function parseVersionedInspectArguments(args, names) {
-  const optionalNames = [
+function parseVersionedInspectArguments(
+  args: readonly string[],
+  names: readonly string[]
+): ParsedVersionedArguments | null {
+  const optionalNames: string[] = [
     "--snapshot-version",
     "--title-management"
   ];
@@ -808,13 +1249,15 @@ function parseVersionedInspectArguments(args, names) {
     };
   }
 
-  const titleManagement = values["--title-management"];
+  const titleManagement =
+    values["--title-management"];
 
   if (
     !hasVersion ||
     !hasTitleManagement ||
     values["--snapshot-version"] !== "2" ||
-    !["provider", "none"].includes(titleManagement)
+    (titleManagement !== "provider" &&
+      titleManagement !== "none")
   ) {
     return null;
   }
@@ -830,10 +1273,10 @@ function parseVersionedInspectArguments(args, names) {
 }
 
 function parseNamedArguments(
-  args,
-  names,
-  optionalNames = []
-) {
+  args: readonly string[],
+  names: readonly string[],
+  optionalNames: readonly string[] = []
+): Record<string, string> | null {
   if (
     args.length < names.length * 2 ||
     args.length > (names.length + optionalNames.length) * 2 ||
@@ -843,13 +1286,14 @@ function parseNamedArguments(
   }
 
   const allowed = new Set([...names, ...optionalNames]);
-  const values = {};
+  const values: Record<string, string> = {};
 
   for (let index = 0; index < args.length; index += 2) {
     const name = args[index];
     const value = args[index + 1];
 
     if (
+      typeof name !== "string" ||
       !allowed.has(name) ||
       Object.hasOwn(values, name) ||
       typeof value !== "string" ||
@@ -867,7 +1311,26 @@ function parseNamedArguments(
     : null;
 }
 
-function parsePositiveInteger(value) {
+function readNamedArgument(
+  values: Readonly<Record<string, string>>,
+  name: string
+): string {
+  const value = values[name];
+
+  if (typeof value !== "string") {
+    throw new TypeError(
+      `TaskSeal internal argument ${name} is missing.`
+    );
+  }
+
+  return value;
+}
+
+function parsePositiveInteger(value: unknown): number | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
   if (!/^\d+$/.test(value)) {
     return null;
   }
@@ -876,7 +1339,9 @@ function parsePositiveInteger(value) {
   return Number.isSafeInteger(number) && number > 0 ? number : null;
 }
 
-function parseLinearSyncArguments(args) {
+function parseLinearSyncArguments(
+  args: readonly string[]
+): Omit<LinearDryRunOptions, "cwd"> | null {
   if (args[0] !== "--dry-run") {
     return null;
   }
@@ -898,31 +1363,68 @@ function parseLinearSyncArguments(args) {
   return null;
 }
 
-function renderInspectError(error) {
-  const code =
-    typeof error?.code === "string" && error.code.length > 0
-      ? ` [${error.code}]`
-      : "";
-  const message =
-    typeof error?.message === "string" && error.message.length > 0
-      ? error.message
-      : "Unknown provider error.";
+function renderInspectError(error: unknown): string {
+  const code = renderErrorCode(error);
+  const message = readErrorMessage(
+    error,
+    "Unknown provider error."
+  );
   return `TaskSeal inspect failed${code}: ${message.slice(0, 2_000)}\n`;
 }
 
-function renderSyncError(error) {
-  const code =
-    typeof error?.code === "string" && error.code.length > 0
-      ? ` [${error.code}]`
-      : "";
-  const message =
-    typeof error?.message === "string" && error.message.length > 0
-      ? error.message
-      : "Unknown synchronization planning error.";
+function renderSyncError(error: unknown): string {
+  const code = renderErrorCode(error);
+  const message = readErrorMessage(
+    error,
+    "Unknown synchronization planning error."
+  );
   return `TaskSeal sync dry-run failed${code}: ${message.slice(0, 2_000)}\n`;
 }
 
-function formatDiagnostic(ready, label, failure) {
+function renderErrorCode(error: unknown): string {
+  return isRecord(error) &&
+    typeof error.code === "string" &&
+    error.code.length > 0
+    ? ` [${error.code}]`
+    : "";
+}
+
+function readErrorMessage(
+  error: unknown,
+  fallback: string
+): string {
+  return isRecord(error) &&
+    typeof error.message === "string" &&
+    error.message.length > 0
+    ? error.message
+    : fallback;
+}
+
+function readCommandResult(value: unknown): CommandResult {
+  if (
+    !isRecord(value) ||
+    typeof value.exitCode !== "number" ||
+    !Number.isInteger(value.exitCode) ||
+    typeof value.stdout !== "string" ||
+    typeof value.stderr !== "string"
+  ) {
+    throw new TypeError(
+      "TaskSeal command runner returned an invalid result."
+    );
+  }
+
+  return {
+    exitCode: value.exitCode,
+    stdout: value.stdout,
+    stderr: value.stderr
+  };
+}
+
+function formatDiagnostic(
+  ready: boolean,
+  label: string,
+  failure: string
+): string {
   return ready ? `✓ ${label} — ready` : `× ${label} — ${failure}`;
 }
 
@@ -934,8 +1436,10 @@ export async function startPersistentControlRoom({
   initialize = initializeProject,
   runtimeFactory = createLocalCodexRuntime,
   serverFactory = createTaskSealServer,
-  signalSource = process
-}) {
+  signalSource = processSignalSource
+}: StartPersistentControlRoomOptions): Promise<
+  ControlRoomServerPort
+> {
   const host = environment.HOST ?? "127.0.0.1";
   const port = Number(environment.PORT ?? 4317);
 
@@ -967,9 +1471,9 @@ export async function startPersistentControlRoom({
       })
   });
 
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(port, host, resolve);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", (error) => reject(error));
+    server.listen(port, host, () => resolve());
   });
 
   installShutdownHandlers({
@@ -981,7 +1485,15 @@ export async function startPersistentControlRoom({
   return server;
 }
 
-function installShutdownHandlers({ server, signalSource, output }) {
+function installShutdownHandlers({
+  server,
+  signalSource,
+  output
+}: {
+  server: ControlRoomServerPort;
+  signalSource: SignalSourcePort;
+  output: OutputPort;
+}): void {
   let shuttingDown = false;
 
   const cleanup = () => {
@@ -994,11 +1506,7 @@ function installShutdownHandlers({ server, signalSource, output }) {
     }
 
     shuttingDown = true;
-    Promise.resolve(
-      typeof server.shutdown === "function"
-        ? server.shutdown()
-        : new Promise((resolve) => server.close(resolve))
-    )
+    shutdownServer(server)
       .catch((error) => {
         output.write(
           `TaskSeal shutdown failed: ${renderSafeMessage(error)}\n`
@@ -1013,15 +1521,44 @@ function installShutdownHandlers({ server, signalSource, output }) {
   server.once("close", cleanup);
 }
 
-function renderSafeMessage(error) {
-  return (
-    typeof error?.message === "string" && error.message.length > 0
-      ? error.message
-      : "Unknown shutdown error."
+async function shutdownServer(
+  server: ControlRoomServerPort
+): Promise<void> {
+  if (typeof server.shutdown === "function") {
+    await server.shutdown();
+    return;
+  }
+
+  if (typeof server.close !== "function") {
+    throw new TypeError(
+      "TaskSeal server does not support shutdown."
+    );
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    server.close?.((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
+
+function renderSafeMessage(error: unknown): string {
+  return readErrorMessage(
+    error,
+    "Unknown shutdown error."
   ).slice(0, 2_000);
 }
 
-function runCommand(command, args, { cwd }) {
+function runCommand(
+  command: string,
+  args: string[],
+  { cwd }: { cwd: string }
+): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd,
@@ -1034,10 +1571,10 @@ function runCommand(command, args, { cwd }) {
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
+    child.stdout.on("data", (chunk: string) => {
       stdout += chunk;
     });
-    child.stderr.on("data", (chunk) => {
+    child.stderr.on("data", (chunk: string) => {
       stderr += chunk;
     });
     child.once("error", reject);
@@ -1051,9 +1588,20 @@ function runCommand(command, args, { cwd }) {
   });
 }
 
+function isRecord(
+  value: unknown
+): value is Record<string, unknown> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+  );
+}
+
+const invokedPath = process.argv[1];
 const isMain =
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href;
+  typeof invokedPath === "string" &&
+  import.meta.url === pathToFileURL(invokedPath).href;
 
 if (isMain) {
   process.exitCode = await runCli();
