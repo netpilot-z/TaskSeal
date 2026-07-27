@@ -41,6 +41,13 @@ import type {
   ProviderScopeRef
 } from "./import-policy.ts";
 import {
+  DEFAULT_PROVIDER_INGRESS_REGISTRY,
+  authorizeProviderIngress
+} from "./provider-ingress-registry.ts";
+import type {
+  ProviderIngressRegistry
+} from "./provider-ingress-registry.ts";
+import {
   compareImportActions,
   compareImportCodeProjections,
   compareImportEvents,
@@ -134,6 +141,7 @@ const GENERAL_STRING_LIMIT = 4096;
 const TITLE_LIMIT = 512;
 const URL_LIMIT = 2048;
 const ID_LIMIT = 256;
+const PROVIDER_ID_LIMIT = 512;
 const EVIDENCE_LIMIT = 64;
 const EVIDENCE_KEY_LIMIT = 128;
 const MANAGED_FIELD_LIMIT = 8;
@@ -176,11 +184,14 @@ export function parseProviderSnapshotJson(
 export function previewSnapshotImport({
   snapshot,
   workflow,
-  importPolicy
+  importPolicy,
+  providerIngressRegistry =
+    DEFAULT_PROVIDER_INGRESS_REGISTRY
 }: {
   snapshot: unknown;
   workflow: Workflow;
   importPolicy: unknown;
+  providerIngressRegistry?: ProviderIngressRegistry | undefined;
 }): ImportPlan {
   const normalizedInput = normalizeProviderSnapshot(snapshot);
   const requiredObjectTypes = [
@@ -190,7 +201,14 @@ export function previewSnapshotImport({
       )
     )
   ].sort();
+  authorizeProviderIngress({
+    registry: providerIngressRegistry,
+    provider: normalizedInput.provider,
+    scopeRef: normalizedInput.scope,
+    requiredObjectTypes
+  });
   const {
+    previewAllowed,
     policyBinding,
     policyDigest
   } = buildPolicyBinding({
@@ -199,6 +217,12 @@ export function previewSnapshotImport({
     scopeRef: normalizedInput.scope,
     requiredObjectTypes
   });
+  if (!previewAllowed) {
+    throw new SnapshotImportError(
+      "IMPORT_PREVIEW_FORBIDDEN",
+      "ImportPolicy does not allow snapshot preview for this scope."
+    );
+  }
   const normalizedSnapshot: AuthorizedSnapshot = {
     ...normalizedInput,
     scope: policyBinding.scopeRef
@@ -693,8 +717,10 @@ function normalizeFact({
       candidateEvent: normalizeWorkItemCandidate({
         event: fact.candidateEvent,
         sourceObject: issueSource,
+        revision,
         observed,
-        mapping
+        mapping,
+        scope
       })
     });
   }
@@ -786,8 +812,11 @@ function normalizeSourceObject({
       "url"
     ]) ||
     value.provider !== provider ||
-    !isBoundedString(value.providerObjectKey, ID_LIMIT) ||
-    !isBoundedString(value.externalId, ID_LIMIT) ||
+    !isBoundedString(
+      value.providerObjectKey,
+      PROVIDER_ID_LIMIT
+    ) ||
+    !isBoundedString(value.externalId, PROVIDER_ID_LIMIT) ||
     !isProviderObjectType(value.objectType) ||
     !isBoundedString(value.url, URL_LIMIT)
   ) {
@@ -811,6 +840,39 @@ function normalizeSourceObject({
       url: normalizeProviderUrl({
         provider: "github",
         objectType: value.objectType,
+        externalId: value.externalId,
+        url: value.url,
+        scope
+      })
+    };
+  }
+
+  if (provider === "gitee") {
+    const repository = normalizeGiteeScopeRepository(scope);
+    const prefix = `${repository}#`;
+    const issueReference =
+      value.externalId.startsWith(prefix)
+        ? value.externalId.slice(prefix.length)
+        : "";
+
+    if (
+      value.objectType !== "issue" ||
+      !isGiteeIssueReference(issueReference) ||
+      value.providerObjectKey !==
+        `gitee:issue:${value.externalId}`
+    ) {
+      throw snapshotInvalid();
+    }
+
+    return {
+      providerObjectKey: value.providerObjectKey,
+      provider: "gitee",
+      objectType: "issue",
+      externalId: value.externalId,
+      url: normalizeProviderUrl({
+        provider: "gitee",
+        objectType: "issue",
+        externalId: value.externalId,
         url: value.url,
         scope
       })
@@ -834,6 +896,7 @@ function normalizeSourceObject({
     url: normalizeProviderUrl({
       provider: "linear",
       objectType: "issue",
+      externalId: value.externalId,
       url: value.url,
       scope
     })
@@ -940,7 +1003,10 @@ function normalizeCandidateEventEnvelope({
       "occurredAt",
       "payload"
     ]) ||
-    !isBoundedString(event.eventId, ID_LIMIT) ||
+    !isBoundedString(
+      event.eventId,
+      PROVIDER_ID_LIMIT
+    ) ||
     event.workItemId !== mapping.workItemId ||
     event.type !== expectedType ||
     !CANDIDATE_EVENT_TYPES.has(expectedType) ||
@@ -964,23 +1030,30 @@ function normalizeCandidateEventEnvelope({
 function normalizeWorkItemCandidate({
   event,
   sourceObject,
+  revision,
   observed,
-  mapping
+  mapping,
+  scope
 }: {
   event: unknown;
   sourceObject: ProviderIssueFact["sourceObject"];
+  revision: ProviderRevision;
   observed: ProviderIssueObservation;
   mapping: ProviderSnapshotMapping;
+  scope: unknown;
 }): WorkItemCreatedEvent {
+  const expectedEventId =
+    sourceObject.provider === "github"
+      ? `github:issue-${sourceObject.externalId}:created`
+      : sourceObject.provider === "linear"
+        ? `linear:${sourceObject.externalId}:created`
+        : `gitee:issue:${sourceObject.externalId}:created`;
   const candidate = normalizeCandidateEventEnvelope({
     event,
     mapping,
     expectedType: "work_item.created",
     expectedOccurredAt: observed.createdAt,
-    expectedEventId:
-      sourceObject.provider === "github"
-        ? `github:issue-${sourceObject.externalId}:created`
-        : `linear:${sourceObject.externalId}:created`
+    expectedEventId
   });
   const payload = candidate.payload;
 
@@ -995,7 +1068,49 @@ function normalizeWorkItemCandidate({
     !sameStringSet(
       payload.requiredEvidence,
       mapping.requiredEvidence
-    ) ||
+    )
+  ) {
+    throw snapshotInvalid();
+  }
+
+  if (sourceObject.provider === "gitee") {
+    const expectedLink: RichExternalLink = {
+      providerObjectKey: sourceObject.providerObjectKey,
+      provider: "gitee",
+      objectType: "issue",
+      externalId: sourceObject.externalId,
+      scopeRef: normalizeGiteeScopeRef(scope),
+      url: sourceObject.url,
+      managedFields: [...mapping.managedFields],
+      lastObservation: {
+        revisionId: revision.id,
+        occurredAt: revision.occurredAt,
+        contentDigest: revision.contentDigest,
+        title: observed.title
+      }
+    };
+
+    if (
+      canonicalizeJson(payload.externalLink) !==
+      canonicalizeJson(expectedLink)
+    ) {
+      throw snapshotInvalid();
+    }
+
+    return {
+      eventId: candidate.eventId,
+      workItemId: candidate.workItemId,
+      type: "work_item.created",
+      occurredAt: candidate.occurredAt,
+      payload: {
+        title: observed.title,
+        requiredEvidence: [...mapping.requiredEvidence],
+        externalLink: expectedLink
+      }
+    };
+  }
+
+  if (
     !isPlainRecord(payload.externalLink) ||
     !hasExactKeys(payload.externalLink, [
       "provider",
@@ -1180,14 +1295,68 @@ function normalizeEvidenceCandidate({
   };
 }
 
+function normalizeGiteeScopeRef(
+  value: unknown
+): ProviderScopeRef {
+  return {
+    kind: "repository",
+    key:
+      `gitee:repository:${normalizeGiteeScopeRepository(value)}`
+  };
+}
+
+function normalizeGiteeScopeRepository(
+  value: unknown
+): string {
+  if (
+    !isPlainRecord(value) ||
+    !hasExactKeys(value, ["kind", "key"]) ||
+    value.kind !== "repository" ||
+    typeof value.key !== "string"
+  ) {
+    throw snapshotInvalid();
+  }
+
+  const match =
+    /^gitee:repository:([^/]+)\/([^/]+)$/.exec(value.key);
+  const owner = match?.[1]?.toLowerCase();
+  const repository = match?.[2]?.toLowerCase();
+
+  if (
+    !owner ||
+    !repository ||
+    !isGiteeRepositoryPart(owner) ||
+    !isGiteeRepositoryPart(repository)
+  ) {
+    throw snapshotInvalid();
+  }
+
+  return `${owner}/${repository}`;
+}
+
+function isGiteeRepositoryPart(value: string): boolean {
+  return (
+    value.length <= 100 &&
+    value !== "." &&
+    value !== ".." &&
+    /^[a-z0-9_.-]+$/.test(value)
+  );
+}
+
+function isGiteeIssueReference(value: string): boolean {
+  return /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(value);
+}
+
 function normalizeProviderUrl({
   provider,
   objectType,
+  externalId,
   url,
   scope
 }: {
   provider: ImportProvider;
   objectType: ProviderObjectType;
+  externalId: string;
   url: string;
   scope: unknown;
 }): string {
@@ -1250,6 +1419,28 @@ function normalizeProviderUrl({
       parsed.hostname.toLowerCase() !== "github.com" ||
       !scopeMatch ||
       !matchesObjectPath
+    ) {
+      throw snapshotInvalid();
+    }
+  } else if (provider === "gitee") {
+    const repository = normalizeGiteeScopeRepository(scope);
+    const issueReference = externalId.startsWith(
+      `${repository}#`
+    )
+      ? externalId.slice(repository.length + 1)
+      : "";
+    const [owner, name] = repository.split("/");
+    const pathSegments = parsed.pathname.split("/");
+
+    if (
+      parsed.hostname.toLowerCase() !== "gitee.com" ||
+      pathSegments.length !== 5 ||
+      pathSegments[0] !== "" ||
+      pathSegments[1]?.toLowerCase() !== owner ||
+      pathSegments[2]?.toLowerCase() !== name ||
+      pathSegments[3] !== "issues" ||
+      pathSegments[4] !== issueReference ||
+      !isGiteeIssueReference(issueReference)
     ) {
       throw snapshotInvalid();
     }
@@ -2219,7 +2410,11 @@ function isDeliveryFact(
 function isImportProvider(
   value: unknown
 ): value is ImportProvider {
-  return value === "github" || value === "linear";
+  return (
+    value === "github" ||
+    value === "linear" ||
+    value === "gitee"
+  );
 }
 
 function normalizeImportProvider(

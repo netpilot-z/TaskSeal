@@ -1571,9 +1571,9 @@ function validateAcceptanceDecisionEvent(
 function isRichExternalLink(
   value: unknown
 ): value is RichExternalLink {
-  return (
-    isRecord(value) &&
-    hasOnlyKeys(value, [
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
       "providerObjectKey",
       "provider",
       "objectType",
@@ -1582,17 +1582,24 @@ function isRichExternalLink(
       "url",
       "managedFields",
       "lastObservation"
-    ]) &&
-    isNonEmptyString(value.providerObjectKey) &&
-    isNonEmptyString(value.provider) &&
-    isNonEmptyString(value.objectType) &&
-    isNonEmptyString(value.externalId) &&
-    isProviderScopeRef(value.provider, value.scopeRef) &&
-    isHttpUrl(value.url) &&
-    isManagedFields(value.managedFields) &&
-    isObservation(value.lastObservation) &&
-    value.legacy === undefined
-  );
+    ]) ||
+    !isNonEmptyString(value.providerObjectKey) ||
+    !isNonEmptyString(value.provider) ||
+    !isNonEmptyString(value.objectType) ||
+    !isNonEmptyString(value.externalId) ||
+    !isProviderNeutralScopeRef(
+      value.provider,
+      value.scopeRef
+    ) ||
+    !isHttpUrl(value.url) ||
+    !isManagedFields(value.managedFields) ||
+    !isObservation(value.lastObservation) ||
+    value.legacy !== undefined
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 function isUpdateSource(
@@ -1703,6 +1710,22 @@ function isProviderScopeRef(
   }
 
   return false;
+}
+
+function isProviderNeutralScopeRef(
+  provider: string,
+  value: unknown
+): value is ScopeRef {
+  return (
+    isScopeRef(value) &&
+    value.key.startsWith(
+      `${provider}:${value.kind}:`
+    ) &&
+    (
+      value.parentKey === undefined ||
+      value.parentKey.startsWith(`${provider}:`)
+    )
+  );
 }
 
 function isScopedUuid(

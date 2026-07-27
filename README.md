@@ -85,6 +85,8 @@ node src/cli.ts inspect gitee \
   --title-management none
 ```
 
+Gitee snapshot 已可进入受控的本地 import application API，但必须同时通过 built-in trusted registry 与精确的 per-scope ImportPolicy v2；当前没有 CLI/HTTP apply route，也不会写回 Gitee。Generic rich/provider-managed `append` 固定拒绝，历史 journal replay 不依赖当前授权。
+
 GitHub 公开仓库可以匿名读取，也可通过 `GITHUB_TOKEN` 或 `GH_TOKEN` 提供只读 Token。Linear 使用 `LINEAR_API_KEY`，或使用 `LINEAR_ACCESS_TOKEN` 提供 OAuth access token；两者不能同时配置。
 
 Gitee 首版只支持匿名公开仓库，配置为 `config/project.json` 中的非敏感 `gitee.repository` 坐标，不读取或接受 Token。`gitee-health` 验证精确 repository scope；`inspect gitee` 只接受显式、区分大小写的 Issue reference，并固定输出 ProviderSnapshot v2。公共 `oschina/git-osc#I4` 只用于 smoke，不代表 TaskSeal 项目的 Gitee 坐标。
@@ -115,7 +117,7 @@ node src/cli.ts sync linear --dry-run
 8. Linear ticket dry-run 对相同输入确定性输出八个草案，网络请求与外部写入均为零。
 9. Linear、GitHub、Gitee 与飞书仍无真实写入；仓库 tickets 不会自动同步到 Linear。
 10. fixture 仍验证 revision-bound Artifact/Evidence 与幂等验收规则。
-11. Gitee 内置 AdapterManifest v1、`provider.health` 与 `work-item.read` 已实现，并用公共 `oschina/git-osc#I4` 完成匿名 smoke；Gitee preview、apply 与 candidate direct append 均失败关闭，飞书保留为后续异构压力测试。
+11. Gitee 内置 AdapterManifest v1、`provider.health` 与 `work-item.read` 已实现，并用公共 `oschina/git-osc#I4` 完成匿名 smoke；本地 preview/apply 只有在 trusted registry 与精确 per-scope policy 同时允许时可用，candidate direct append 固定拒绝，飞书保留为后续异构压力测试。
 12. Provider Observation v1 已建立独立、有界、原子替换的 JSON 读模型；按 operation start freshness 拒绝乱序覆盖，通过 observed snapshot-import façade 组合真实 preview/apply，并以 persistent-only `GET /api/providers` 暴露 `configured`、`scope_mismatch`、`sample_missing`、`snapshot_ready` 与 `sync_failed`。
 13. Control Room 已具备 Provider 五态卡片、最新 observation 列表、手动刷新、独立轮询、乱序响应防护和 stale 保留视图。
 14. 受控 Linear 写已具备 OperationPlan v1、人工审批绑定、严格状态机、client UUID correlation、resolved Team 校验和相邻 snapshot 防篡改合同；任何真实 mutation 仍未接入。

@@ -20,6 +20,9 @@ import type {
   ProviderObservationStoragePort
 } from "../src/application/provider-observation.ts";
 import {
+  createProviderIngressRegistry
+} from "../src/application/provider-ingress-registry.ts";
+import {
   previewSnapshotImport
 } from "../src/application/snapshot-import.ts";
 import {
@@ -342,6 +345,84 @@ test("observed snapshot import facade rejects a cross-provider snapshot before p
     (await observations.list()).providers[0]?.status,
     "scope_mismatch"
   );
+});
+
+test("observed preview uses the same explicitly injected ingress registry as apply", async () => {
+  const observations =
+    await ProviderObservationReadModel.open({
+      storage: new MemoryObservationStorage()
+    });
+  const coordinator = new ProviderObservationCoordinator({
+    observations,
+    clock: sequenceClock([
+      "2026-07-27T10:00:00.000Z",
+      "2026-07-27T10:00:00.100Z"
+    ])
+  });
+  const revoked =
+    createProviderIngressRegistry([]);
+  const facade = new ObservedSnapshotImportFacade({
+    provider: "github",
+    configuredTarget: TARGET,
+    boundScope: {
+      kind: "repository",
+      key: TARGET.key,
+      parentKey: null
+    },
+    coordinator,
+    providerIngressRegistry: revoked,
+    imports: {
+      async applySnapshotImport() {
+        throw new Error("not called");
+      }
+    }
+  });
+  let policyReads = 0;
+  const importPolicy = new Proxy({}, {
+    ownKeys() {
+      policyReads += 1;
+      return [];
+    }
+  });
+
+  await assert.rejects(
+    facade.previewSnapshotImport({
+      snapshot: createGitHubIssueSnapshot(),
+      workflow: createWorkflow(),
+      importPolicy
+    }),
+    hasCode("PROVIDER_INGRESS_FORBIDDEN")
+  );
+  assert.equal(policyReads, 0);
+});
+
+test("observed Gitee targets canonicalize configured repository case", async () => {
+  const observations =
+    await ProviderObservationReadModel.open({
+      storage: new MemoryObservationStorage()
+    });
+  const facade = new ObservedSnapshotImportFacade({
+    provider: "gitee",
+    configuredTarget: {
+      kind: "repository",
+      key: "gitee:repository:OSChina/Git-Osc"
+    },
+    boundScope: {
+      kind: "repository",
+      key: "gitee:repository:oschina/git-osc",
+      parentKey: null
+    },
+    coordinator: new ProviderObservationCoordinator({
+      observations
+    }),
+    imports: {
+      async applySnapshotImport() {
+        throw new Error("not called");
+      }
+    }
+  });
+
+  assert.ok(facade instanceof ObservedSnapshotImportFacade);
 });
 
 test("observed Linear preview rejects a different resolved Team scope from the configured binding", async () => {

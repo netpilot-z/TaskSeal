@@ -388,6 +388,8 @@ event ID 不包含 preview/apply 时间、actor、数组位置或本地路径。
 
 preview、apply 校验与 journal replay 必须调用同一个 event identity 契约重新生成 ID，不能从 ID 字符串前缀反推事件类型，也不能各自维护摘要算法。
 
+重算 event/action ID 还不够：ImportPlan reader 必须确认事件真正消费的 payload identity 与 action identity 相同。`work_item.created`/`external_link.linked` 的 rich link、`external_link.observed` 的 providerObjectKey/baseline/observation revision，以及 `work_item.updated` 的 source providerObjectKey/revision 都必须绑定所属 action；不得让 action 声明对象 A 而 Domain 实际修改对象 B。
+
 ## Preview 契约
 
 应用层公共接口：
@@ -422,6 +424,8 @@ preview、apply 校验与 journal replay 共享同一个 plan digest material �
 首版使用固定依赖顺序：`work_item.created` → `external_link.linked` → `external_link.observed` → `work_item.updated` → `artifact.linked` → `evidence.recorded`。同一类型按 `occurredAt`、event ID 排序。Snapshot 中出现 allowlist 以外的 candidate type 直接返回 `SNAPSHOT_INVALID`，不能由数组顺序决定执行权限。
 
 ### ImportPolicy v1
+
+> 兼容说明：本节记录初始 live policy 合同。当前新 preview/apply 已由 [规格 0014](./0014-provider-ingress-gate.md) 升级为 per-scope ImportPolicy v2；GitHub/Linear 继续使用以下 `PolicyBinding v1` 持久化合同，Gitee 使用显式 `PolicyBinding v2`。Plan/Batch/receipt 外层仍为 v1。
 
 ImportPolicy 是不含凭证的授权输入，唯一合法结构为：
 
@@ -737,7 +741,7 @@ provider read client
 | `src/connectors/*` | ProviderObjectKey、SourceRevision、裁剪 fact 与 candidate event；无 journal 依赖 |
 | `src/application/provider-inspection.ts` | scope/mapping 组装和 ProviderSnapshot v2；无写入 |
 | `src/application/snapshot-import.ts` | snapshot 校验、digest、纯 preview、ImportPlan |
-| `src/application/import-policy.ts` | ImportPolicy v1 规范化、PolicyBinding 与 policyDigest |
+| `src/application/import-policy.ts` | live ImportPolicy v2 规范化、PolicyBinding v1/v2 与 policyDigest |
 | `src/application/import-batch.ts` | ImportBatchRecord 语义校验、planDigest 重算与 receipt 投影 |
 | `src/domain/workflow.ts` | ExternalLink 唯一性、字段管理权、legacy upcast、新 canonical events 与全部领域不变量 |
 | `src/application/taskseal-service.ts` | write queue、policy/plan/revision 校验、完整 replay 编排、内存候选状态、receipt 幂等 |
@@ -763,6 +767,7 @@ Domain 不依赖 application、connector、storage、CLI 或 ProviderSnapshot。
 
 - Snapshot 是不可信输入；所有字符串、URL、数组、摘要和事件类型都必须有界并校验。
 - ImportPlan 的 action kind、reason、semantic target、event type、稳定排序和 warning/conflict 投影必须同构校验，不能只信任调用方重算的 digest。
+- ImportPlan 中 create/link/observe/baseline/update 的 payload provider object 与 source revision 必须和 action identity 同构校验，不能只重算 event/action/plan digest。
 - ImportPlan/ImportBatch 在构造完整 canonical JSON 前先执行深度、宽度和字节预算；journal 在 JSON.parse 前拒绝超限记录。
 - URL 只保留规范化 HTTPS 地址，不保留认证信息、query token 或 fragment。
 - Provider 凭证只存在于 read client 请求边界，不进入 snapshot、plan、receipt、journal 或错误。

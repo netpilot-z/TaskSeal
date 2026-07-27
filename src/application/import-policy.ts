@@ -2,8 +2,10 @@ import {
   digestCanonicalJson
 } from "../lib/canonical-json.ts";
 
+const PREVIEW_CAPABILITY = "snapshot.import.preview";
 const APPLY_CAPABILITY = "snapshot.import.apply";
-export type ImportProvider = "github" | "linear";
+
+export type ImportProvider = "github" | "linear" | "gitee";
 export type ProviderObjectType =
   | "check"
   | "issue"
@@ -19,26 +21,41 @@ export interface AllowedImportScope {
   provider: ImportProvider;
   scopeRef: ProviderScopeRef;
   objectTypes: ProviderObjectType[];
+  capabilities: {
+    "snapshot.import.preview": boolean;
+    "snapshot.import.apply": boolean;
+  };
 }
 
 export interface NormalizedImportPolicy {
-  schemaVersion: 1;
-  capabilities: {
-    "snapshot.import.apply": boolean;
-  };
+  schemaVersion: 2;
   allowedScopes: AllowedImportScope[];
 }
 
-export interface PolicyBinding {
+export interface PolicyBindingV1 {
   schemaVersion: 1;
   capability: "snapshot.import.apply";
   applyAllowed: boolean;
-  provider: ImportProvider;
+  provider: "github" | "linear";
   scopeRef: ProviderScopeRef;
   requiredObjectTypes: ProviderObjectType[];
 }
 
+export interface PolicyBindingV2 {
+  schemaVersion: 2;
+  capability: "snapshot.import.apply";
+  applyAllowed: boolean;
+  provider: "gitee";
+  scopeRef: ProviderScopeRef;
+  requiredObjectTypes: ProviderObjectType[];
+}
+
+export type PolicyBinding =
+  | PolicyBindingV1
+  | PolicyBindingV2;
+
 export interface BoundImportPolicy {
+  previewAllowed: boolean;
   policyBinding: PolicyBinding;
   policyDigest: string;
 }
@@ -47,7 +64,8 @@ const PROVIDER_OBJECT_TYPES: Readonly<
   Record<ImportProvider, ReadonlySet<string>>
 > = {
   github: new Set(["check", "issue", "pull_request"]),
-  linear: new Set(["issue"])
+  linear: new Set(["issue"]),
+  gitee: new Set(["issue"])
 };
 
 export function normalizeImportPolicy(
@@ -57,16 +75,9 @@ export function normalizeImportPolicy(
     !isPlainRecord(importPolicy) ||
     !hasOnlyKeys(importPolicy, [
       "schemaVersion",
-      "capabilities",
       "allowedScopes"
     ]) ||
-    importPolicy.schemaVersion !== 1 ||
-    !isPlainRecord(importPolicy.capabilities) ||
-    !hasOnlyKeys(importPolicy.capabilities, [
-      APPLY_CAPABILITY
-    ]) ||
-    typeof importPolicy.capabilities[APPLY_CAPABILITY] !==
-      "boolean" ||
+    importPolicy.schemaVersion !== 2 ||
     !isDenseArray(importPolicy.allowedScopes) ||
     importPolicy.allowedScopes.length > 32
   ) {
@@ -79,7 +90,12 @@ export function normalizeImportPolicy(
   const seenScopes = new Set<string>();
 
   for (const scope of normalizedScopes) {
-    const identity = `${scope.provider}:${scope.scopeRef.key}`;
+    const identity = JSON.stringify([
+      scope.provider,
+      scope.scopeRef.kind,
+      scope.scopeRef.key,
+      scope.scopeRef.parentKey ?? ""
+    ]);
 
     if (seenScopes.has(identity)) {
       throw invalidPolicy();
@@ -91,11 +107,7 @@ export function normalizeImportPolicy(
   normalizedScopes.sort(compareAllowedScopes);
 
   return {
-    schemaVersion: 1,
-    capabilities: {
-      [APPLY_CAPABILITY]:
-        importPolicy.capabilities[APPLY_CAPABILITY]
-    },
+    schemaVersion: 2,
     allowedScopes: normalizedScopes
   };
 }
@@ -147,16 +159,19 @@ export function buildPolicyBinding({
   }
 
   const policyBinding = normalizePolicyBinding({
-    schemaVersion: 1,
+    schemaVersion:
+      normalizedProvider === "gitee" ? 2 : 1,
     capability: APPLY_CAPABILITY,
     applyAllowed:
-      normalizedPolicy.capabilities[APPLY_CAPABILITY],
+      allowedScope.capabilities[APPLY_CAPABILITY],
     provider: normalizedProvider,
     scopeRef: normalizedScopeRef,
     requiredObjectTypes: normalizedTypes
   });
 
   return {
+    previewAllowed:
+      allowedScope.capabilities[PREVIEW_CAPABILITY],
     policyBinding,
     policyDigest: computePolicyDigest(policyBinding)
   };
@@ -175,16 +190,27 @@ export function normalizePolicyBinding(
       "scopeRef",
       "requiredObjectTypes"
     ]) ||
-    value.schemaVersion !== 1 ||
+    (
+      value.schemaVersion !== 1 &&
+      value.schemaVersion !== 2
+    ) ||
     value.capability !== APPLY_CAPABILITY ||
     typeof value.applyAllowed !== "boolean" ||
-    !isProvider(value.provider)
+    !isProvider(value.provider) ||
+    (
+      value.schemaVersion === 1 &&
+      value.provider === "gitee"
+    ) ||
+    (
+      value.schemaVersion === 2 &&
+      value.provider !== "gitee"
+    )
   ) {
     throw invalidPolicy();
   }
 
-  return {
-    schemaVersion: 1,
+  const normalized = {
+    schemaVersion: value.schemaVersion,
     capability: APPLY_CAPABILITY,
     applyAllowed: value.applyAllowed,
     provider: value.provider,
@@ -197,6 +223,8 @@ export function normalizePolicyBinding(
       value.requiredObjectTypes
     )
   };
+
+  return normalized as PolicyBinding;
 }
 
 export function computePolicyDigest(
@@ -215,7 +243,8 @@ function normalizeAllowedScope(
     !hasOnlyKeys(value, [
       "provider",
       "scopeRef",
-      "objectTypes"
+      "objectTypes",
+      "capabilities"
     ]) ||
     !isProvider(value.provider)
   ) {
@@ -231,7 +260,35 @@ function normalizeAllowedScope(
     objectTypes: normalizeObjectTypes(
       value.provider,
       value.objectTypes
+    ),
+    capabilities: normalizeCapabilities(
+      value.capabilities
     )
+  };
+}
+
+function normalizeCapabilities(
+  value: unknown
+): AllowedImportScope["capabilities"] {
+  if (
+    !isPlainRecord(value) ||
+    !hasOnlyKeys(value, [
+      PREVIEW_CAPABILITY,
+      APPLY_CAPABILITY
+    ]) ||
+    typeof value[PREVIEW_CAPABILITY] !== "boolean" ||
+    typeof value[APPLY_CAPABILITY] !== "boolean" ||
+    (
+      value[APPLY_CAPABILITY] &&
+      !value[PREVIEW_CAPABILITY]
+    )
+  ) {
+    throw invalidPolicy();
+  }
+
+  return {
+    [PREVIEW_CAPABILITY]: value[PREVIEW_CAPABILITY],
+    [APPLY_CAPABILITY]: value[APPLY_CAPABILITY]
   };
 }
 
@@ -256,29 +313,49 @@ function normalizeScopeRef(
       throw invalidPolicy();
     }
 
-    const owner = match?.[1];
-    const repository = match?.[2];
-
-    if (!owner || !repository) {
-      throw invalidPolicy();
-    }
-
-    const normalizedOwner = owner.toLowerCase();
-    const normalizedRepository = repository.toLowerCase();
+    const owner = match[1]?.toLowerCase();
+    const repository = match[2]?.toLowerCase();
 
     if (
+      !owner ||
+      !repository ||
       !/^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(
-        normalizedOwner
+        owner
       ) ||
-      !/^[a-z0-9._-]{1,100}$/.test(normalizedRepository)
+      !/^[a-z0-9._-]{1,100}$/.test(repository)
     ) {
       throw invalidPolicy();
     }
 
     return {
       kind: "repository",
-      key:
-        `github:repository:${normalizedOwner}/${normalizedRepository}`
+      key: `github:repository:${owner}/${repository}`
+    };
+  }
+
+  if (
+    provider === "gitee" &&
+    hasOnlyKeys(value, ["kind", "key"]) &&
+    value.kind === "repository" &&
+    typeof value.key === "string"
+  ) {
+    const match =
+      /^gitee:repository:([^/]+)\/([^/]+)$/.exec(value.key);
+    const owner = match?.[1]?.toLowerCase();
+    const repository = match?.[2]?.toLowerCase();
+
+    if (
+      !owner ||
+      !repository ||
+      !isGiteeRepositoryPart(owner) ||
+      !isGiteeRepositoryPart(repository)
+    ) {
+      throw invalidPolicy();
+    }
+
+    return {
+      kind: "repository",
+      key: `gitee:repository:${owner}/${repository}`
     };
   }
 
@@ -361,6 +438,15 @@ function normalizeObjectTypes(
   return normalized.toSorted();
 }
 
+function isGiteeRepositoryPart(value: string): boolean {
+  return (
+    value.length <= 100 &&
+    value !== "." &&
+    value !== ".." &&
+    /^[a-z0-9_.-]+$/.test(value)
+  );
+}
+
 function scopeRefsEqual(
   left: ProviderScopeRef,
   right: ProviderScopeRef
@@ -378,7 +464,12 @@ function compareAllowedScopes(
 ): number {
   return (
     compareStrings(left.provider, right.provider) ||
-    compareStrings(left.scopeRef.key, right.scopeRef.key)
+    compareStrings(left.scopeRef.kind, right.scopeRef.kind) ||
+    compareStrings(left.scopeRef.key, right.scopeRef.key) ||
+    compareStrings(
+      left.scopeRef.parentKey ?? "",
+      right.scopeRef.parentKey ?? ""
+    )
   );
 }
 
@@ -484,7 +575,11 @@ function normalizeProvider(value: unknown): ImportProvider {
 }
 
 function isProvider(value: unknown): value is ImportProvider {
-  return value === "github" || value === "linear";
+  return (
+    value === "github" ||
+    value === "linear" ||
+    value === "gitee"
+  );
 }
 
 function isProviderObjectType(

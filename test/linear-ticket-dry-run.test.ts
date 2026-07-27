@@ -197,10 +197,11 @@ test("the repository milestone produces drafts for every current T ticket", asyn
       "T11.1",
       "T11.2",
       "T11.3",
-      "T11.4"
+      "T11.4",
+      "T11.5"
     ]
   );
-  assert.equal(nextPlan.issueCount, 10);
+  assert.equal(nextPlan.issueCount, 11);
   assert.deepEqual(
     requireItem(
       nextPlan.drafts,

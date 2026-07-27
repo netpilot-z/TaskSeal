@@ -10,14 +10,14 @@ TaskSeal 让人类和 AI Agent 的“已完成”变成有证据、可验收、�
 
 - fixture：`Linear WorkItem → Codex Attempt → GitHub Artifact/Evidence → AcceptanceDecision`
 - persistent：`Local WorkItem → Codex App Server Attempt → Control Room`
-- provider import：`GitHub/Linear read-only fact → ProviderSnapshot v2 → deterministic ImportPlan → atomic local batch → ImportReceipt`
-- provider extension：已以 Gitee 的匿名 `provider.health`/`work-item.read` 提取内置 Adapter Contract v1；下一步用飞书多维表格做异构压力测试
+- provider import：`GitHub/Linear/Gitee read-only fact → trusted ingress registry → per-scope ImportPolicy v2 → deterministic ImportPlan → atomic local batch → ImportReceipt`
+- provider extension：已以 Gitee 提取内置 Adapter Contract v1，并验证 Provider-neutral rich link 与受控本地 import；下一步用飞书多维表格做异构压力测试
 - provider observation：`inspection/preview/import → redacted latest-state model → GET /api/providers`，独立于 canonical journal
 - controlled external write（fake 验证中）：`OperationPlan → human approval → versioned Operation Journal → fake submit → client UUID reconciliation → safe Control Room projection`
 
-本阶段不构建通用 Agent 市场、多租户权限、计费、生产数据库或真实外部写入。Snapshot apply 当前只提供默认关闭的 application API；没有可信 ImportPolicy provider 时不能提交，也尚未开放 CLI/HTTP apply 入口。Linear workspace `netpilot-z`、team `netpilot` 与 project `TaskSeal` 是已只读验证的真实坐标；仓库 tickets 默认不自动同步。
+本阶段不构建通用 Agent 市场、多租户权限、计费、生产数据库或真实外部写入。Snapshot apply 当前只提供默认关闭的 application API；没有可信 ImportPolicy provider 时不能提交，也尚未开放 CLI/HTTP apply 入口。当前 registry 证明 Provider/scope 授权和离线可验证的 locator 结构，不把公开 plan digest 当作 GitHub/Linear 远端 ID↔URL provenance；该能力由 Issue `#48` 另行设计。Linear workspace `netpilot-z`、team `netpilot` 与 project `TaskSeal` 是已只读验证的真实坐标；仓库 tickets 默认不自动同步。
 
-当前真实环境中，Linear Issue `NP-1` 已完成成功 snapshot；GitHub Issue `#1`、Draft PR `#2` 与 PR head 上的 `tests` Check 已完成完整只读 snapshot 和真实内存重放。Gitee 公共 `oschina/git-osc#I4` 已完成匿名 health/read smoke，输出 repository-scoped rich candidate，但 preview、apply 与 direct append 都不可用，journal 哈希未变化。Issue、PR 与 CI 的创建均来自操作者明确授权；TaskSeal 不会从只读检查隐式创建、更新、合并或关闭外部对象。
+当前真实环境中，Linear Issue `NP-1` 已完成成功 snapshot；GitHub Issue `#1`、Draft PR `#2` 与 PR head 上的 `tests` Check 已完成完整只读 snapshot 和真实内存重放。Gitee 公共 `oschina/git-osc#I4` 已完成匿名 health/read smoke；自动化测试已证明它只有在 trusted registry 与精确 per-scope policy 同时允许时才能执行本地 preview/apply，direct rich append 仍固定拒绝。该 apply 只写本地 canonical journal，不写回 Gitee。Issue、PR 与 CI 的创建均来自操作者明确授权；TaskSeal 不会从只读检查隐式创建、更新、合并或关闭外部对象。
 
 Provider Observation v1 已使用独立 `.taskseal/provider-observations.json` 保存每个 configured target 的最新脱敏状态。它按 operation start freshness 拒绝晚返回的旧结果，先对账 configured target 与 observed scope，再通过 persistent-only `GET /api/providers` 暴露五态；真实 preview/apply 由持有 verified resolved-scope binding 的 observed application façade 组合，跨 Provider/foreign scope 在业务提交前拒绝，不保存 raw payload、标题、URL、凭证或错误正文，也不会进入 Workflow journal。
 
@@ -67,7 +67,7 @@ Provider status v2 已由 application façade 并行读取 Provider Observation 
 10. `ProviderObjectKey` 在全部 WorkItem 中唯一；一个 WorkItem 可以有多个 ExternalLink，但同一个 canonical 字段最多由一个 ExternalLink 管理。
 11. snapshot import 只能追加 canonical events，不能直接覆盖 Workflow；preview 永远零写入，apply 必须绑定已审查的 plan digest 和当前 Workflow digest。
 12. 一个 ImportPlan 要么连同审计回执完整提交，要么完全不可见；WorkItem/ExternalLink 元数据更新不得绕过专用 canonical events 修改或清空 Attempt、Artifact、Evidence 或 AcceptanceDecision。
-13. 在所有 ExternalLink journal ingress 都具备可信 registry gate 前，领域层继续显式拒绝未知 Provider 的 rich/managed link；既有 legacy reference 保持非托管且不可 baseline。Provider-agnostic 重构必须与 per-provider/per-scope apply 授权一起完成，不能先放宽领域再补门禁。
+13. 新的 rich/provider-managed ExternalLink 只能通过 trusted registry、per-provider/per-scope ImportPolicy v2 与受控 atomic import batch 进入 journal；generic direct append 固定拒绝，replay 不读取当前授权。领域层只校验 Provider-neutral 结构和业务不变量；既有 arbitrary legacy reference 保持非托管，legacy baseline 始终只识别 GitHub/Linear。
 14. Provider Observation 的损坏、越界路径、写失败或未知提交结果不得改变 inspection、preview、import 或 Workflow 的业务结果；它只能让 Provider 查询面降级或要求重新打开。
 15. 外部写必须先持久化审批与 submitting version，再消费一次 transport call；无法证明未派发的结果一律进入 OutcomeUnknown，重启或重试不得绕过 client UUID 对账。Operation Journal replay 必须同时校验单条 snapshot 和相邻状态转换，不能只凭 version 连续接受审批人、plan 或既有审计字段漂移。
 16. Provider status 组合必须保持 Observation 与 Operation 的独立所有权和 source-local freshness；不得跨来源比较时间戳、把写状态覆盖到 Observation 五态、返回 partial success，或把 combined revision 描述成全局可排序版本。

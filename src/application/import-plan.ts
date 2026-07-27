@@ -86,6 +86,7 @@ const PLAN_DEPTH_LIMIT = 16;
 const PLAN_ACTION_LIMIT = 256;
 const PLAN_EVENT_LIMIT = 256;
 const ID_LIMIT = 256;
+const SOURCE_OBJECT_KEY_LIMIT = 512;
 const EVENT_ID_PREFIX = new Map<ImportEventType, string>([
   ["work_item.created", "create"],
   ["external_link.linked", "link"],
@@ -258,9 +259,13 @@ export function deriveImportActionId(identity: unknown): string {
   if (
     !isPlainRecord(identity) ||
     !hasExactKeys(identity, ACTION_IDENTITY_FIELDS) ||
-    ACTION_IDENTITY_FIELDS.some(
-      (field) => !isBoundedString(identity[field], ID_LIMIT)
-    )
+    !isBoundedString(identity.workItemId, ID_LIMIT) ||
+    !isBoundedString(
+      identity.sourceObjectKey,
+      SOURCE_OBJECT_KEY_LIMIT
+    ) ||
+    !isBoundedString(identity.sourceRevisionId, ID_LIMIT) ||
+    !isBoundedString(identity.semanticTarget, ID_LIMIT)
   ) {
     throw new ImportPlanError(
       "IMPORT_ACTION_IDENTITY_INVALID",
@@ -646,7 +651,10 @@ function isNormalizedAction(
     !isDigest(value.actionId) ||
     !isImportActionKind(value.kind) ||
     !isBoundedString(value.workItemId, ID_LIMIT) ||
-    !isBoundedString(value.sourceObjectKey, ID_LIMIT) ||
+    !isBoundedString(
+      value.sourceObjectKey,
+      SOURCE_OBJECT_KEY_LIMIT
+    ) ||
     !isBoundedString(value.sourceRevisionId, ID_LIMIT) ||
     !isBoundedString(value.semanticTarget, ID_LIMIT) ||
     !isBoundedString(value.reasonCode, ID_LIMIT) ||
@@ -863,7 +871,76 @@ function eventActionMatches(
   return (
     EVENT_ACTION_RULES.get(event.type)?.has(
       actionRuleKey(action)
-    ) === true
+    ) === true &&
+    eventPayloadIdentityMatchesAction(action, event)
+  );
+}
+
+function eventPayloadIdentityMatchesAction(
+  action: ImportAction,
+  event: ImportPlanEvent
+): boolean {
+  if (event.type === "work_item.created") {
+    return richLinkIdentityMatchesAction(
+      event.payload.externalLink,
+      action
+    );
+  }
+
+  if (event.type === "external_link.linked") {
+    return richLinkIdentityMatchesAction(
+      event.payload.link,
+      action
+    );
+  }
+
+  if (event.type === "external_link.observed") {
+    const observation = event.payload.observation;
+    const baseline = event.payload.baseline;
+
+    return (
+      event.payload.providerObjectKey ===
+        action.sourceObjectKey &&
+      isPlainRecord(observation) &&
+      observation.revisionId ===
+        action.sourceRevisionId &&
+      (
+        event.payload.expectedRevisionId !== null ||
+        (
+          isPlainRecord(baseline) &&
+          baseline.providerObjectKey ===
+            action.sourceObjectKey
+        )
+      )
+    );
+  }
+
+  if (event.type === "work_item.updated") {
+    const source = event.payload.source;
+    return (
+      isPlainRecord(source) &&
+      source.providerObjectKey ===
+        action.sourceObjectKey &&
+      source.revisionId === action.sourceRevisionId
+    );
+  }
+
+  return true;
+}
+
+function richLinkIdentityMatchesAction(
+  value: unknown,
+  action: ImportAction
+): boolean {
+  if (!isPlainRecord(value)) {
+    return false;
+  }
+
+  const observation = value.lastObservation;
+  return (
+    value.providerObjectKey === action.sourceObjectKey &&
+    isPlainRecord(observation) &&
+    observation.revisionId === action.sourceRevisionId
   );
 }
 

@@ -21,9 +21,15 @@ import type {
   EventJournal,
   SnapshotImportApplyResult
 } from "../src/application/taskseal-service.ts";
+import {
+  computeImportPlanDigest
+} from "../src/application/import-plan.ts";
 import type {
   ImportPlan
 } from "../src/application/import-plan.ts";
+import {
+  previewSnapshotImport
+} from "../src/application/snapshot-import.ts";
 import {
   applyEvent,
   createWorkflow
@@ -38,6 +44,7 @@ import {
 } from "../src/storage/event-journal.ts";
 import {
   createActor,
+  createGitHubDeliverySnapshot,
   createGitHubIssueSnapshot,
   createImportPolicy,
   createPreviewPlan
@@ -205,7 +212,6 @@ test("tampered, forbidden, blocked, and stale plans perform zero batch writes", 
   const revokedPolicy = createImportPolicy({
     applyAllowed: false
   });
-  revokedPolicy.allowedScopes = [];
   const forbiddenService = await openService(
     forbiddenJournal,
     revokedPolicy
@@ -256,6 +262,249 @@ test("tampered, forbidden, blocked, and stale plans perform zero batch writes", 
     hasCode("IMPORT_PLAN_BLOCKED")
   );
   assert.equal(blockedJournal.commitCalls, 0);
+});
+
+test("apply rejects artifact and evidence URLs outside the bound repository before policy or journal access", async () => {
+  const baseEvents: CanonicalEvent[] = [
+    createLocalWorkItemEvent("TS-1"),
+    {
+      eventId: "local:TS-1:run-1:started",
+      workItemId: "TS-1",
+      type: "attempt.started",
+      occurredAt: "2026-07-26T08:02:30.000Z",
+      payload: {
+        attemptId: "run-1",
+        agentId: "codex"
+      }
+    }
+  ];
+  const workflow = baseEvents.reduce(
+    (current, event) => applyEvent(current, event),
+    createWorkflow()
+  );
+  const policy = createImportPolicy({
+    objectTypes: ["check", "pull_request"]
+  });
+  const original = previewSnapshotImport({
+    snapshot: createGitHubDeliverySnapshot(),
+    workflow,
+    importPolicy: policy
+  });
+
+  for (const type of [
+    "artifact.linked",
+    "evidence.recorded"
+  ] as const) {
+    const forged = structuredClone(original);
+    const event = forged.events.find(
+      (candidate) => candidate.type === type
+    );
+    assert.ok(event);
+    event.payload.url =
+      type === "artifact.linked"
+        ? "https://github.com/foreign/repo/pull/2"
+        : "https://github.com/foreign/repo/actions/runs/7";
+    forged.planDigest = computeImportPlanDigest(forged);
+
+    let policyCalls = 0;
+    const journal = new MemoryJournal(baseEvents);
+    const service = await TaskSealService.open({
+      journal,
+      importPolicyProvider: () => {
+        policyCalls += 1;
+        return policy;
+      },
+      clock: () => new Date(APPLIED_AT)
+    });
+
+    await assert.rejects(
+      applyPlan(service, forged),
+      hasCode("IMPORT_PLAN_TAMPERED")
+    );
+    assert.equal(policyCalls, 0);
+    assert.equal(journal.commitCalls, 0);
+  }
+});
+
+test("workflow drift is classified as stale before projected ingress simulation", async () => {
+  const plan = createPreviewPlan();
+  const journal = new MemoryJournal([
+    createLocalWorkItemEvent("TS-1")
+  ]);
+  let policyCalls = 0;
+  const policy = createImportPolicy();
+  const service = await TaskSealService.open({
+    journal,
+    importPolicyProvider: () => {
+      policyCalls += 1;
+      return policy;
+    },
+    clock: () => new Date(APPLIED_AT)
+  });
+
+  await assert.rejects(
+    applyPlan(service, plan),
+    hasCode("IMPORT_PLAN_STALE")
+  );
+  assert.equal(policyCalls, 1);
+  assert.equal(journal.commitCalls, 0);
+});
+
+test("legacy baseline and managed title update apply as one authorized batch", async () => {
+  const legacyEvent = createLegacyGitHubWorkItemEvent();
+  const workflow = applyEvent(
+    createWorkflow(),
+    legacyEvent
+  );
+  const policy = createImportPolicy();
+  const plan = previewSnapshotImport({
+    snapshot: createGitHubIssueSnapshot({
+      title: "Current issue title",
+      revisionId: "2026-07-26T08:02:00.000Z",
+      revisionOccurredAt:
+        "2026-07-26T08:02:00.000Z"
+    }),
+    workflow,
+    importPolicy: policy
+  });
+  const journal = new MemoryJournal([legacyEvent]);
+  const service = await openService(journal, policy);
+
+  const result = await applyPlan(service, plan);
+  const workItem = service.getWorkItem("TS-1");
+
+  assert.equal(result.resolution, "committed");
+  assert.equal(journal.commitCalls, 1);
+  assert.equal(workItem?.title, "Current issue title");
+  assert.equal(
+    workItem?.externalLinks[0]?.legacy,
+    undefined
+  );
+});
+
+test("baseline, refresh, and title-update payload identities stay bound to their actions before policy access", async () => {
+  const policy = createImportPolicy();
+  const richInitialPlan = previewSnapshotImport({
+    snapshot: createGitHubIssueSnapshot({
+      title: "Initial issue title",
+      revisionId: "2026-07-26T08:00:00.000Z",
+      revisionOccurredAt:
+        "2026-07-26T08:00:00.000Z"
+    }),
+    workflow: createWorkflow(),
+    importPolicy: policy
+  });
+  const richWorkflow = richInitialPlan.events.reduce(
+    applyEvent,
+    createWorkflow()
+  );
+  const refreshPlan = previewSnapshotImport({
+    snapshot: createGitHubIssueSnapshot({
+      title: "Updated issue title",
+      revisionId: "2026-07-26T08:02:00.000Z",
+      revisionOccurredAt:
+        "2026-07-26T08:02:00.000Z"
+    }),
+    workflow: richWorkflow,
+    importPolicy: policy
+  });
+  const legacyEvent = createLegacyGitHubWorkItemEvent();
+  const legacyWorkflow = applyEvent(
+    createWorkflow(),
+    legacyEvent
+  );
+  const baselinePlan = previewSnapshotImport({
+    snapshot: createGitHubIssueSnapshot({
+      managedFields: [],
+      revisionId: "2026-07-26T08:02:00.000Z",
+      revisionOccurredAt:
+        "2026-07-26T08:02:00.000Z"
+    }),
+    workflow: legacyWorkflow,
+    importPolicy: policy
+  });
+
+  const cases = [
+    {
+      plan: baselinePlan,
+      records: [legacyEvent],
+      mutate(plan: ImportPlan) {
+        const event = plan.events.find(
+          (candidate) =>
+            candidate.type ===
+            "external_link.observed"
+        );
+        assert.ok(event);
+        const baseline = event.payload.baseline as {
+          providerObjectKey: string;
+        };
+        baseline.providerObjectKey =
+          "github:issue:999";
+      }
+    },
+    {
+      plan: refreshPlan,
+      records: richInitialPlan.events,
+      mutate(plan: ImportPlan) {
+        const event = plan.events.find(
+          (candidate) =>
+            candidate.type ===
+            "external_link.observed"
+        );
+        assert.ok(event);
+        const observation =
+          event.payload.observation as {
+            revisionId: string;
+          };
+        observation.revisionId =
+          "2026-07-26T09:00:00.000Z";
+      }
+    },
+    {
+      plan: refreshPlan,
+      records: richInitialPlan.events,
+      mutate(plan: ImportPlan) {
+        const event = plan.events.find(
+          (candidate) =>
+            candidate.type === "work_item.updated"
+        );
+        assert.ok(event);
+        const source = event.payload.source as {
+          providerObjectKey: string;
+          revisionId: string;
+        };
+        source.providerObjectKey =
+          "github:issue:999";
+        source.revisionId =
+          "2026-07-26T09:00:00.000Z";
+      }
+    }
+  ];
+
+  for (const scenario of cases) {
+    const forged = structuredClone(scenario.plan);
+    scenario.mutate(forged);
+    forged.planDigest = computeImportPlanDigest(forged);
+    let policyCalls = 0;
+    const journal = new MemoryJournal(
+      scenario.records
+    );
+    const service = await TaskSealService.open({
+      journal,
+      importPolicyProvider: () => {
+        policyCalls += 1;
+        return policy;
+      },
+      clock: () => new Date(APPLIED_AT)
+    });
+
+    await assert.rejects(
+      applyPlan(service, forged),
+      hasCode("IMPORT_PLAN_TAMPERED")
+    );
+    assert.equal(policyCalls, 0);
+    assert.equal(journal.commitCalls, 0);
+  }
 });
 
 test("a previewed legacy baseline authority conflict reaches the blocked decision", async () => {

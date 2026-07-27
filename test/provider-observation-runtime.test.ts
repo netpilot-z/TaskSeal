@@ -15,6 +15,9 @@ import {
   ObservedSnapshotImportFacade
 } from "../src/application/observed-snapshot-import.ts";
 import {
+  createProviderIngressRegistry
+} from "../src/application/provider-ingress-registry.ts";
+import {
   createLocalProviderObservationRuntime,
   runCli,
   startPersistentControlRoom
@@ -26,6 +29,8 @@ import {
   createWorkflow
 } from "../src/domain/workflow.ts";
 import {
+  createGitHubIssueSnapshot,
+  createImportPolicy,
   createLinearImportPolicy,
   createLinearIssueSnapshot
 } from "../test-support/snapshot-import-fixtures.ts";
@@ -105,6 +110,34 @@ test("local Provider observation runtime seeds configured targets and preserves 
   assert.equal(
     (await reopened.readModel.list()).providers[0]?.status,
     "snapshot_ready"
+  );
+});
+
+test("local observation composition forwards one custom ingress registry to preview", async (t) => {
+  const cwd = await temporaryProject(t);
+  const runtime =
+    await createLocalProviderObservationRuntime({
+      cwd,
+      providerIngressRegistry:
+        createProviderIngressRegistry([])
+    });
+  const facade =
+    await runtime.createSnapshotImportFacade({
+      provider: "github",
+      imports: {
+        async applySnapshotImport() {
+          throw new Error("not called");
+        }
+      }
+    });
+
+  await assert.rejects(
+    facade.previewSnapshotImport({
+      snapshot: createGitHubIssueSnapshot(),
+      workflow: createWorkflow(),
+      importPolicy: createImportPolicy()
+    }),
+    hasCode("PROVIDER_INGRESS_FORBIDDEN")
   );
 });
 
