@@ -1,3 +1,7 @@
+import {
+  digestProviderFactContent
+} from "../lib/provider-snapshot.js";
+
 export function normalizeGitHubIssue(issue, mapping) {
   requireIdentifier(issue.id, "issue id");
   requireIdentifier(issue.number, "issue number");
@@ -31,6 +35,27 @@ export function normalizeGitHubIssue(issue, mapping) {
   };
 }
 
+export function normalizeGitHubIssueFact(issue, mapping) {
+  const candidateEvent = normalizeGitHubIssue(issue, mapping);
+
+  return createProviderFact({
+    sourceObject: {
+      providerObjectKey: `github:issue:${issue.id}`,
+      provider: "github",
+      objectType: "issue",
+      externalId: String(issue.id),
+      url: issue.html_url
+    },
+    revisionId: issue.updated_at,
+    revisionOccurredAt: issue.updated_at,
+    observed: {
+      title: issue.title,
+      createdAt: issue.created_at
+    },
+    candidateEvent
+  });
+}
+
 export function normalizeGitHubPullRequest(pullRequest, mapping) {
   requireIdentifier(pullRequest.id, "pull request id");
   requireHttpUrl(pullRequest.html_url, "pull request html_url");
@@ -54,6 +79,33 @@ export function normalizeGitHubPullRequest(pullRequest, mapping) {
       url: pullRequest.html_url
     }
   };
+}
+
+export function normalizeGitHubPullRequestFact(
+  pullRequest,
+  mapping
+) {
+  const candidateEvent = normalizeGitHubPullRequest(
+    pullRequest,
+    mapping
+  );
+
+  return createProviderFact({
+    sourceObject: {
+      providerObjectKey:
+        `github:pull_request:${pullRequest.id}`,
+      provider: "github",
+      objectType: "pull_request",
+      externalId: String(pullRequest.id),
+      url: pullRequest.html_url
+    },
+    revisionId: pullRequest.updated_at,
+    revisionOccurredAt: pullRequest.updated_at,
+    observed: {
+      headRevision: pullRequest.head.sha
+    },
+    candidateEvent
+  });
 }
 
 export function normalizeGitHubCheck(check, mapping) {
@@ -87,6 +139,50 @@ export function normalizeGitHubCheck(check, mapping) {
       url: check.details_url
     }
   };
+}
+
+export function normalizeGitHubCheckFact(check, mapping) {
+  const candidateEvent = normalizeGitHubCheck(check, mapping);
+
+  return createProviderFact({
+    sourceObject: {
+      providerObjectKey: `github:check:${check.id}`,
+      provider: "github",
+      objectType: "check",
+      externalId: String(check.id),
+      url: check.details_url
+    },
+    revisionId: check.completed_at,
+    revisionOccurredAt: check.completed_at,
+    observed: {
+      headRevision: check.head_sha,
+      outcome:
+        check.conclusion === "success" ? "passed" : "failed"
+    },
+    candidateEvent
+  });
+}
+
+function createProviderFact({
+  sourceObject,
+  revisionId,
+  revisionOccurredAt,
+  observed,
+  candidateEvent
+}) {
+  const fact = {
+    sourceObject,
+    revision: {
+      id: revisionId,
+      occurredAt: revisionOccurredAt
+    },
+    observed,
+    candidateEvent
+  };
+
+  fact.revision.contentDigest =
+    digestProviderFactContent(fact);
+  return fact;
 }
 
 function requireIdentifier(value, field) {

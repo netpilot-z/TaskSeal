@@ -3,8 +3,33 @@ import test from "node:test";
 
 import {
   applyEvent,
+  classifyProcessedEvent,
   createWorkflow
 } from "../src/domain/workflow.js";
+
+test("the domain exposes the single processed-event classification contract", () => {
+  const event = createLegacyWorkItemEvent();
+  const workflow = applyEvent(createWorkflow(), event);
+
+  assert.equal(
+    classifyProcessedEvent(workflow, structuredClone(event)),
+    "EXACT_EVENT_DUPLICATE"
+  );
+  assert.equal(
+    classifyProcessedEvent(workflow, {
+      ...event,
+      occurredAt: "2026-07-26T08:02:00.000Z"
+    }),
+    "EVENT_ID_CONFLICT"
+  );
+  assert.equal(
+    classifyProcessedEvent(workflow, {
+      ...event,
+      eventId: "github:issue-502:created"
+    }),
+    null
+  );
+});
 
 test("legacy GitHub work item links receive a deterministic compatibility identity", () => {
   const workflow = applyEvent(
@@ -25,6 +50,38 @@ test("legacy GitHub work item links receive a deterministic compatibility identi
       legacy: true
     }
   ]);
+});
+
+test("legacy journals with duplicate provider references remain replayable", () => {
+  const events = [
+    createLegacyWorkItemEvent(),
+    createLegacyWorkItemEvent({
+      eventId: "github:issue-501:created-again",
+      workItemId: "TS-2"
+    })
+  ];
+  const workflow = events.reduce(applyEvent, createWorkflow());
+
+  assert.equal(
+    workflow.workItems["TS-1"].externalLinks[0]
+      .providerObjectKey,
+    "github:issue:501"
+  );
+  assert.equal(
+    workflow.workItems["TS-2"].externalLinks[0]
+      .providerObjectKey,
+    "github:issue:501"
+  );
+  assert.throws(
+    () =>
+      applyEvent(workflow, {
+        ...createBaselineEvent(),
+        eventId:
+          "taskseal:import:v1:observe:github-501-ambiguous",
+        workItemId: "TS-2"
+      }),
+    hasCode("PROVIDER_OBJECT_ALREADY_LINKED")
+  );
 });
 
 test("a legacy GitHub link accepts exactly one explicit v2 baseline", () => {
@@ -633,6 +690,21 @@ test("legacy baselines reject a scope that does not match the provider", () => {
   );
 });
 
+test("legacy journals replay titles that predate the import title limit", () => {
+  const legacyEvent = createLegacyWorkItemEvent();
+  legacyEvent.payload.title = "x".repeat(513);
+
+  const workflow = applyEvent(
+    createWorkflow(),
+    legacyEvent
+  );
+
+  assert.equal(
+    workflow.workItems["TS-1"].title,
+    legacyEvent.payload.title
+  );
+});
+
 test("title limits count Unicode code points instead of UTF-16 code units", () => {
   const maximumTitle = "😀".repeat(512);
   const valid = createRichWorkItemEvent();
@@ -672,10 +744,13 @@ test("title limits count Unicode code points instead of UTF-16 code units", () =
   );
 });
 
-function createLegacyWorkItemEvent() {
+function createLegacyWorkItemEvent({
+  eventId = "github:issue-501:created",
+  workItemId = "TS-1"
+} = {}) {
   return {
-    eventId: "github:issue-501:created",
-    workItemId: "TS-1",
+    eventId,
+    workItemId,
     type: "work_item.created",
     occurredAt: "2026-07-26T08:00:00.000Z",
     payload: {

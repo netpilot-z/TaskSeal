@@ -14,7 +14,7 @@
 
 ## T12.2 — 迁移领域工作流与总览投影
 
-- 状态：待执行。
+- 状态：GitHub Issue `#13`，等待 snapshot atomic apply `#5` 合并后执行，避免在领域事件仍变化时制造迁移冲突。
 - 目的：让 WorkItem、Attempt、Artifact、Evidence 和 Acceptance 的核心契约进入 strict 类型检查。
 - 范围：workflow、dashboard projection、对应 fixture 和测试类型。
 - 不包含：改变领域状态、不变量或事件 schema。
@@ -24,7 +24,7 @@
 
 ## T12.3 — 迁移 application 与 storage
 
-- 状态：待执行。
+- 状态：GitHub Issue `#14`，依赖 `#13`。
 - 目的：类型化 journal、application service、reservation 与恢复边界。
 - 范围：application service、file journal、依赖注入接口和测试。
 - 不包含：数据库、队列、多进程锁或 schema 变化。
@@ -34,7 +34,7 @@
 
 ## T12.4 — 迁移 provider adapters
 
-- 状态：待执行。
+- 状态：GitHub Issue `#15`，依赖 `#13`、`#14`。
 - 目的：类型化 provider 原始事实、显式映射、canonical snapshot 和安全错误。
 - 范围：GitHub/Linear normalizer、read client、inspection、dry-run 和测试。
 - 不包含：provider 写入、SDK、通用插件市场。
@@ -44,7 +44,7 @@
 
 ## T12.5 — 迁移 Codex runner
 
-- 状态：待执行。
+- 状态：GitHub Issue `#16`，依赖 `#14`，可与 `#15` 在契约稳定后独立推进。
 - 目的：类型化 JSON-RPC、子进程生命周期、审批拒绝、timeout 和 Attempt 映射。
 - 范围：App Server client、runner、fake server 和测试。
 - 不包含：更换 Codex SDK、远程 runner、自动审批。
@@ -54,7 +54,7 @@
 
 ## T12.6 — 迁移 CLI 与本地 HTTP server
 
-- 状态：待执行。
+- 状态：GitHub Issue `#17`，依赖 `#14`、`#15`、`#16`。
 - 目的：完成 Node.js 服务端源码迁移，并类型化命令、请求和关闭生命周期。
 - 范围：CLI、server、demo 和对应测试；最后更新 package bin/start。
 - 不包含：远程暴露、认证、NestJS 或前端构建。

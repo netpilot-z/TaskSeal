@@ -12,14 +12,16 @@ export function applyEvent(workflow, event) {
   validateEventEnvelope(event);
   validateEventPayload(event);
 
-  const digest = digestEvent(event);
-  const processedDigest = workflow.processedEvents[event.eventId];
+  const processedDecision = classifyProcessedEvent(
+    workflow,
+    event
+  );
 
-  if (processedDigest) {
-    if (processedDigest === digest) {
-      return workflow;
-    }
+  if (processedDecision === "EXACT_EVENT_DUPLICATE") {
+    return workflow;
+  }
 
+  if (processedDecision === "EVENT_ID_CONFLICT") {
     throw new DomainError(
       "EVENT_ID_CONFLICT",
       `Event ${event.eventId} was already processed with different content.`
@@ -78,6 +80,7 @@ function createWorkItem(workflow, event) {
   );
 
   if (
+    externalLink.legacy !== true &&
     findExternalLinkOwner(
       workflow,
       externalLink.providerObjectKey
@@ -92,7 +95,7 @@ function createWorkItem(workflow, event) {
   return {
     processedEvents: {
       ...workflow.processedEvents,
-      [event.eventId]: digestEvent(event)
+      [event.eventId]: digestCanonicalEvent(event)
     },
     processedEventIds: [...workflow.processedEventIds, event.eventId],
     workItems: {
@@ -274,6 +277,25 @@ function baselineLegacyExternalLink({
   link
 }) {
   const baseline = event.payload.baseline;
+  const hasConflictingOwner = Object.values(
+    workflow.workItems
+  ).some(
+    (item) =>
+      item.id !== event.workItemId &&
+      item.externalLinks.some(
+        (externalLink) =>
+          externalLink.providerObjectKey ===
+          link.providerObjectKey
+      )
+  );
+
+  if (hasConflictingOwner) {
+    throw new DomainError(
+      "PROVIDER_OBJECT_ALREADY_LINKED",
+      "An ambiguous legacy provider object cannot be baselined."
+    );
+  }
+
   const canBaseline =
     link.legacy === true &&
     (link.provider === "github" || link.provider === "linear") &&
@@ -878,7 +900,7 @@ function withWorkItem(workflow, event, workItem) {
   return {
     processedEvents: {
       ...workflow.processedEvents,
-      [event.eventId]: digestEvent(event)
+      [event.eventId]: digestCanonicalEvent(event)
     },
     processedEventIds: [...workflow.processedEventIds, event.eventId],
     workItems: {
@@ -915,13 +937,18 @@ function validateEventPayload(event) {
 
   if (event.type === "work_item.created") {
     const externalLink = payload.externalLink;
+    const isRichCreate =
+      externalLink?.providerObjectKey !== undefined;
+    const titleIsValid = isRichCreate
+      ? isTitle(payload.title)
+      : isNonEmptyString(payload.title);
     const evidenceIsValid =
       Array.isArray(payload.requiredEvidence) &&
       payload.requiredEvidence.length > 0 &&
       payload.requiredEvidence.every(isNonEmptyString);
 
     if (
-      !isTitle(payload.title) ||
+      !titleIsValid ||
       !evidenceIsValid ||
       !externalLink ||
       !isNonEmptyString(externalLink.provider) ||
@@ -932,7 +959,7 @@ function validateEventPayload(event) {
     }
 
     if (
-      externalLink.providerObjectKey !== undefined &&
+      isRichCreate &&
       (!hasOnlyKeys(payload, [
         "title",
         "requiredEvidence",
@@ -1243,8 +1270,21 @@ function isHttpUrl(value) {
   }
 }
 
-function digestEvent(event) {
+export function digestCanonicalEvent(event) {
   return createHash("sha256").update(stableStringify(event)).digest("hex");
+}
+
+export function classifyProcessedEvent(workflow, event) {
+  const processedDigest =
+    workflow.processedEvents[event.eventId];
+
+  if (!processedDigest) {
+    return null;
+  }
+
+  return processedDigest === digestCanonicalEvent(event)
+    ? "EXACT_EVENT_DUPLICATE"
+    : "EVENT_ID_CONFLICT";
 }
 
 function stableStringify(value) {

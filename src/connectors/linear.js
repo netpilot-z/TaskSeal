@@ -1,3 +1,7 @@
+import {
+  digestProviderFactContent
+} from "../lib/provider-snapshot.js";
+
 export function normalizeLinearIssue(issue, mapping) {
   requireString(issue.id, "id");
   requireString(issue.identifier, "identifier");
@@ -36,6 +40,36 @@ export function normalizeLinearIssue(issue, mapping) {
       }
     }
   };
+}
+
+export function normalizeLinearIssueFact(issue, mapping) {
+  const candidateEvent = normalizeLinearIssue(issue, mapping);
+  const externalId = issue.id.toLowerCase();
+  candidateEvent.eventId = `linear:${externalId}:created`;
+  candidateEvent.payload.externalLink.externalId =
+    externalId;
+  const fact = {
+    sourceObject: {
+      providerObjectKey: `linear:issue:${externalId}`,
+      provider: "linear",
+      objectType: "issue",
+      externalId,
+      url: issue.url
+    },
+    revision: {
+      id: issue.updatedAt,
+      occurredAt: issue.updatedAt
+    },
+    observed: {
+      title: issue.title,
+      createdAt: issue.createdAt
+    },
+    candidateEvent
+  };
+
+  fact.revision.contentDigest =
+    digestProviderFactContent(fact);
+  return fact;
 }
 
 export function isLinearIssueReference(value) {

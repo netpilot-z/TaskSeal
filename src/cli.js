@@ -25,9 +25,9 @@ const USAGE = `Usage:
   taskseal doctor
   taskseal start
   taskseal run <work-item-id> [--prompt <text>] [--read-only]
-  taskseal inspect github-issue --issue <number> --work-item <id> --criterion <key>
-  taskseal inspect github --issue <number> --pr <number> --check <name> --work-item <id> --attempt <id> --criterion <key>
-  taskseal inspect linear --issue <identifier-or-uuid> --work-item <id> --criterion <key>
+  taskseal inspect github-issue --issue <number> --work-item <id> --criterion <key> [--snapshot-version 2 --title-management provider|none]
+  taskseal inspect github --issue <number> --pr <number> --check <name> --work-item <id> --attempt <id> --criterion <key> [--snapshot-version 2 --title-management provider|none]
+  taskseal inspect linear --issue <identifier-or-uuid> --work-item <id> --criterion <key> [--snapshot-version 2 --title-management provider|none]
   taskseal sync linear --dry-run [--source <repository-relative-path>]
 `;
 
@@ -682,7 +682,7 @@ function renderRunError(error) {
 }
 
 function parseGitHubInspectArguments(args) {
-  const values = parseNamedArguments(args, [
+  const parsed = parseVersionedInspectArguments(args, [
     "--issue",
     "--pr",
     "--check",
@@ -691,10 +691,11 @@ function parseGitHubInspectArguments(args) {
     "--criterion"
   ]);
 
-  if (!values) {
+  if (!parsed) {
     return null;
   }
 
+  const { values, versionOptions } = parsed;
   const issueNumber = parsePositiveInteger(values["--issue"]);
   const pullRequestNumber = parsePositiveInteger(values["--pr"]);
 
@@ -708,21 +709,23 @@ function parseGitHubInspectArguments(args) {
     checkName: values["--check"],
     workItemId: values["--work-item"],
     attemptId: values["--attempt"],
-    criterionKey: values["--criterion"]
+    criterionKey: values["--criterion"],
+    ...versionOptions
   };
 }
 
 function parseGitHubIssueInspectArguments(args) {
-  const values = parseNamedArguments(args, [
+  const parsed = parseVersionedInspectArguments(args, [
     "--issue",
     "--work-item",
     "--criterion"
   ]);
 
-  if (!values) {
+  if (!parsed) {
     return null;
   }
 
+  const { values, versionOptions } = parsed;
   const issueNumber = parsePositiveInteger(values["--issue"]);
 
   if (!issueNumber) {
@@ -732,21 +735,23 @@ function parseGitHubIssueInspectArguments(args) {
   return {
     issueNumber,
     workItemId: values["--work-item"],
-    requiredEvidence: [values["--criterion"]]
+    requiredEvidence: [values["--criterion"]],
+    ...versionOptions
   };
 }
 
 function parseLinearInspectArguments(args) {
-  const values = parseNamedArguments(args, [
+  const parsed = parseVersionedInspectArguments(args, [
     "--issue",
     "--work-item",
     "--criterion"
   ]);
 
-  if (!values) {
+  if (!parsed) {
     return null;
   }
 
+  const { values, versionOptions } = parsed;
   if (!isLinearIssueReference(values["--issue"])) {
     return null;
   }
@@ -754,16 +759,90 @@ function parseLinearInspectArguments(args) {
   return {
     issueReference: values["--issue"],
     workItemId: values["--work-item"],
-    requiredEvidence: [values["--criterion"]]
+    requiredEvidence: [values["--criterion"]],
+    ...versionOptions
   };
 }
 
-function parseNamedArguments(args, names) {
-  if (args.length !== names.length * 2) {
+function parseVersionedInspectArguments(args, names) {
+  const optionalNames = [
+    "--snapshot-version",
+    "--title-management"
+  ];
+  const values = parseNamedArguments(
+    args,
+    names,
+    optionalNames
+  );
+
+  if (!values) {
     return null;
   }
 
-  const allowed = new Set(names);
+  const hasVersion = Object.hasOwn(
+    values,
+    "--snapshot-version"
+  );
+  const hasTitleManagement = Object.hasOwn(
+    values,
+    "--title-management"
+  );
+
+  if (!hasVersion && !hasTitleManagement) {
+    return {
+      values,
+      versionOptions: {}
+    };
+  }
+
+  if (
+    hasVersion &&
+    !hasTitleManagement &&
+    values["--snapshot-version"] === "1"
+  ) {
+    return {
+      values,
+      versionOptions: {
+        snapshotVersion: 1
+      }
+    };
+  }
+
+  const titleManagement = values["--title-management"];
+
+  if (
+    !hasVersion ||
+    !hasTitleManagement ||
+    values["--snapshot-version"] !== "2" ||
+    !["provider", "none"].includes(titleManagement)
+  ) {
+    return null;
+  }
+
+  return {
+    values,
+    versionOptions: {
+      snapshotVersion: 2,
+      managedFields:
+        titleManagement === "provider" ? ["title"] : []
+    }
+  };
+}
+
+function parseNamedArguments(
+  args,
+  names,
+  optionalNames = []
+) {
+  if (
+    args.length < names.length * 2 ||
+    args.length > (names.length + optionalNames.length) * 2 ||
+    args.length % 2 !== 0
+  ) {
+    return null;
+  }
+
+  const allowed = new Set([...names, ...optionalNames]);
   const values = {};
 
   for (let index = 0; index < args.length; index += 2) {

@@ -11,6 +11,9 @@ import {
 } from "../src/application/provider-inspection.js";
 import { normalizeCodexRun } from "../src/connectors/codex.js";
 import { applyEvent, createWorkflow } from "../src/domain/workflow.js";
+import {
+  digestProviderFactContent
+} from "../src/lib/provider-snapshot.js";
 
 const GITHUB_ISSUE = {
   id: 501,
@@ -245,6 +248,179 @@ test("Linear inspection emits one explicit WorkItem snapshot without raw credent
   assert.doesNotMatch(
     JSON.stringify(snapshot),
     new RegExp(escapeRegExp(cwd))
+  );
+});
+
+test("GitHub issue inspection emits an explicitly managed importable v2 snapshot", async (t) => {
+  const cwd = await createConfiguredProject(t);
+  const snapshot = await inspectGitHubIssueProvider({
+    cwd,
+    issueNumber: 1,
+    workItemId: "TS-1",
+    requiredEvidence: ["tests", "lint"],
+    snapshotVersion: 2,
+    managedFields: ["title"],
+    now: () => new Date("2026-07-26T08:01:00.000Z"),
+    environment: { GITHUB_TOKEN: "redacted" },
+    fetchImpl: async () => jsonResponse(GITHUB_ISSUE)
+  });
+
+  assert.equal(snapshot.schemaVersion, 2);
+  assert.equal(snapshot.capturedAt, "2026-07-26T08:01:00.000Z");
+  assert.deepEqual(snapshot.scope, {
+    kind: "repository",
+    key: "github:repository:netpilot-z/taskseal"
+  });
+  assert.deepEqual(snapshot.mapping, {
+    workItemId: "TS-1",
+    requiredEvidence: ["lint", "tests"],
+    managedFields: ["title"]
+  });
+  assert.equal(snapshot.facts.length, 1);
+  assert.equal(
+    snapshot.facts[0].sourceObject.providerObjectKey,
+    "github:issue:501"
+  );
+  assert.equal(
+    snapshot.facts[0].revision.id,
+    GITHUB_ISSUE.updated_at
+  );
+  assert.equal(
+    snapshot.facts[0].revision.contentDigest,
+    digestProviderFactContent(snapshot.facts[0])
+  );
+  assert.deepEqual(
+    snapshot.facts[0].candidateEvent.payload.requiredEvidence,
+    ["lint", "tests"]
+  );
+});
+
+test("GitHub delivery inspection binds every v2 fact to its source object", async (t) => {
+  const cwd = await createConfiguredProject(t);
+  const responses = [
+    jsonResponse(GITHUB_ISSUE),
+    jsonResponse(GITHUB_PULL_REQUEST),
+    jsonResponse({
+      total_count: 1,
+      check_runs: [GITHUB_CHECK]
+    })
+  ];
+  const snapshot = await inspectGitHubProvider({
+    cwd,
+    issueNumber: 1,
+    pullRequestNumber: 1,
+    checkName: "tests",
+    workItemId: "TS-1",
+    attemptId: "run-1",
+    criterionKey: "tests",
+    snapshotVersion: 2,
+    managedFields: [],
+    now: () => new Date("2026-07-26T08:05:00.000Z"),
+    environment: { GITHUB_TOKEN: "redacted" },
+    fetchImpl: async () => responses.shift()
+  });
+
+  assert.equal(snapshot.schemaVersion, 2);
+  assert.deepEqual(snapshot.mapping, {
+    workItemId: "TS-1",
+    requiredEvidence: ["tests"],
+    managedFields: [],
+    attemptId: "run-1",
+    artifactId: "pr-1001",
+    artifactRevision: "abc123",
+    criterionKey: "tests"
+  });
+  assert.deepEqual(
+    snapshot.facts.map(
+      (fact) => [
+        fact.sourceObject.objectType,
+        fact.candidateEvent.type
+      ]
+    ),
+    [
+      ["issue", "work_item.created"],
+      ["pull_request", "artifact.linked"],
+      ["check", "evidence.recorded"]
+    ]
+  );
+
+  for (const fact of snapshot.facts) {
+    assert.equal(
+      fact.revision.contentDigest,
+      digestProviderFactContent(fact)
+    );
+  }
+});
+
+test("Linear inspection emits UUID-scoped v2 facts without display-only scope names", async (t) => {
+  const cwd = await createConfiguredProject(t);
+  const organization = {
+    ...LINEAR_ORGANIZATION,
+    id: "33333333-3333-4333-8333-333333333333"
+  };
+  const team = {
+    ...LINEAR_TEAM,
+    id: "22222222-2222-4222-8222-222222222222"
+  };
+  const issue = {
+    ...LINEAR_ISSUE,
+    id: "11111111-1111-4111-8111-111111111111",
+    team: {
+      ...LINEAR_ISSUE.team,
+      id: team.id
+    }
+  };
+  const responses = [
+    jsonResponse({
+      data: {
+        organization,
+        teams: {
+          nodes: [team],
+          pageInfo: {
+            hasNextPage: false,
+            endCursor: null
+          }
+        }
+      }
+    }),
+    jsonResponse({
+      data: { issue }
+    })
+  ];
+  const snapshot = await inspectLinearProvider({
+    cwd,
+    issueReference: "NET-7",
+    workItemId: "TS-1",
+    requiredEvidence: ["tests"],
+    snapshotVersion: 2,
+    managedFields: [],
+    now: () => new Date("2026-07-26T08:02:00.000Z"),
+    environment: { LINEAR_API_KEY: "redacted" },
+    fetchImpl: async () => responses.shift()
+  });
+
+  assert.equal(snapshot.schemaVersion, 2);
+  assert.deepEqual(snapshot.scope, {
+    kind: "team",
+    key: `linear:team:${team.id}`,
+    parentKey: `linear:organization:${organization.id}`
+  });
+  assert.deepEqual(snapshot.mapping, {
+    workItemId: "TS-1",
+    requiredEvidence: ["tests"],
+    managedFields: []
+  });
+  assert.equal(
+    snapshot.facts[0].sourceObject.providerObjectKey,
+    `linear:issue:${issue.id}`
+  );
+  assert.equal(
+    snapshot.facts[0].revision.contentDigest,
+    digestProviderFactContent(snapshot.facts[0])
+  );
+  assert.doesNotMatch(
+    JSON.stringify(snapshot.scope),
+    /configured|name|urlKey/
   );
 });
 
