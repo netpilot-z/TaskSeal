@@ -37,7 +37,7 @@
 
 ## T08 — 设计并实现 snapshot import
 
-- 状态：已拆分为 GitHub Issue `#3`（契约与 ADR）、`#4`（preview）和 `#5`（atomic apply）；`#3` 的本地规格与独立审查已完成，待发布。
+- 状态：已拆分为 GitHub Issue `#3`（契约与 ADR，已完成）、`#4`（preview，本切片实现并验证）和 `#5`（atomic apply，待执行）。
 - 目的：把经过操作者确认的 provider snapshot 安全导入 TaskSeal journal。
 - 范围：`external_link.linked` 或等价模型、provider object mapping、WorkItem update 语义、event revision、preview/apply 两阶段、本地审计和冲突恢复。
 - 不包含：外部系统写回、多租户、Webhook 自动消费。

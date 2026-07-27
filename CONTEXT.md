@@ -10,7 +10,7 @@ TaskSeal 让人类和 AI Agent 的“已完成”变成有证据、可验收、�
 
 - fixture：`Linear WorkItem → Codex Attempt → GitHub Artifact/Evidence → AcceptanceDecision`
 - persistent：`Local WorkItem → Codex App Server Attempt → Control Room`
-- provider inspection：`GitHub/Linear read-only fact → explicit mapping → canonical snapshot`
+- provider import：`GitHub/Linear read-only fact → ProviderSnapshot v2 → deterministic ImportPlan preview`
 
 本阶段不构建通用 Agent 市场、多租户权限、计费、生产数据库或真实外部写入。Linear workspace `netpilot-z`、team `netpilot` 与 project `TaskSeal` 是已只读验证的真实坐标；仓库 tickets 默认不自动同步。
 

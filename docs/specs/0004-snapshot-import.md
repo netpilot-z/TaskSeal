@@ -48,7 +48,7 @@ linear:issue:<linear-uuid>
 ```
 
 - GitHub 使用不可变 database ID，不使用 Issue number、仓库名称或 URL 作为对象身份。
-- Linear 使用 Issue UUID，不使用 identifier、workspace/team 名称或 URL 作为对象身份。
+- Linear 使用规范化为小写的 Issue UUID，不使用 identifier、workspace/team 名称或 URL 作为对象身份；source object、candidate event ID 和 legacy ExternalLink externalId 必须使用同一规范形式。
 - 如果后续 provider 的对象 ID 只在某个 scope 内唯一，key 必须同时包含该 provider 的不可变 scope ID。
 
 `scopeRef` 与对象身份分开，用于授权边界和诊断。GitHub 首版使用显式配置的 repository coordinate；Linear 使用 Organization/Team UUID，并保留名称作为显示字段。
@@ -67,7 +67,7 @@ linear:issue:<linear-uuid>
 
 - `id` 对同一次 provider 版本稳定。GitHub Issue 首版使用 `updated_at`，Linear Issue 首版使用 `updatedAt`。
 - `occurredAt` 必须是 provider 给出的更新时间，不能用本机抓取时间代替。
-- `contentDigest` 对允许进入 snapshot 的规范化字段计算，不包含 Token、raw payload、抓取时间或显示文案。
+- `contentDigest` 只对该 provider fact 的规范化 `sourceObject` 与对象类型专属 `observed` 字段计算；不包含 Token、raw payload、抓取时间、mapping、candidate event、revision ID/时间或显示文案。
 - 同 revision ID、同 digest 是重复；同 revision ID、不同 digest 是 provider 内容冲突。
 - 较早 `occurredAt` 是 stale fact；相同时间但不同 revision ID 是顺序不明确。
 - 缺少可复核 revision 的 v1 snapshot 不能 apply。
@@ -148,7 +148,8 @@ ExternalLink 在现有 `provider`、`externalId`、`url` 基础上增加：
         "contentDigest": "sha256:<lowercase-hex>"
       },
       "observed": {
-        "title": "Example issue"
+        "title": "Example issue",
+        "createdAt": "2026-07-26T10:00:00.000Z"
       },
       "candidateEvent": {
         "eventId": "github:issue-123456:created",
@@ -171,6 +172,16 @@ ExternalLink 在现有 `provider`、`externalId`、`url` 基础上增加：
 ```
 
 完整 GitHub snapshot 可包含 Issue、Pull Request 和 Check facts。每个 candidate event 必须明确绑定一个 source object；importer 不从数组位置猜测来源。首版 import candidate allowlist 是 `work_item.created`、`artifact.linked` 和 `evidence.recorded`；Attempt 和 Acceptance 继续由各自的专用入口产生。
+
+对象类型专属 `observed` 结构固定为：
+
+- Issue：`title`、`createdAt`；
+- Pull Request：`headRevision`；
+- Check：`headRevision`、`outcome`。
+
+完整 GitHub 交付 snapshot 的 mapping 除 `workItemId`、`requiredEvidence`、`managedFields` 外，还必须显式包含 `attemptId`、`artifactId`、`artifactRevision` 和 `criterionKey`。Pull Request 与 Check candidate 必须同时匹配这些 mapping 字段和各自的 `observed.headRevision`；Check 不能把证据绑定到同一 WorkItem 下的其他 Artifact 或 revision。
+
+Candidate envelope 也属于不可信输入，必须从已验证 provider identity 重算并逐项匹配：Issue、Pull Request 与 Check 的 candidate event ID 使用 connector 的固定格式；PR/Check 的 `occurredAt` 必须等于 `SourceRevision.occurredAt`；Check 的 `evidenceId` 必须是 `check-<externalId>`。Importer 不能接受 snapshot 自报的未来时间或替代 identity，否则旧 Evidence 可能绕过领域层的最新结果排序。
 
 ### v2 生成入口
 
@@ -207,6 +218,8 @@ taskseal inspect linear ... \
 - 每个 fact 的 ProviderObjectKey、SourceRevision、observed 字段和 candidate event。
 
 `capturedAt`、本地路径、抓取耗时、日志文本和 UI 文案不进入 digest。相同外部事实的再次读取因此具有相同语义摘要。
+
+`SourceRevision.contentDigest` 与 `snapshotDigest` 有意分层：前者只证明 provider 对象内容，mapping 或 candidate envelope 改动不会伪造一个新的 provider revision；后者绑定本次可导入 snapshot 的完整语义，包括 mapping 与 candidate event。
 
 Importer 必须限制 snapshot 大小、facts 数量、字符串长度和已知事件类型；任何错误都不得回显 raw provider payload、凭证、请求头或未经裁剪的响应正文。
 
@@ -372,6 +385,8 @@ event type + workItemId + providerObjectKey + source revision ID + semantic targ
 
 event ID 不包含 preview/apply 时间、actor、数组位置或本地路径。同一 source revision 的不同规范化内容仍产生相同 event ID，从而被识别为 `SOURCE_REVISION_CONTENT_CONFLICT`，不能伪装成新事件。
 
+preview、apply 校验与 journal replay 必须调用同一个 event identity 契约重新生成 ID，不能从 ID 字符串前缀反推事件类型，也不能各自维护摘要算法。
+
 ## Preview 契约
 
 应用层公共接口：
@@ -398,6 +413,8 @@ previewSnapshotImport({ snapshot, workflow, importPolicy }) -> ImportPlan
 6. 按领域依赖和稳定 event ID 排序，在 workflow 副本上模拟全部拟追加事件。
 7. 把领域错误转换为稳定 conflict code；任何 conflict 都使计划不可 apply。
 8. 对计划语义字段计算 planDigest。
+
+preview、apply 校验与 journal replay 共享同一个 plan digest material 构造函数。`mode`、`planDigest` 自身、`summary` 和人类可读文案不进入摘要；events、actions、PolicyBinding 和冲突/警告投影的任何语义改动都必须改变 planDigest。
 
 `baseWorkflowDigest` 对完整 canonical Workflow 稳定序列化后计算，包含 processed event ID/digest 和所有 WorkItem 状态，但排除进程内 queue、UI 派生数据和 ImportReceipt。任意 canonical event 提交都会改变它；同一 journal 重启重放必须得到相同值。
 
@@ -754,6 +771,7 @@ Domain 不依赖 application、connector、storage、CLI 或 ProviderSnapshot。
 
 - ProviderSnapshot v1 继续支持 display 和内存重放，但 import 必须失败关闭并要求重新 inspect。
 - 旧 bare-event journal 原样可读，不做破坏性迁移。
+- 只对带完整 v2 ExternalLink 的新 import create 强制 512-code-point title 上限；历史 bare `work_item.created` 保留旧版“非空”校验，避免升级后无法重放此前合法的长标题。
 - Legacy upcaster 对历史 GitHub/Linear WorkItem link 确定性补充 `objectType: "issue"` 和由 provider/externalId 构造的 ProviderObjectKey，同时标记 `legacy: true`、`scopeRef: null`、`managedFields: null`、`lastObservation: null`。它不从 URL、当前配置或 WorkItem title 猜 scope/字段管理权。
 - 历史 `taskseal` self-link 或未知 provider 使用 `legacy:<provider>:<externalId>` 身份并保持本地管理；不能被一个 GitHub/Linear snapshot 基线升级。
 - 第一次匹配的 v2 observation 用 `expectedRevisionId: null` 和 baseline payload 补齐 scope、显式 managedFields 与 SourceRevision；非 legacy link、对象身份不匹配、重复 baseline 或字段管理权冲突均拒绝。
@@ -766,12 +784,14 @@ Domain 不依赖 application、connector、storage、CLI 或 ProviderSnapshot。
 
 ### Preview 纯函数
 
-- v2 首次、精确重复、title-manager update、reference update、多 link、mapping conflict、对象跨 WorkItem 冲突。
+- v2 首次、精确重复、title-manager update、reference update、多 link、同一 snapshot 多 Issue 到一个 WorkItem、mapping conflict、对象跨 WorkItem 冲突。
 - stale、相同时间不同 revision、同 revision 不同 digest。
 - snapshot/facts 随机顺序得到相同稳定计划。
 - v1 默认输出不变；v2 必须显式选择 title management，mapping 数组规范化后 digest 稳定。
 - ImportPolicy scope/objectTypes 排列不同但语义相同时 binding/digest 相同；重复项、未知字段、错误 UUID/scope key 一律拒绝。
 - snapshot byte/depth/fact/string/URL 上下限和 provider-specific URL/scope 绑定。
+- PR/Check candidate 的 revision time、event ID、Artifact/Evidence identity 不可脱离已验证 provider fact。
+- Linear connector 返回大写 UUID 时，v2 fact 在进入 preview 前统一规范化为小写且保持 source/candidate identity 一致。
 - 无当前时间、随机数、网络、journal 或环境依赖。
 - 输出不含 Token、raw payload、绝对路径或 URL 凭证。
 
@@ -781,6 +801,7 @@ Domain 不依赖 application、connector、storage、CLI 或 ProviderSnapshot。
 - `external_link.observed` 的 previous revision、stale 与 ambiguous 校验。
 - Legacy link 只允许一次 `expectedRevisionId: null` baseline，非 legacy link 或第二次 null 必须拒绝。
 - 旧 GitHub/Linear link 可基线并在重启后保持相同身份；旧 self-link、错误 provider/externalId、scope mismatch 和 authority conflict 必须拒绝。
+- 历史 bare create 的长标题仍可重放；512-code-point 上限只约束新 rich import create 与 observation/update。
 - `work_item.updated` 只能由 title 管理者修改 title，且验证 before 值。
 - 新增的 ExternalLink/WorkItem update 事件不得改变 AcceptanceDecision 或解除 Attempt/Evidence 约束；既有 artifact/evidence 事件继续按原规则影响状态。
 - event ID 精确重复幂等，同 ID 异内容仍失败。

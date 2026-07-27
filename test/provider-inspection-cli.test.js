@@ -254,6 +254,168 @@ test("inspect linear rejects an invalid issue reference before execution", async
   assert.match(output.text(), /Usage:/);
 });
 
+test("inspect v2 maps explicit title management for every provider command", async () => {
+  const scenarios = [
+    {
+      args: [
+        "inspect",
+        "github-issue",
+        "--issue",
+        "7",
+        "--work-item",
+        "TS-7",
+        "--criterion",
+        "tests",
+        "--snapshot-version",
+        "2",
+        "--title-management",
+        "provider"
+      ],
+      dependency: "inspectGitHubIssue",
+      expected: {
+        cwd: "project-root",
+        issueNumber: 7,
+        workItemId: "TS-7",
+        requiredEvidence: ["tests"],
+        snapshotVersion: 2,
+        managedFields: ["title"]
+      }
+    },
+    {
+      args: [
+        "inspect",
+        "github",
+        "--issue",
+        "7",
+        "--pr",
+        "9",
+        "--check",
+        "tests",
+        "--work-item",
+        "TS-7",
+        "--attempt",
+        "attempt-9",
+        "--criterion",
+        "tests",
+        "--snapshot-version",
+        "2",
+        "--title-management",
+        "none"
+      ],
+      dependency: "inspectGitHub",
+      expected: {
+        cwd: "project-root",
+        issueNumber: 7,
+        pullRequestNumber: 9,
+        checkName: "tests",
+        workItemId: "TS-7",
+        attemptId: "attempt-9",
+        criterionKey: "tests",
+        snapshotVersion: 2,
+        managedFields: []
+      }
+    },
+    {
+      args: [
+        "inspect",
+        "linear",
+        "--issue",
+        "NET-7",
+        "--work-item",
+        "TS-7",
+        "--criterion",
+        "tests",
+        "--snapshot-version",
+        "2",
+        "--title-management",
+        "provider"
+      ],
+      dependency: "inspectLinear",
+      expected: {
+        cwd: "project-root",
+        issueReference: "NET-7",
+        workItemId: "TS-7",
+        requiredEvidence: ["tests"],
+        snapshotVersion: 2,
+        managedFields: ["title"]
+      }
+    }
+  ];
+
+  for (const scenario of scenarios) {
+    const calls = [];
+    const output = createOutput();
+    const exitCode = await runCli({
+      args: scenario.args,
+      cwd: "project-root",
+      output,
+      [scenario.dependency]: async (options) => {
+        calls.push(options);
+        return {
+          schemaVersion: 2,
+          mode: "read-only",
+          provider: "test",
+          facts: []
+        };
+      }
+    });
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(calls, [scenario.expected]);
+  }
+});
+
+test("inspect rejects incomplete or incompatible snapshot version options", async () => {
+  const invalidSuffixes = [
+    ["--snapshot-version", "2"],
+    ["--title-management", "provider"],
+    [
+      "--snapshot-version",
+      "1",
+      "--title-management",
+      "none"
+    ],
+    [
+      "--snapshot-version",
+      "2",
+      "--title-management",
+      "automatic"
+    ],
+    [
+      "--snapshot-version",
+      "3",
+      "--title-management",
+      "provider"
+    ]
+  ];
+  const base = [
+    "inspect",
+    "github-issue",
+    "--issue",
+    "7",
+    "--work-item",
+    "TS-7",
+    "--criterion",
+    "tests"
+  ];
+
+  for (const suffix of invalidSuffixes) {
+    const output = createOutput();
+    let invoked = false;
+    const exitCode = await runCli({
+      args: [...base, ...suffix],
+      output,
+      inspectGitHubIssue: async () => {
+        invoked = true;
+      }
+    });
+
+    assert.equal(exitCode, 2);
+    assert.equal(invoked, false);
+    assert.match(output.text(), /Usage:/);
+  }
+});
+
 function createOutput() {
   const chunks = [];
 
