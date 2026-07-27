@@ -64,13 +64,13 @@
 
 ## T12.6 — 迁移 Demo 与本地 HTTP server
 
-- 状态：GitHub Issue `#17`，依赖 `#16` 与 `#22`。
+- 状态：已完成；GitHub Issue `#17`，Demo、HTTP Server 与直接测试已进入 strict TypeScript 门禁。
 - 目的：类型化本地 HTTP 请求、Demo replay 和关闭生命周期。
 - 范围：server、demo 和对应测试。
 - 不包含：CLI/bin、远程暴露、认证、NestJS 或前端构建。
 - 依赖：T12.3、T12.4、T12.5、T12.7。
 - 验收标准：loopback、CSRF、static、active/stalled shutdown 与 Demo 行为不变。
-- 验证：server/demo 定向测试、全量测试和本地浏览器走查。
+- 验证：Server/Demo 直接测试 15/15、CLI 间接测试 12/12、全量测试 246/246 通过；独立审查发现的 service error code 回归以 TDD 修复；本地浏览器验证 planned → accepted → reset，控制台 0 error/warning。
 
 ## T12.8 — 迁移 CLI 与 Bin
 

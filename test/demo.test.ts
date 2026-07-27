@@ -4,7 +4,7 @@ import test from "node:test";
 import {
   loadDemoSteps,
   replayDemoSteps
-} from "../src/demo/scenario.js";
+} from "../src/demo/scenario.ts";
 import { projectDashboard } from "../src/dashboard/projection.ts";
 
 test("the complete fixture chain produces a reproducible accepted dashboard", async () => {
@@ -24,6 +24,10 @@ test("the complete fixture chain produces a reproducible accepted dashboard", as
     accepted: 1,
     activeAgents: 0
   });
-  assert.equal(dashboard.workItems[0].progress, 100);
-  assert.equal(dashboard.workItems[0].evidence[0].outcome, "passed");
+  const workItem = dashboard.workItems[0];
+  assert.ok(workItem);
+  const evidence = workItem.evidence[0];
+  assert.ok(evidence);
+  assert.equal(workItem.progress, 100);
+  assert.equal(evidence.outcome, "passed");
 });
