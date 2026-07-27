@@ -32,6 +32,7 @@ prepare → approval → submit → created
 - transport 必须以可判别结果区分 `not_dispatched` 与 `outcome_unknown`；任何派发后不确定性都不能归为 terminal failed。
 - Operation Journal 不复用 canonical workflow journal，也不写入 Provider Observation。
 - `#29` 只依赖窄 query port，组合安全 projection；不解析 operation 文件。
+- 首个 file adapter 固定使用 `.taskseal/provider-operations.json`、16 MiB / 512 records 硬边界和 whole-file atomic replace；达到上限时失败关闭，不淘汰历史。
 
 ## 选择理由
 
@@ -65,3 +66,5 @@ prepare → approval → submit → created
 - operation journal 损坏时 Provider v2 组合 API 应失败关闭并让前端保留 last-known projection。
 - 首版只保证单 Control Room 实例写入；多进程 writer 仍需后续锁或单写服务。
 - reconciliation absent 保持未解决且禁止 create；允许显式再次 query，但不自动提交或重试，避免在尚未验证 Provider 查询一致性时扩大重复写风险。
+- 固定 `wx` temporary slot 把 rename 前残留限制为一个且不做路径清理；合法 orphan 只有在目录、lstat/open、single-link 与权限复核后才能原位复用，异常 temp 需要人工处理。首版也不提供 hash chain，拥有本地写权限的操作者删除完整合法 suffix 无法仅靠 replay 检出。
+- storage 处于可信本地单 writer 边界。Node 的 pathname-based rename 无法把目录 identity 与 rename syscall 原子绑定；rename 后复核能把替换识别为 unknown/fence，避免误报 committed 和后续 transport permit，但不能承诺对同权限恶意跨进程目录替换零越界文件系统副作用。需要该强保证时迁移到 owner-only ACL 加 native `openat/renameat`、SQLite 或独立单写服务。
