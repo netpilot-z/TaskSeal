@@ -70,3 +70,5 @@ prepare → approval → submit → created
 - 固定 `wx` temporary slot 把 rename 前残留限制为一个且不做路径清理；合法 orphan 只有在目录、lstat/open、single-link 与权限复核后才能原位复用，异常 temp 需要人工处理。首版也不提供 hash chain，拥有本地写权限的操作者删除完整合法 suffix 无法仅靠 replay 检出。
 - storage 处于可信本地单 writer 边界。Node 的 pathname-based rename 无法把目录 identity 与 rename syscall 原子绑定；rename 后复核能把替换识别为 unknown/fence，避免误报 committed 和后续 transport permit，但不能承诺对同权限恶意跨进程目录替换零越界文件系统副作用。需要该强保证时迁移到 owner-only ACL 加 native `openat/renameat`、SQLite 或独立单写服务。
 - fake Linear transport 会保存测试用 request/external-write counters 和内存 Issue，但这些不是生产审计；生产审计仍只由 Operation Journal 拥有。真实网络 adapter、凭证、schema probe 与权限边界需要新的规格和明确授权。
+- coordinator 使用 per-operation promise tail 覆盖 fresh load、begin append、transport 与 result append。只有本次 begin-submission append 返回 committed 才获得 create permit；idempotent、conflict、write failure、commit unknown 和 reopen-required 都是零 create。
+- coordinator open 会把遗留 submitting 转 outcome unknown、把遗留 reconciling 转 failed，但 recovery 不调用任何 transport。transport 后结果落盘失败会 fence 整个 coordinator，必须 reopen 并以 journal 事实对账。

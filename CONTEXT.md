@@ -25,6 +25,8 @@ Provider Operation Journal v1 已使用固定 `.taskseal/provider-operations.jso
 
 Fake Linear Write Transport v1 已建立 application-owned `createIssue/queryByClientUuid` port 和只能显式注入 exchange 的 connector。create 使用 client UUID 作为 Issue ID 并绑定 resolved Team；只有明确未派发可返回 not-dispatched，其余派发后不确定性进入 outcome unknown。query 只按 client UUID 精确读取，区分 found、absent、failed 与 correlation ambiguous。当前 exchange 仅为内存 fake，不存在 global fetch、凭证、真实 endpoint、journal/coordinator wiring 或真实 mutation。
 
+Controlled Write Coordinator v1 已组合 prepare/approve/reject/submit/reconcile，并以 per-operation queue 覆盖 journal→transport→journal。只有本次 committed submitting version 能消费一次 fake create permit；idempotent/unknown append、拒绝和非法状态均为零调用。response lost 进入 outcome unknown，再按 client UUID 显式对账；reopen 会把遗留 submitting/reconciling 转为安全本地状态而不调用 transport。当前没有 CLI/HTTP、浏览器审批、global fetch、真实凭证或真实 Linear mutation。
+
 ## 统一语言
 
 | 名称 | 含义 |
