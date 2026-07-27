@@ -3,8 +3,9 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import type { TestContext } from "node:test";
 
-import { createLinearTicketDryRun } from "../src/application/linear-ticket-dry-run.js";
+import { createLinearTicketDryRun } from "../src/application/linear-ticket-dry-run.ts";
 
 test("Linear ticket dry-run is deterministic, structured, and offline", async (t) => {
   const cwd = await createTemporaryProject(t);
@@ -69,13 +70,15 @@ test("Linear ticket dry-run is deterministic, structured, and offline", async (t
       issueCount: 2
     }
   );
-  assert.deepEqual(first.drafts[1].dependsOnTickets, ["T01"]);
-  assert.deepEqual(first.drafts[1].prerequisites, ["操作者确认"]);
-  assert.deepEqual(first.drafts[0].dependsOnTickets, []);
-  assert.deepEqual(first.drafts[0].prerequisites, ["规格 0003"]);
-  assert.match(first.drafts[0].title, /^\[TaskSeal T01\]/);
-  assert.match(first.drafts[0].idempotencyKey, /^sha256:[0-9a-f]{64}$/);
-  assert.match(first.drafts[0].payloadDigest, /^sha256:[0-9a-f]{64}$/);
+  const firstDraft = requireItem(first.drafts, 0);
+  const secondDraft = requireItem(first.drafts, 1);
+  assert.deepEqual(secondDraft.dependsOnTickets, ["T01"]);
+  assert.deepEqual(secondDraft.prerequisites, ["操作者确认"]);
+  assert.deepEqual(firstDraft.dependsOnTickets, []);
+  assert.deepEqual(firstDraft.prerequisites, ["规格 0003"]);
+  assert.match(firstDraft.title, /^\[TaskSeal T01\]/);
+  assert.match(firstDraft.idempotencyKey, /^sha256:[0-9a-f]{64}$/);
+  assert.match(firstDraft.payloadDigest, /^sha256:[0-9a-f]{64}$/);
   assert.doesNotMatch(
     JSON.stringify(first),
     new RegExp(escapeRegExp(cwd))
@@ -135,9 +138,10 @@ test("non-ticket headings end a ticket and duplicate fields are rejected", async
     source: "docs/appendix.md"
   });
 
-  assert.equal(plan.drafts[0].sourceStatus, "待执行。");
-  assert.match(plan.drafts[0].description, /验证：运行测试。/);
-  assert.doesNotMatch(plan.drafts[0].description, /被附录污染/);
+  const draft = requireItem(plan.drafts, 0);
+  assert.equal(draft.sourceStatus, "待执行。");
+  assert.match(draft.description, /验证：运行测试。/);
+  assert.doesNotMatch(draft.description, /被附录污染/);
 
   await writeFile(
     join(cwd, "docs", "duplicate.md"),
@@ -187,12 +191,17 @@ test("the repository milestone produces drafts for every current T ticket", asyn
   );
   assert.equal(nextPlan.issueCount, 7);
   assert.deepEqual(
-    nextPlan.drafts[0].externalTicketDependencies,
+    requireItem(
+      nextPlan.drafts,
+      0
+    ).externalTicketDependencies,
     ["T05.3"]
   );
 });
 
-async function createTemporaryProject(t) {
+async function createTemporaryProject(
+  t: TestContext
+): Promise<string> {
   const cwd = await mkdtemp(join(tmpdir(), "taskseal-dry-run-"));
   t.after(() => rm(cwd, { recursive: true, force: true }));
   await mkdir(join(cwd, "config"), { recursive: true });
@@ -209,10 +218,36 @@ async function createTemporaryProject(t) {
   return cwd;
 }
 
-function hasCode(code) {
-  return (error) => error?.code === code;
+function hasCode(
+  code: string
+): (error: unknown) => boolean {
+  return (error: unknown) =>
+    isRecord(error) && error.code === code;
 }
 
-function escapeRegExp(value) {
+function requireItem<T>(
+  items: readonly T[],
+  index: number
+): T {
+  const item = items[index];
+
+  if (!item) {
+    throw new Error(`Missing item at index ${index}.`);
+  }
+
+  return item;
+}
+
+function isRecord(
+  value: unknown
+): value is Record<string, unknown> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+  );
+}
+
+function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

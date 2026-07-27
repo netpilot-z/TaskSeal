@@ -3,7 +3,7 @@ import test from "node:test";
 
 import {
   digestProviderFactContent
-} from "../src/lib/provider-snapshot.js";
+} from "../src/lib/provider-snapshot.ts";
 
 test("provider content digest is stable across local mapping and revision metadata", () => {
   const fact = createIssueFact();

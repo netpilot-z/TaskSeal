@@ -6,7 +6,7 @@ import {
 } from "../src/domain/workflow.ts";
 import {
   digestProviderFactContent
-} from "../src/lib/provider-snapshot.js";
+} from "../src/lib/provider-snapshot.ts";
 
 export function createGitHubIssueSnapshot({
   workItemId = "TS-1",

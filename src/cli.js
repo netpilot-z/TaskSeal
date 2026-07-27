@@ -9,10 +9,10 @@ import {
   inspectGitHubIssueProvider,
   inspectGitHubProvider,
   inspectLinearProvider
-} from "./application/provider-inspection.js";
-import { createLinearTicketDryRun } from "./application/linear-ticket-dry-run.js";
+} from "./application/provider-inspection.ts";
+import { createLinearTicketDryRun } from "./application/linear-ticket-dry-run.ts";
 import { TaskSealService } from "./application/taskseal-service.ts";
-import { isLinearIssueReference } from "./connectors/linear.js";
+import { isLinearIssueReference } from "./connectors/linear.ts";
 import { CodexAppServerClient } from "./runners/codex-app-server-client.js";
 import { CodexRunner } from "./runners/codex-runner.js";
 import { createTaskSealServer } from "./server.js";

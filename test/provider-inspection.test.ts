@@ -3,17 +3,24 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import type { TestContext } from "node:test";
 
 import {
   inspectGitHubIssueProvider,
   inspectGitHubProvider,
   inspectLinearProvider
-} from "../src/application/provider-inspection.js";
-import { normalizeCodexRun } from "../src/connectors/codex.js";
+} from "../src/application/provider-inspection.ts";
+import type {
+  FetchRequestOptions
+} from "../src/connectors/github-read-client.ts";
+import type {
+  AttemptFinishedEvent,
+  AttemptStartedEvent
+} from "../src/domain/workflow.ts";
 import { applyEvent, createWorkflow } from "../src/domain/workflow.ts";
 import {
   digestProviderFactContent
-} from "../src/lib/provider-snapshot.js";
+} from "../src/lib/provider-snapshot.ts";
 
 const GITHUB_ISSUE = {
   id: 501,
@@ -71,7 +78,10 @@ const LINEAR_ISSUE = {
 test("GitHub issue inspection emits one redacted read-only WorkItem snapshot", async (t) => {
   const cwd = await createConfiguredProject(t);
   const token = "github-issue-inspection-secret";
-  const calls = [];
+  const calls: Array<{
+    url: string;
+    options: FetchRequestOptions;
+  }> = [];
 
   const snapshot = await inspectGitHubIssueProvider({
     cwd,
@@ -103,14 +113,19 @@ test("GitHub issue inspection emits one redacted read-only WorkItem snapshot", a
   assert.equal(snapshot.events.length, 1);
   assert.equal(snapshot.events[0].type, "work_item.created");
   assert.equal(calls.length, 1);
+  const call = calls[0];
+  assert.ok(call);
   assert.equal(
-    calls[0].url,
+    call.url,
     "https://api.github.com/repos/netpilot-z/TaskSeal/issues/1"
   );
-  assert.equal(calls[0].options.method, "GET");
+  assert.equal(call.options.method, "GET");
 
   const workflow = applyEvent(createWorkflow(), snapshot.events[0]);
-  assert.equal(workflow.workItems["TS-1"].status, "planned");
+  assert.equal(
+    requireWorkItem(workflow.workItems, "TS-1").status,
+    "planned"
+  );
   assert.doesNotMatch(JSON.stringify(snapshot), new RegExp(token));
   assert.doesNotMatch(
     JSON.stringify(snapshot),
@@ -158,19 +173,26 @@ test("GitHub inspection emits a replayable, redacted, read-only snapshot", async
     ["work_item.created", "artifact.linked", "evidence.recorded"]
   );
 
-  const started = normalizeCodexRun({
-    id: "run-1",
+  const started: AttemptStartedEvent = {
+    eventId: "attempt:run-1:started",
     workItemId: "TS-1",
-    agentId: "codex-product-engineer",
-    status: "started",
-    startedAt: "2026-07-26T08:01:00.000Z"
-  });
-  const completed = normalizeCodexRun({
-    id: "run-1",
+    type: "attempt.started",
+    occurredAt: "2026-07-26T08:01:00.000Z",
+    payload: {
+      attemptId: "run-1",
+      agentId: "product-engineer"
+    }
+  };
+  const completed: AttemptFinishedEvent = {
+    eventId: "attempt:run-1:finished",
     workItemId: "TS-1",
-    status: "completed",
-    completedAt: "2026-07-26T08:02:00.000Z"
-  });
+    type: "attempt.finished",
+    occurredAt: "2026-07-26T08:02:00.000Z",
+    payload: {
+      attemptId: "run-1",
+      outcome: "completed"
+    }
+  };
   const replayEvents = [
     snapshot.events[0],
     started,
@@ -179,8 +201,12 @@ test("GitHub inspection emits a replayable, redacted, read-only snapshot", async
   ];
   const workflow = replayEvents.reduce(applyEvent, createWorkflow());
 
-  assert.equal(workflow.workItems["TS-1"].status, "reviewing");
-  assert.equal(workflow.workItems["TS-1"].evidence[0].outcome, "passed");
+  const workItem = requireWorkItem(
+    workflow.workItems,
+    "TS-1"
+  );
+  assert.equal(workItem.status, "reviewing");
+  assert.equal(workItem.evidence[0]?.outcome, "passed");
   assert.doesNotMatch(JSON.stringify(snapshot), new RegExp(token));
   assert.doesNotMatch(
     JSON.stringify(snapshot),
@@ -243,7 +269,10 @@ test("Linear inspection emits one explicit WorkItem snapshot without raw credent
   assert.equal(snapshot.events.length, 1);
 
   const workflow = applyEvent(createWorkflow(), snapshot.events[0]);
-  assert.equal(workflow.workItems["TS-1"].status, "planned");
+  assert.equal(
+    requireWorkItem(workflow.workItems, "TS-1").status,
+    "planned"
+  );
   assert.doesNotMatch(JSON.stringify(snapshot), new RegExp(apiKey));
   assert.doesNotMatch(
     JSON.stringify(snapshot),
@@ -424,7 +453,9 @@ test("Linear inspection emits UUID-scoped v2 facts without display-only scope na
   );
 });
 
-async function createConfiguredProject(t) {
+async function createConfiguredProject(
+  t: TestContext
+): Promise<string> {
   const cwd = await mkdtemp(join(tmpdir(), "taskseal-inspection-"));
   t.after(() => rm(cwd, { recursive: true, force: true }));
   await mkdir(join(cwd, "config"), { recursive: true });
@@ -439,7 +470,10 @@ async function createConfiguredProject(t) {
   return cwd;
 }
 
-function jsonResponse(body, { status = 200 } = {}) {
+function jsonResponse(
+  body: unknown,
+  { status = 200 }: { status?: number } = {}
+): unknown {
   return {
     ok: status >= 200 && status < 300,
     status,
@@ -454,6 +488,19 @@ function jsonResponse(body, { status = 200 } = {}) {
   };
 }
 
-function escapeRegExp(value) {
+function requireWorkItem<T>(
+  workItems: Record<string, T>,
+  workItemId: string
+): T {
+  const workItem = workItems[workItemId];
+
+  if (!workItem) {
+    throw new Error(`Missing work item ${workItemId}.`);
+  }
+
+  return workItem;
+}
+
+function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

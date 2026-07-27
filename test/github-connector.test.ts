@@ -6,7 +6,7 @@ import {
   normalizeGitHubCheck,
   normalizeGitHubIssue,
   normalizeGitHubPullRequest
-} from "../src/connectors/github.js";
+} from "../src/connectors/github.ts";
 
 test("a GitHub issue is normalized with an explicit TaskSeal mapping", async () => {
   const fixture = JSON.parse(

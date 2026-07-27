@@ -8,7 +8,7 @@ import {
 } from "../lib/canonical-json.ts";
 import {
   digestProviderFactContent
-} from "../lib/provider-snapshot.js";
+} from "../lib/provider-snapshot.ts";
 import {
   buildPolicyBinding
 } from "./import-policy.ts";

@@ -4,8 +4,8 @@ import { normalizeCodexRun } from "../connectors/codex.js";
 import {
   normalizeGitHubCheck,
   normalizeGitHubPullRequest
-} from "../connectors/github.js";
-import { normalizeLinearIssue } from "../connectors/linear.js";
+} from "../connectors/github.ts";
+import { normalizeLinearIssue } from "../connectors/linear.ts";
 import { applyEvent, createWorkflow } from "../domain/workflow.ts";
 
 export async function loadDemoSteps() {

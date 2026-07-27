@@ -1,7 +1,31 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { readLinearIssue } from "../src/connectors/linear-read-client.js";
+import { readLinearIssue } from "../src/connectors/linear-read-client.ts";
+import type {
+  LinearFetchLike,
+  LinearFetchRequestOptions
+} from "../src/connectors/linear-read-client.ts";
+
+interface GraphqlRequestBody {
+  query: string;
+  variables: Record<string, unknown>;
+}
+
+interface LinearRequestCall {
+  url: string;
+  options: LinearFetchRequestOptions;
+  body?: GraphqlRequestBody;
+}
+
+interface TestResponse {
+  ok: boolean;
+  status: number;
+  headers: {
+    get(name: string): string | null;
+  };
+  json(): Promise<unknown>;
+}
 
 const ORGANIZATION = {
   id: "organization-1",
@@ -30,7 +54,7 @@ const ISSUE = {
 };
 
 test("Linear reads paginated scope then one issue with an API key", async () => {
-  const calls = [];
+  const calls: LinearRequestCall[] = [];
   const responses = [
     jsonResponse({
       data: {
@@ -72,7 +96,7 @@ test("Linear reads paginated scope then one issue with an API key", async () => 
       calls.push({
         url,
         options,
-        body: JSON.parse(options.body)
+        body: parseGraphqlRequestBody(options.body)
       });
       return responses.shift();
     }
@@ -99,18 +123,35 @@ test("Linear reads paginated scope then one issue with an API key", async () => 
     ),
     true
   );
-  assert.equal(calls[0].body.variables.after, null);
-  assert.equal(calls[1].body.variables.after, "cursor-1");
-  assert.equal(calls[2].body.variables.id, "NET-7");
   assert.equal(
-    calls.every((call) => !/\bmutation\b/i.test(call.body.query)),
+    requireRequestBody(requireCall(calls, 0))
+      .variables.after,
+    null
+  );
+  assert.equal(
+    requireRequestBody(requireCall(calls, 1))
+      .variables.after,
+    "cursor-1"
+  );
+  assert.equal(
+    requireRequestBody(requireCall(calls, 2))
+      .variables.id,
+    "NET-7"
+  );
+  assert.equal(
+    calls.every(
+      (call) =>
+        !/\bmutation\b/i.test(
+          requireRequestBody(call).query
+        )
+    ),
     true
   );
 });
 
 test("Linear distinguishes OAuth and API key authentication", async () => {
   const accessToken = "linear-oauth-secret";
-  const calls = [];
+  const calls: LinearRequestCall[] = [];
   const responses = [
     scopeResponse(),
     jsonResponse({ data: { issue: ISSUE } })
@@ -139,9 +180,9 @@ test("Linear distinguishes OAuth and API key authentication", async () => {
 
 test("Linear fails closed for credentials, GraphQL errors, and scope drift", async (t) => {
   await t.test("credentials are required and cannot be mixed", async () => {
-    let called = false;
+    let credentialFetchSentinelCalled = false;
     const fetchImpl = async () => {
-      called = true;
+      credentialFetchSentinelCalled = true;
     };
 
     await assert.rejects(
@@ -168,18 +209,31 @@ test("Linear fails closed for credentials, GraphQL errors, and scope drift", asy
       readLinearIssue({
         workspace: "TaskSeal",
         team: "NET",
+        issueReference: "NET-7",
+        apiKey: "invalid\ncredential",
+        fetchImpl
+      }),
+      hasCode("LINEAR_AUTH_INVALID")
+    );
+    await assert.rejects(
+      readLinearIssue({
+        workspace: "TaskSeal",
+        team: "NET",
         issueReference: "not-valid",
         apiKey: "api-key",
         fetchImpl
       }),
       hasCode("LINEAR_ISSUE_REFERENCE_INVALID")
     );
-    assert.equal(called, false);
+    assert.equal(
+      credentialFetchSentinelCalled,
+      false
+    );
   });
 
   await t.test("GraphQL errors are failures even with HTTP 200", async () => {
     const token = "must-not-leak";
-    let error;
+    let error: unknown;
 
     try {
       await readLinearIssue({
@@ -202,8 +256,15 @@ test("Linear fails closed for credentials, GraphQL errors, and scope drift", asy
       error = caught;
     }
 
+    if (!isCodedError(error)) {
+      assert.fail("Expected a coded Linear error.");
+    }
+
     assert.equal(error.code, "LINEAR_RATE_LIMITED");
-    assert.doesNotMatch(error.message, new RegExp(token));
+    assert.doesNotMatch(
+      error.message,
+      new RegExp(token)
+    );
   });
 
   await t.test("HTTP authentication and permission errors keep their status class", async () => {
@@ -277,7 +338,7 @@ test("Linear fails closed for credentials, GraphQL errors, and scope drift", asy
   });
 
   await t.test("workspace mismatch stops before issue lookup", async () => {
-    const calls = [];
+    const calls: LinearRequestCall[] = [];
 
     await assert.rejects(
       readLinearIssue({
@@ -411,10 +472,107 @@ test("Linear fails closed for credentials, GraphQL errors, and scope drift", asy
   });
 });
 
+test("Linear rejects malformed GraphQL data and pageInfo at runtime", async (t) => {
+  const invalidEnvelopes: readonly unknown[] = [
+    null,
+    [],
+    42,
+    "invalid",
+    { data: null }
+  ];
+
+  for (const body of invalidEnvelopes) {
+    await t.test(
+      `rejects ${describeValue(body)} data envelope`,
+      async () => {
+        await assert.rejects(
+          readLinearIssue({
+            workspace: "TaskSeal",
+            team: "NET",
+            issueReference: "NET-7",
+            apiKey: "api-key",
+            fetchImpl: async () =>
+              jsonResponse(body)
+          }),
+          hasCode("LINEAR_RESPONSE_INVALID")
+        );
+      }
+    );
+  }
+
+  const invalidPageInfoValues: readonly unknown[] = [
+    null,
+    [],
+    {
+      hasNextPage: "false",
+      endCursor: null
+    }
+  ];
+
+  for (const pageInfo of invalidPageInfoValues) {
+    await t.test(
+      `rejects ${describeValue(pageInfo)} pageInfo`,
+      async () => {
+        await assert.rejects(
+          readLinearIssue({
+            workspace: "TaskSeal",
+            team: "NET",
+            issueReference: "NET-7",
+            apiKey: "api-key",
+            fetchImpl: async () =>
+              jsonResponse({
+                data: {
+                  organization: ORGANIZATION,
+                  teams: {
+                    nodes: [TEAM],
+                    pageInfo
+                  }
+                }
+              })
+          }),
+          hasCode("LINEAR_RESPONSE_INVALID")
+        );
+      }
+    );
+  }
+
+  await t.test(
+    "rejects a malformed errors member even when data is valid",
+    async () => {
+      await assert.rejects(
+        readLinearIssue({
+          workspace: "TaskSeal",
+          team: "NET",
+          issueReference: "NET-7",
+          apiKey: "api-key",
+          fetchImpl: async () =>
+            jsonResponse({
+              errors: "malformed",
+              data: {
+                organization: ORGANIZATION,
+                teams: {
+                  nodes: [TEAM],
+                  pageInfo: {
+                    hasNextPage: false,
+                    endCursor: null
+                  }
+                }
+              }
+            })
+        }),
+        hasCode("LINEAR_RESPONSE_INVALID")
+      );
+    }
+  );
+});
+
 function scopeResponse({
   organization = ORGANIZATION,
   teams = [TEAM]
-} = {}) {
+}: {
+  organization?: unknown;
+  teams?: unknown[];
+} = {}): TestResponse {
   return jsonResponse({
     data: {
       organization,
@@ -429,12 +587,19 @@ function scopeResponse({
   });
 }
 
-function jsonResponse(body, { status = 200 } = {}) {
+function jsonResponse(
+  body: unknown,
+  {
+    status = 200
+  }: {
+    status?: number;
+  } = {}
+): TestResponse {
   return {
     ok: status >= 200 && status < 300,
     status,
     headers: {
-      get() {
+      get(): null {
         return null;
       }
     },
@@ -444,12 +609,14 @@ function jsonResponse(body, { status = 200 } = {}) {
   };
 }
 
-function nonJsonResponse(status) {
+function nonJsonResponse(
+  status: number
+): TestResponse {
   return {
     ok: false,
     status,
     headers: {
-      get() {
+      get(): null {
         return null;
       }
     },
@@ -459,10 +626,93 @@ function nonJsonResponse(status) {
   };
 }
 
-function createQueuedFetch(responses) {
+function createQueuedFetch(
+  responses: unknown[]
+): LinearFetchLike {
   return async () => responses.shift();
 }
 
-function hasCode(code) {
-  return (error) => error?.code === code;
+function requireCall(
+  calls: readonly LinearRequestCall[],
+  index: number
+): LinearRequestCall {
+  const call = calls[index];
+
+  if (!call) {
+    assert.fail(`Missing request call ${index}.`);
+  }
+
+  return call;
+}
+
+function requireRequestBody(
+  call: LinearRequestCall
+): GraphqlRequestBody {
+  if (!call.body) {
+    assert.fail("Expected a GraphQL request body.");
+  }
+
+  return call.body;
+}
+
+function hasCode(
+  code: string
+): (error: unknown) => boolean {
+  return (error) =>
+    isCodedError(error) && error.code === code;
+}
+
+function parseGraphqlRequestBody(
+  body: string
+): GraphqlRequestBody {
+  const parsed: unknown = JSON.parse(body);
+
+  if (
+    !isRecord(parsed) ||
+    typeof parsed.query !== "string" ||
+    !isRecord(parsed.variables)
+  ) {
+    assert.fail("Expected a GraphQL request body.");
+  }
+
+  return {
+    query: parsed.query,
+    variables: parsed.variables
+  };
+}
+
+function isCodedError(
+  value: unknown
+): value is Error & {
+  code: string;
+} {
+  return (
+    value instanceof Error &&
+    "code" in value &&
+    typeof value.code === "string"
+  );
+}
+
+function isRecord(
+  value: unknown
+): value is Record<string, unknown> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+  );
+}
+
+function describeValue(value: unknown): string {
+  if (value === null) {
+    return "null";
+  }
+
+  if (Array.isArray(value)) {
+    return "array";
+  }
+
+  return typeof value === "object"
+    ? "invalid object"
+    : typeof value;
 }

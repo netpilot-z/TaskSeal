@@ -65,9 +65,10 @@ TaskSeal 已经包含领域状态机、文件 journal、Codex runner、provider 
 2. domain workflow 与 dashboard projection；
 3. application service 与 file journal；
 4. provider normalizer/read client；
-5. Codex runner 与 App Server transport；
-6. CLI 和 HTTP server；
-7. 单独决定 Control Room 的前端工具链。
+5. snapshot importer 与测试 fixture；
+6. Codex runner 与 App Server transport；
+7. CLI 和 HTTP server；
+8. 单独决定 Control Room 的前端工具链。
 
 每一步只迁移一组具有共同契约的文件，不做全仓库扩展名批量替换。
 
