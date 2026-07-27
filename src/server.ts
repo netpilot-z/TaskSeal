@@ -169,6 +169,13 @@ const STATIC_FILES = new Map<string, StaticFile>([
     }
   ],
   [
+    "/provider-state.js",
+    {
+      url: new URL("../public/provider-state.js", import.meta.url),
+      contentType: "text/javascript; charset=utf-8"
+    }
+  ],
+  [
     "/styles.css",
     {
       url: new URL("../public/styles.css", import.meta.url),

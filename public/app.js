@@ -4,6 +4,14 @@ import {
   semanticSnapshotKey,
   shouldPollDashboard
 } from "/dashboard-state.js";
+import {
+  createProviderAccessibleSummary,
+  createProviderContentRenderKey,
+  createProviderPanelModel,
+  createProviderPanelState,
+  reduceProviderPanelState,
+  shouldPollProviders
+} from "/provider-state.js";
 
 const elements = {
   snapshotTime: document.querySelector("#snapshot-time"),
@@ -11,6 +19,29 @@ const elements = {
   agents: document.querySelector("#summary-agents"),
   reviewing: document.querySelector("#summary-reviewing"),
   accepted: document.querySelector("#summary-accepted"),
+  providerPanel: document.querySelector("#provider-panel"),
+  providerOverview: document.querySelector(
+    "#provider-overview"
+  ),
+  providerRefresh: document.querySelector(
+    "#provider-refresh"
+  ),
+  providerBanner: document.querySelector(
+    "#provider-banner"
+  ),
+  providerContent: document.querySelector(
+    "#provider-content"
+  ),
+  providerCards: document.querySelector("#provider-cards"),
+  providerLatestPanel: document.querySelector(
+    "#provider-latest-panel"
+  ),
+  providerLatest: document.querySelector(
+    "#provider-latest"
+  ),
+  providerLiveStatus: document.querySelector(
+    "#provider-live-status"
+  ),
   environmentLabel: document.querySelector("#environment-label"),
   stepCounter: document.querySelector("#step-counter"),
   workItems: document.querySelector("#work-items"),
@@ -46,7 +77,12 @@ let csrfToken = null;
 let renderedWorkItemsKey = null;
 let renderedTimelineKey = null;
 let announcedStateKey = null;
+let providerInitialized = false;
+let providerPanelState = createProviderPanelState();
+let renderedProviderKey = null;
+let announcedProviderKey = null;
 const requestGate = new DashboardRequestGate();
+const providerRequestGate = new DashboardRequestGate();
 
 elements.resetButton.addEventListener("click", () =>
   mutateDemo("/api/demo/reset")
@@ -58,11 +94,16 @@ elements.runButton.addEventListener("click", () =>
   mutateDemo("/api/demo/run-all")
 );
 elements.codexRunButton.addEventListener("click", runCodex);
+elements.providerRefresh.addEventListener(
+  "click",
+  () => requestProviderSnapshot()
+);
 
 loadDashboard();
 
 async function loadDashboard() {
   window.setInterval(pollPersistentDashboard, 1_500);
+  window.setInterval(pollPersistentProviders, 5_000);
   await requestSnapshot("/api/dashboard", { method: "GET" });
 }
 
@@ -136,6 +177,77 @@ async function pollPersistentDashboard() {
   }
 }
 
+async function pollPersistentProviders() {
+  if (
+    !shouldPollProviders(
+      mode,
+      providerPanelState.phase
+    )
+  ) {
+    return;
+  }
+
+  await requestProviderSnapshot({ silent: true });
+}
+
+async function requestProviderSnapshot({
+  silent = false
+} = {}) {
+  if (mode !== "persistent") {
+    return null;
+  }
+
+  const sequence = providerRequestGate.issue();
+  providerPanelState = reduceProviderPanelState(
+    providerPanelState,
+    { type: "request" }
+  );
+  renderProviderPanel();
+
+  try {
+    const response = await fetch("/api/providers", {
+      method: "GET",
+      cache: "no-store"
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        "Provider observations are unavailable."
+      );
+    }
+
+    const model = createProviderPanelModel(payload);
+    if (!providerRequestGate.isLatest(sequence)) {
+      return null;
+    }
+
+    providerPanelState = reduceProviderPanelState(
+      providerPanelState,
+      {
+        type: "success",
+        model
+      }
+    );
+    renderProviderPanel();
+    return model;
+  } catch {
+    if (!providerRequestGate.isLatest(sequence)) {
+      return null;
+    }
+
+    providerPanelState = reduceProviderPanelState(
+      providerPanelState,
+      { type: "failure" }
+    );
+    renderProviderPanel();
+    if (!silent) {
+      showToast(providerPanelState.message);
+    }
+    return null;
+  }
+}
+
 async function requestSnapshot(path, options, { silent = false } = {}) {
   const sequence = requestGate.issue();
 
@@ -182,6 +294,13 @@ function render(snapshot) {
   elements.environmentLabel.textContent = isDemo
     ? "Fixture demo"
     : "Persistent journal";
+  elements.providerPanel.hidden = isDemo;
+
+  if (!isDemo && !providerInitialized) {
+    providerInitialized = true;
+    renderProviderPanel();
+    void requestProviderSnapshot();
+  }
 
   if (isDemo) {
     elements.stepCounter.textContent = `Step ${snapshot.demo.currentStep} / ${snapshot.demo.totalSteps}`;
@@ -207,6 +326,288 @@ function render(snapshot) {
 
   renderWorkItems(snapshot.workItems);
   announceSnapshot(snapshot);
+}
+
+function renderProviderPanel() {
+  const { phase, model, message } = providerPanelState;
+  const isLoading =
+    phase === "loading" || phase === "refreshing";
+  elements.providerContent.setAttribute(
+    "aria-busy",
+    String(isLoading)
+  );
+  elements.providerRefresh.textContent = isLoading
+    ? "Refreshing…"
+    : "Refresh";
+  elements.providerRefresh.disabled = phase === "loading";
+  elements.providerBanner.hidden = phase !== "stale";
+
+  if (phase === "stale") {
+    elements.providerBanner.dataset.tone = "warning";
+    elements.providerBanner.textContent = message;
+  } else {
+    elements.providerBanner.textContent = "";
+    delete elements.providerBanner.dataset.tone;
+  }
+
+  const contentKey =
+    createProviderContentRenderKey(providerPanelState);
+  if (contentKey === renderedProviderKey) {
+    updateProviderObservationTimes();
+    announceProviderPanel();
+    return;
+  }
+  renderedProviderKey = contentKey;
+
+  if (phase === "idle" || phase === "loading") {
+    elements.providerOverview.textContent =
+      "Loading safe observations";
+    elements.providerCards.innerHTML =
+      renderProviderStateMessage({
+        className: "provider-state-loading",
+        icon: "",
+        title: "Loading Provider observations",
+        description:
+          "Reading the latest bounded snapshot from the local Control Room."
+      });
+    elements.providerLatestPanel.hidden = true;
+  } else if (phase === "error") {
+    elements.providerOverview.textContent =
+      "Provider status unavailable";
+    elements.providerCards.innerHTML =
+      renderProviderStateMessage({
+        className: "provider-state-error",
+        icon: "!",
+        title: "Provider observations unavailable",
+        description:
+          "The workflow remains isolated. Refresh after the observation store is available."
+      });
+    elements.providerLatestPanel.hidden = true;
+  } else if (model && model.cards.length === 0) {
+    elements.providerOverview.textContent =
+      "0 configured targets";
+    elements.providerCards.innerHTML =
+      renderProviderStateMessage({
+        className: "",
+        icon: "○",
+        title: "No Provider observations yet",
+        description:
+          "Configure a Provider and run an inspection to populate this read model."
+      });
+    elements.providerLatestPanel.hidden = true;
+  } else if (model) {
+    elements.providerOverview.textContent =
+      `${model.summary.total} targets · ` +
+      `${model.summary.ready} ready · ` +
+      `${model.summary.attention} need attention`;
+    elements.providerCards.innerHTML = model.cards
+      .map(renderProviderCard)
+      .join("");
+    elements.providerLatest.innerHTML = model.latest
+      .map(renderLatestProviderObservation)
+      .join("");
+    elements.providerLatestPanel.hidden = false;
+  }
+
+  announceProviderPanel();
+}
+
+function updateProviderObservationTimes() {
+  for (const element of elements.providerPanel.querySelectorAll(
+    "time[data-observed-at]"
+  )) {
+    element.textContent = formatObservationTime(
+      element.dataset.observedAt
+    );
+  }
+}
+
+function renderProviderStateMessage({
+  className,
+  icon,
+  title,
+  description
+}) {
+  return `
+    <div class="provider-state-message ${className}">
+      <span aria-hidden="true">${escapeHtml(icon)}</span>
+      <strong>${escapeHtml(title)}</strong>
+      <p>${escapeHtml(description)}</p>
+    </div>
+  `;
+}
+
+function renderProviderCard(card, index) {
+  const headingId = `provider-card-${index}-heading`;
+  const scope =
+    card.observedScope?.key ?? "Not observed";
+  const parentScope =
+    card.observedScope?.parentKey ?? "Not applicable";
+
+  return `
+    <article
+      class="provider-card"
+      aria-labelledby="${headingId}"
+      data-status="${escapeAttribute(card.status)}"
+    >
+      <div class="provider-card-header">
+        <div class="provider-identity">
+          <span class="provider-monogram" aria-hidden="true">
+            ${escapeHtml(card.providerShortLabel)}
+          </span>
+          <div>
+            <h3 id="${headingId}">${escapeHtml(card.providerLabel)}</h3>
+            <small>${escapeHtml(card.configuredTarget.key)}</small>
+          </div>
+        </div>
+        <span class="provider-status provider-tone-${escapeAttribute(
+          card.tone
+        )}">
+          <span aria-hidden="true">${escapeHtml(card.statusIcon)}</span>
+          ${escapeHtml(card.statusLabel)}
+        </span>
+      </div>
+
+      <div class="provider-observed-row">
+        <span class="provider-operation">${escapeHtml(
+          card.operationLabel
+        )}</span>
+        <time
+          datetime="${escapeAttribute(card.observedAt)}"
+          data-observed-at="${escapeAttribute(card.observedAt)}"
+        >
+          ${escapeHtml(formatObservationTime(card.observedAt))}
+        </time>
+      </div>
+
+      <div class="provider-facts">
+        <div class="provider-fact">
+          <span class="detail-label">Observed scope</span>
+          <strong>${escapeHtml(scope)}</strong>
+          <small>${escapeHtml(
+            card.observedScope?.kind ?? "No verified scope"
+          )}</small>
+        </div>
+        <div class="provider-fact">
+          <span class="detail-label">Snapshot</span>
+          <strong>${escapeHtml(
+            shortDigest(card.snapshotDigest) ?? "Not captured"
+          )}</strong>
+          <small>
+            ${card.sourceRevisionCount} source
+            revision${card.sourceRevisionCount === 1 ? "" : "s"}
+          </small>
+        </div>
+        <div class="provider-fact">
+          <span class="detail-label">Mapping</span>
+          <strong>${escapeHtml(
+            shortDigest(card.mappingDigest) ?? "Not captured"
+          )}</strong>
+          <small>Canonical digest only</small>
+        </div>
+        <div class="provider-fact">
+          <span class="detail-label">Approval</span>
+          <strong>${escapeHtml(card.approvalLabel)}</strong>
+          <small>Requires #6 and #29</small>
+        </div>
+      </div>
+
+      ${
+        card.missingEvidence.length > 0
+          ? `<div class="provider-missing">
+              <strong>Missing evidence:</strong>
+              ${escapeHtml(card.missingEvidence.join(", "))}
+            </div>`
+          : ""
+      }
+      ${
+        card.diagnosticCode
+          ? `<div class="provider-diagnostic">
+              ${escapeHtml(card.diagnosticCode)}
+            </div>`
+          : ""
+      }
+
+      <details class="provider-details">
+        <summary>Technical observation details</summary>
+        <dl class="provider-technical-list">
+          ${renderProviderTechnicalDetail(
+            "Target",
+            card.configuredTarget.key
+          )}
+          ${renderProviderTechnicalDetail("Scope parent", parentScope)}
+          ${renderProviderTechnicalDetail(
+            "Snapshot",
+            shortDigest(card.snapshotDigest) ?? "—"
+          )}
+          ${renderProviderTechnicalDetail(
+            "Mapping",
+            shortDigest(card.mappingDigest) ?? "—"
+          )}
+          ${renderProviderTechnicalDetail(
+            "Plan",
+            shortDigest(card.planDigest) ?? "—"
+          )}
+          ${renderProviderTechnicalDetail(
+            "Resolution",
+            card.resolution ?? "—"
+          )}
+        </dl>
+      </details>
+    </article>
+  `;
+}
+
+function renderProviderTechnicalDetail(label, value) {
+  return `
+    <div>
+      <dt>${escapeHtml(label)}</dt>
+      <dd>${escapeHtml(value)}</dd>
+    </div>
+  `;
+}
+
+function renderLatestProviderObservation(card) {
+  return `
+    <li data-tone="${escapeAttribute(card.tone)}">
+      <span class="provider-latest-icon" aria-hidden="true">
+        ${escapeHtml(card.statusIcon)}
+      </span>
+      <div class="provider-latest-copy">
+        <strong>
+          ${escapeHtml(card.providerLabel)} ·
+          ${escapeHtml(card.statusLabel)}
+        </strong>
+        <span>
+          ${escapeHtml(card.operationLabel)} ·
+          ${escapeHtml(card.configuredTarget.key)}
+        </span>
+        <time
+          datetime="${escapeAttribute(card.observedAt)}"
+          data-observed-at="${escapeAttribute(card.observedAt)}"
+        >
+          ${escapeHtml(formatObservationTime(card.observedAt))}
+        </time>
+      </div>
+    </li>
+  `;
+}
+
+function announceProviderPanel() {
+  if (providerPanelState.phase === "refreshing") {
+    return;
+  }
+
+  const summary = createProviderAccessibleSummary(
+    providerPanelState
+  );
+  const key = semanticSnapshotKey(summary);
+
+  if (key === announcedProviderKey) {
+    return;
+  }
+  announcedProviderKey = key;
+  elements.providerLiveStatus.textContent = summary;
 }
 
 function initializePrompt(workItem) {
@@ -528,6 +929,33 @@ function formatTime(value) {
     minute: "2-digit",
     second: "2-digit"
   }).format(new Date(value));
+}
+
+function formatObservationTime(value) {
+  const timestamp = Date.parse(value);
+  const elapsed = Math.max(0, Date.now() - timestamp);
+  const minutes = Math.floor(elapsed / 60_000);
+  const relative =
+    minutes < 1
+      ? "just now"
+      : minutes < 60
+        ? `${minutes}m ago`
+        : minutes < 1_440
+          ? `${Math.floor(minutes / 60)}h ago`
+          : `${Math.floor(minutes / 1_440)}d ago`;
+  const absolute = new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short"
+  }).format(new Date(timestamp));
+
+  return `${absolute} · ${relative}`;
+}
+
+function shortDigest(value) {
+  if (!value) {
+    return null;
+  }
+  return `${value.slice(0, 15)}…${value.slice(-6)}`;
 }
 
 function escapeHtml(value) {

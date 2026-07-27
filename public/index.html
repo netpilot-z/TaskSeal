@@ -112,6 +112,79 @@
           </article>
         </section>
 
+        <section
+          class="panel provider-panel"
+          id="provider-panel"
+          aria-labelledby="provider-heading"
+          hidden
+        >
+          <div class="panel-heading provider-panel-heading">
+            <div>
+              <p class="section-kicker">PROVIDER CONTROL</p>
+              <h2 id="provider-heading">Provider operations</h2>
+              <p class="panel-description">
+                Latest safe observations for each configured target.
+              </p>
+            </div>
+            <div class="provider-heading-actions">
+              <span class="provider-overview" id="provider-overview">
+                Waiting for persistent runtime
+              </span>
+              <button
+                class="button button-secondary provider-refresh"
+                id="provider-refresh"
+                type="button"
+              >
+                Refresh
+              </button>
+            </div>
+          </div>
+          <div
+            class="provider-banner"
+            id="provider-banner"
+            hidden
+          ></div>
+          <div
+            class="provider-content"
+            id="provider-content"
+            aria-busy="false"
+          >
+            <div class="provider-cards" id="provider-cards"></div>
+            <aside
+              class="provider-latest"
+              id="provider-latest-panel"
+              aria-labelledby="provider-latest-heading"
+              hidden
+            >
+              <div class="provider-latest-heading">
+                <div>
+                  <span class="detail-label">CURRENT READ MODEL</span>
+                  <h3 id="provider-latest-heading">Latest observations</h3>
+                </div>
+                <span>Not a history log</span>
+              </div>
+              <ol id="provider-latest" class="provider-latest-list"></ol>
+              <div class="provider-approval-boundary">
+                <span aria-hidden="true">◇</span>
+                <div>
+                  <strong>Approval state is not connected</strong>
+                  <small>
+                    The operation journal in #6 and #29 will provide
+                    approval-required and reconciliation state.
+                  </small>
+                </div>
+              </div>
+            </aside>
+          </div>
+          <p
+            class="visually-hidden"
+            id="provider-live-status"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          ></p>
+        </section>
+
         <section class="workspace-grid">
           <div class="panel work-panel">
             <div class="panel-heading">
