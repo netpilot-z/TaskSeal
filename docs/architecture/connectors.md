@@ -84,7 +84,7 @@ Snapshot import 契约已由 `docs/specs/0004-snapshot-import.md` 与 `docs/adr/
 - 用 `SourceRevision`、`external_link.observed` 和严格限定的 `work_item.updated` 表达 provider 编辑。
 - 先生成零写入 ImportPlan，再把 canonical events 与 ImportReceipt 作为一个 journal batch 原子提交。
 
-Atomic apply 已通过故障注入、并发、未知提交结果 fencing 和重启恢复验证；apply capability 默认关闭，只有可信 ImportPolicy 明确允许的 scope 才可写入本地 journal。
+Atomic apply 已通过故障注入、并发、未知提交结果 fencing 和重启恢复验证；apply capability 默认关闭，只有可信 ImportPolicy 明确允许的 scope 才可写入本地 journal。GitHub/Linear 新 apply 还会在 base stale 与 Domain projection 通过后，从本次 action 绑定的精确 plan event 生成短生命周期 `ProviderFactProvenanceClaim v1`，由显式注入的只读 verifier 重查远端 stable ID、locator、scope、revision、source/event time、事件内容与 digest；Plan v1 remote no-event 失败关闭。一次最多 8 个 claim，connector 以 4 路并发、15 秒单请求上限和独立 30 秒总 deadline 读取；失败时零 journal 写入，receipt retry 与历史 replay 不访问 Provider。
 
 ## 已实现阶段：Gitee 只读 Adapter 与受控本地 import
 
@@ -125,6 +125,7 @@ v1 只保证单一 read-model 实例内串行写入；多个进程并发 whole-f
 ## Provider ingress 与下一阶段
 
 - GitHub Issue `#34` 已建立统一 ingress registry gate、per-provider/per-scope ImportPolicy v2、Provider-neutral rich link Domain 与 Gitee 本地 import。
+- GitHub Issue `#48` 已建立 application-owned provenance port 与 GitHub Issue/PR/Check、Linear Issue 单对象只读 verifier；claim 精确绑定 plan event，remote no-event 失败关闭，公开 plan digest 不再被误作来源证明。
 - Generic direct rich append 固定拒绝；read-only AdapterManifest 不自动授予 import，历史 replay 不读取当前 registry/policy。
 - 下一步用飞书多维表格的 token、动态字段和业务 error envelope 对 AdapterManifest v1 做异构压力测试。
 - 其他 Provider 的本地 import 仍需独立 registration、Provider-specific normalizer 与精确 scope policy；任何外部写回继续使用独立审批、幂等和审计合同。

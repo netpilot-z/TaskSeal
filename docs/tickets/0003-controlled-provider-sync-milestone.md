@@ -111,10 +111,10 @@
 
 ## T11.5 — 建立 Provider fact provenance 与对象级 locator 绑定
 
-- 状态：待规划；GitHub Issue `#48`。
+- 状态：已完成；GitHub Issue `#48`。
 - 目的：证明 GitHub database ID ↔ Issue/PR number、Linear UUID ↔ identifier/URL 等远端字段确属同一个 connector 已观察事实。
-- 范围：versioned source locator/provenance、可信 connector attestation 或 apply 只读 re-read、Plan reader migration、撤销与重启语义。
+- 范围：从精确 plan event 生成并携带 source/event occurrence time 与最小 content binding 的短生命周期 `ProviderFactProvenanceClaim v1`、apply-time 只读 re-read、claim/result 全集绑定、GitHub Issue/PR/Check 与 Linear Issue 单对象 verifier、remote no-event fail-closed、8 claim/4 并发/15 秒单请求/30 秒总 deadline、撤销与重启语义；未增加 persisted schema，因此无需 Plan reader migration。
 - 不包含：Provider 外部写回、默认网络 apply、凭证落盘、动态第三方代码或把 URL 改成对象主键。
 - 依赖：T11.4 的 scope ingress gate。
 - 验收标准：同一获批 repo/team 内自构不一致 ID/URL 并重算公开 digest 仍不能提交；历史 batch/receipt 可回放。
-- 验证：规格/ADR、同 scope 伪造回归、断网/撤销/重启/回滚测试和独立安全审查。
+- 验证：规格/ADR、同 scope 伪造回归、逐字段 mismatch 矩阵、partial/malformed result、断网/撤销/重启/回滚测试和独立安全审查。

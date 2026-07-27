@@ -85,7 +85,7 @@ node src/cli.ts inspect gitee \
   --title-management none
 ```
 
-Gitee snapshot 已可进入受控的本地 import application API，但必须同时通过 built-in trusted registry 与精确的 per-scope ImportPolicy v2；当前没有 CLI/HTTP apply route，也不会写回 Gitee。Generic rich/provider-managed `append` 固定拒绝，历史 journal replay 不依赖当前授权。
+Gitee snapshot 已可进入受控的本地 import application API，但必须同时通过 built-in trusted registry 与精确的 per-scope ImportPolicy v2；当前没有 CLI/HTTP apply route，也不会写回 Gitee。GitHub/Linear 新 apply 还必须显式注入只读 provenance verifier，在 journal commit 前以本次 plan 的精确事件重读并绑定 stable ID、locator、scope、revision、source/event time、实际事件内容与 digest；未注入、无法证明或 Plan v1 没有事件时失败关闭。单次最多验证 8 个 claim，以 4 路并发、15 秒单请求和 30 秒总 deadline 执行。Generic rich/provider-managed `append` 固定拒绝，committed receipt retry 与历史 journal replay 不依赖当前授权、网络或凭证。
 
 GitHub 公开仓库可以匿名读取，也可通过 `GITHUB_TOKEN` 或 `GH_TOKEN` 提供只读 Token。Linear 使用 `LINEAR_API_KEY`，或使用 `LINEAR_ACCESS_TOKEN` 提供 OAuth access token；两者不能同时配置。
 

@@ -44,6 +44,9 @@ import {
   createLinearImportPolicy,
   createLinearIssueSnapshot
 } from "../test-support/snapshot-import-fixtures.ts";
+import {
+  createTrustedTestProvenanceVerifier
+} from "../test-support/provider-fact-provenance.ts";
 
 const TARGET = {
   kind: "repository" as const,
@@ -75,6 +78,8 @@ test("observed snapshot import facade composes real preview and service apply in
     journal,
     importPolicyProvider: async () =>
       structuredClone(policy),
+    providerFactProvenanceVerifier:
+      createTrustedTestProvenanceVerifier(),
     clock: () =>
       new Date("2026-07-27T10:01:00.050Z")
   });
@@ -214,6 +219,8 @@ test("observed snapshot import facade keeps real preview and apply outcomes when
     journal,
     importPolicyProvider: async () =>
       structuredClone(policy),
+    providerFactProvenanceVerifier:
+      createTrustedTestProvenanceVerifier(),
     clock: () =>
       new Date("2026-07-27T10:01:00.050Z")
   });

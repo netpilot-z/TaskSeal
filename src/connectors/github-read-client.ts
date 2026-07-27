@@ -1,6 +1,42 @@
 const GITHUB_API_ORIGIN = "https://api.github.com";
 const GITHUB_API_VERSION = "2026-03-10";
 const MAX_PAGES = 10;
+const GITHUB_CHECK_STATUSES = new Set([
+  "queued",
+  "in_progress",
+  "completed",
+  "waiting",
+  "requested",
+  "pending"
+] as const);
+const GITHUB_CHECK_CONCLUSIONS = new Set([
+  "action_required",
+  "cancelled",
+  "failure",
+  "neutral",
+  "success",
+  "skipped",
+  "stale",
+  "timed_out"
+] as const);
+
+export type GitHubCheckStatus =
+  | "queued"
+  | "in_progress"
+  | "completed"
+  | "waiting"
+  | "requested"
+  | "pending";
+
+export type GitHubCheckConclusion =
+  | "action_required"
+  | "cancelled"
+  | "failure"
+  | "neutral"
+  | "success"
+  | "skipped"
+  | "stale"
+  | "timed_out";
 
 export interface HeadersLike {
   get(name: string): string | null;
@@ -40,12 +76,12 @@ export interface GitHubPullRequest
   };
 }
 
-interface GitHubCheckResponse
+export interface GitHubCheckResponse
   extends Record<string, unknown> {
   id: string | number;
   name: string;
-  status: string;
-  conclusion: string | null;
+  status: GitHubCheckStatus;
+  conclusion: GitHubCheckConclusion | null;
   head_sha: string;
   details_url: string;
   completed_at: string | null;
@@ -54,7 +90,7 @@ interface GitHubCheckResponse
 export interface GitHubCheck
   extends GitHubCheckResponse {
   status: "completed";
-  conclusion: string;
+  conclusion: GitHubCheckConclusion;
   completed_at: string;
 }
 
@@ -77,6 +113,22 @@ export interface ReadGitHubDeliveryOptions {
   issueNumber: number;
   pullRequestNumber: number;
   checkName: string;
+  token?: string | null | undefined;
+  fetchImpl?: FetchLike;
+  timeoutMs?: number;
+}
+
+export interface ReadGitHubPullRequestOptions {
+  repository: string;
+  pullRequestNumber: number;
+  token?: string | null | undefined;
+  fetchImpl?: FetchLike;
+  timeoutMs?: number;
+}
+
+export interface ReadGitHubCheckRunOptions {
+  repository: string;
+  checkRunId: string;
   token?: string | null | undefined;
   fetchImpl?: FetchLike;
   timeoutMs?: number;
@@ -135,6 +187,82 @@ export async function readGitHubIssue({
   }
 
   return issue;
+}
+
+export async function readGitHubPullRequest({
+  repository,
+  pullRequestNumber,
+  token,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = 15_000
+}: ReadGitHubPullRequestOptions):
+  Promise<GitHubPullRequest> {
+  const { owner, name } =
+    parseRepository(repository);
+  requirePositiveInteger(
+    pullRequestNumber,
+    "pullRequestNumber"
+  );
+  requireFetch(fetchImpl);
+  validateToken(token);
+  validateTimeout(timeoutMs);
+
+  const response = await getJson({
+    url:
+      `${GITHUB_API_ORIGIN}/repos/` +
+      `${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/` +
+      pullRequestNumber,
+    headers: createHeaders(token),
+    fetchImpl,
+    timeoutMs
+  });
+
+  if (!isGitHubPullRequest(response.body)) {
+    throw githubError(
+      "GITHUB_RESPONSE_INVALID",
+      "GitHub returned an invalid pull request response."
+    );
+  }
+
+  return response.body;
+}
+
+export async function readGitHubCheckRun({
+  repository,
+  checkRunId,
+  token,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = 15_000
+}: ReadGitHubCheckRunOptions):
+  Promise<GitHubCheckResponse> {
+  const { owner, name } =
+    parseRepository(repository);
+  requirePositiveDecimalIdentifier(
+    checkRunId,
+    "checkRunId"
+  );
+  requireFetch(fetchImpl);
+  validateToken(token);
+  validateTimeout(timeoutMs);
+
+  const response = await getJson({
+    url:
+      `${GITHUB_API_ORIGIN}/repos/` +
+      `${encodeURIComponent(owner)}/${encodeURIComponent(name)}/check-runs/` +
+      checkRunId,
+    headers: createHeaders(token),
+    fetchImpl,
+    timeoutMs
+  });
+
+  if (!isGitHubCheck(response.body)) {
+    throw githubError(
+      "GITHUB_RESPONSE_INVALID",
+      "GitHub returned an invalid check run response."
+    );
+  }
+
+  return response.body;
 }
 
 export async function readGitHubDelivery({
@@ -426,13 +554,20 @@ function isGitHubCheck(
     isRecord(value) &&
     isIdentifier(value.id) &&
     isNonEmptyString(value.name) &&
-    isNonEmptyString(value.status) &&
-    (value.conclusion === null ||
-      isNonEmptyString(value.conclusion)) &&
+    isGitHubCheckStatus(value.status) &&
     isNonEmptyString(value.head_sha) &&
     isNonEmptyString(value.details_url) &&
-    (value.completed_at === null ||
-      isNonEmptyString(value.completed_at))
+    (
+      value.status === "completed"
+        ? isGitHubCheckConclusion(
+            value.conclusion
+          ) &&
+          isNonEmptyString(
+            value.completed_at
+          )
+        : value.conclusion === null &&
+          value.completed_at === null
+    )
   );
 }
 
@@ -443,6 +578,28 @@ function isCompletedGitHubCheck(
     value.status === "completed" &&
     isNonEmptyString(value.conclusion) &&
     isNonEmptyString(value.completed_at)
+  );
+}
+
+function isGitHubCheckStatus(
+  value: unknown
+): value is GitHubCheckStatus {
+  return (
+    typeof value === "string" &&
+    GITHUB_CHECK_STATUSES.has(
+      value as GitHubCheckStatus
+    )
+  );
+}
+
+function isGitHubCheckConclusion(
+  value: unknown
+): value is GitHubCheckConclusion {
+  return (
+    typeof value === "string" &&
+    GITHUB_CHECK_CONCLUSIONS.has(
+      value as GitHubCheckConclusion
+    )
   );
 }
 
@@ -641,6 +798,21 @@ function requirePositiveInteger(
     throw githubError(
       "GITHUB_INPUT_INVALID",
       `GitHub ${field} must be a positive integer.`
+    );
+  }
+}
+
+function requirePositiveDecimalIdentifier(
+  value: unknown,
+  field: string
+): asserts value is string {
+  if (
+    typeof value !== "string" ||
+    !/^[1-9]\d*$/.test(value)
+  ) {
+    throw githubError(
+      "GITHUB_INPUT_INVALID",
+      `GitHub ${field} must be a positive decimal identifier.`
     );
   }
 }

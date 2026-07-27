@@ -42,6 +42,13 @@ import {
 import type {
   ProviderIngressRegistry
 } from "./provider-ingress-registry.ts";
+import {
+  collectProviderFactProvenanceClaims,
+  verifyProviderFactProvenance
+} from "./provider-fact-provenance.ts";
+import type {
+  ProviderFactProvenanceVerifier
+} from "./provider-fact-provenance.ts";
 
 export interface EventJournal {
   readAll(): Promise<unknown[]>;
@@ -53,6 +60,9 @@ export interface TaskSealServiceOpenOptions {
   journal: EventJournal;
   importPolicyProvider?: () => unknown | Promise<unknown>;
   providerIngressRegistry?: ProviderIngressRegistry;
+  providerFactProvenanceVerifier?:
+    | ProviderFactProvenanceVerifier
+    | undefined;
   clock?: () => unknown;
 }
 
@@ -73,6 +83,9 @@ interface TaskSealServiceConstructorOptions {
     | (() => unknown | Promise<unknown>)
     | undefined;
   providerIngressRegistry: ProviderIngressRegistry;
+  providerFactProvenanceVerifier?:
+    | ProviderFactProvenanceVerifier
+    | undefined;
   clock?: (() => unknown) | undefined;
 }
 
@@ -118,6 +131,7 @@ export class TaskSealService {
     importPolicyProvider,
     providerIngressRegistry =
       DEFAULT_PROVIDER_INGRESS_REGISTRY,
+    providerFactProvenanceVerifier,
     clock = () => new Date()
   }: TaskSealServiceOpenOptions): Promise<TaskSealService> {
     const records = await journal.readAll();
@@ -193,6 +207,7 @@ export class TaskSealService {
       batchesById,
       importPolicyProvider,
       providerIngressRegistry,
+      providerFactProvenanceVerifier,
       clock
     });
   }
@@ -203,6 +218,9 @@ export class TaskSealService {
   #importPolicyProvider:
     | TaskSealServiceOpenOptions["importPolicyProvider"];
   #providerIngressRegistry: ProviderIngressRegistry;
+  #providerFactProvenanceVerifier:
+    | ProviderFactProvenanceVerifier
+    | undefined;
   #clock: () => unknown;
   #health: TaskSealServiceHealth;
 
@@ -213,6 +231,7 @@ export class TaskSealService {
     batchesById = new Map(),
     importPolicyProvider,
     providerIngressRegistry,
+    providerFactProvenanceVerifier,
     clock = () => new Date()
   }: TaskSealServiceConstructorOptions) {
     this.#journal = journal;
@@ -225,6 +244,8 @@ export class TaskSealService {
     this.#importPolicyProvider = importPolicyProvider;
     this.#providerIngressRegistry =
       providerIngressRegistry;
+    this.#providerFactProvenanceVerifier =
+      providerFactProvenanceVerifier;
     this.#clock = clock;
     this.#health = {
       status: "ready"
@@ -423,6 +444,11 @@ export class TaskSealService {
       actionByEventId
     });
 
+    await this.verifyProviderFactProvenance({
+      plan: normalizedPlan,
+      baseWorkflow: this.#state.workflow
+    });
+
     const record = createImportBatchRecord({
       plan: normalizedPlan,
       actor,
@@ -554,6 +580,63 @@ export class TaskSealService {
         "IMPORT_POLICY_STALE",
         "Current ImportPolicy no longer covers the planned provider scope.",
         { cause: error }
+      );
+    }
+  }
+
+  private async verifyProviderFactProvenance({
+    plan,
+    baseWorkflow
+  }: {
+    plan: ImportPlan;
+    baseWorkflow: Workflow;
+  }): Promise<void> {
+    let claims;
+
+    try {
+      claims = collectProviderFactProvenanceClaims({
+        plan,
+        baseWorkflow
+      });
+    } catch (error) {
+      throw new TaskSealServiceError(
+        hasErrorCode(
+          error,
+          "PROVIDER_FACT_PROVENANCE_UNAVAILABLE"
+        )
+          ? "IMPORT_PROVENANCE_UNAVAILABLE"
+          : "IMPORT_PROVENANCE_MISMATCH",
+        hasErrorCode(
+          error,
+          "PROVIDER_FACT_PROVENANCE_UNAVAILABLE"
+        )
+          ? "TaskSeal could not verify Provider fact provenance."
+          : "Provider facts do not match the reviewed import plan."
+      );
+    }
+
+    try {
+      await verifyProviderFactProvenance({
+        claims,
+        verifier:
+          this.#providerFactProvenanceVerifier
+      });
+    } catch (error) {
+      if (
+        hasErrorCode(
+          error,
+          "PROVIDER_FACT_PROVENANCE_MISMATCH"
+        )
+      ) {
+        throw new TaskSealServiceError(
+          "IMPORT_PROVENANCE_MISMATCH",
+          "Provider facts no longer match the reviewed import plan."
+        );
+      }
+
+      throw new TaskSealServiceError(
+        "IMPORT_PROVENANCE_UNAVAILABLE",
+        "TaskSeal could not verify Provider fact provenance."
       );
     }
   }
