@@ -30,6 +30,18 @@ export function applyEvent(workflow, event) {
     return createWorkItem(workflow, event);
   }
 
+  if (event.type === "external_link.linked") {
+    return linkExternalObject(workflow, event);
+  }
+
+  if (event.type === "external_link.observed") {
+    return observeExternalObject(workflow, event);
+  }
+
+  if (event.type === "work_item.updated") {
+    return updateWorkItem(workflow, event);
+  }
+
   if (event.type === "attempt.started") {
     return startAttempt(workflow, event);
   }
@@ -61,6 +73,22 @@ function createWorkItem(workflow, event) {
     );
   }
 
+  const externalLink = normalizeCreatedExternalLink(
+    event.payload.externalLink
+  );
+
+  if (
+    findExternalLinkOwner(
+      workflow,
+      externalLink.providerObjectKey
+    )
+  ) {
+    throw new DomainError(
+      "PROVIDER_OBJECT_ALREADY_LINKED",
+      "A provider object can be linked only once in a workflow."
+    );
+  }
+
   return {
     processedEvents: {
       ...workflow.processedEvents,
@@ -80,9 +108,324 @@ function createWorkItem(workflow, event) {
         artifacts: [],
         evidence: [],
         acceptanceDecision: null,
-        externalLinks: [event.payload.externalLink]
+        externalLinks: [externalLink]
       }
     }
+  };
+}
+
+function normalizeCreatedExternalLink(externalLink) {
+  if (isNonEmptyString(externalLink.providerObjectKey)) {
+    return cloneExternalLink(externalLink);
+  }
+
+  const isImportableLegacyIssue =
+    externalLink.provider === "github" ||
+    externalLink.provider === "linear";
+
+  return {
+    providerObjectKey: isImportableLegacyIssue
+      ? `${externalLink.provider}:issue:${externalLink.externalId}`
+      : `legacy:${externalLink.provider}:${externalLink.externalId}`,
+    provider: externalLink.provider,
+    objectType: isImportableLegacyIssue ? "issue" : null,
+    externalId: externalLink.externalId,
+    scopeRef: null,
+    url: externalLink.url,
+    managedFields: null,
+    lastObservation: null,
+    legacy: true
+  };
+}
+
+function linkExternalObject(workflow, event) {
+  const workItem = requireWorkItem(workflow, event.workItemId);
+  const link = event.payload.link;
+  const existingOwner = findExternalLinkOwner(
+    workflow,
+    link.providerObjectKey
+  );
+
+  if (existingOwner) {
+    throw new DomainError(
+      existingOwner.workItemId === event.workItemId
+        ? "EXTERNAL_LINK_ALREADY_EXISTS"
+        : "PROVIDER_OBJECT_ALREADY_LINKED",
+      "A provider object can be linked only once in a workflow."
+    );
+  }
+
+  if (
+    link.managedFields.includes("title") &&
+    workItem.externalLinks.some((item) =>
+      item.managedFields?.includes("title")
+    )
+  ) {
+    throw new DomainError(
+      "FIELD_AUTHORITY_CONFLICT",
+      "A work item field can be managed by only one external link."
+    );
+  }
+
+  return withWorkItem(workflow, event, {
+    ...workItem,
+    externalLinks: [
+      ...workItem.externalLinks,
+      cloneExternalLink(link)
+    ]
+  });
+}
+
+function observeExternalObject(workflow, event) {
+  const workItem = requireWorkItem(workflow, event.workItemId);
+  const linkIndex = workItem.externalLinks.findIndex(
+    (link) =>
+      link.providerObjectKey === event.payload.providerObjectKey
+  );
+
+  if (linkIndex < 0) {
+    throw new DomainError(
+      "EXTERNAL_LINK_NOT_FOUND",
+      "An observation must reference a linked provider object."
+    );
+  }
+
+  const link = workItem.externalLinks[linkIndex];
+  const currentObservation = link.lastObservation;
+
+  if (event.payload.expectedRevisionId === null) {
+    return baselineLegacyExternalLink({
+      workflow,
+      event,
+      workItem,
+      linkIndex,
+      link
+    });
+  }
+
+  if (link.legacy === true || !currentObservation) {
+    throw new DomainError(
+      "EXTERNAL_LINK_BASELINE_INVALID",
+      "Only a valid legacy link can receive a baseline observation."
+    );
+  }
+
+  if (
+    event.payload.expectedRevisionId !==
+    currentObservation.revisionId
+  ) {
+    throw new DomainError(
+      "EXTERNAL_LINK_REVISION_MISMATCH",
+      "The observation precondition does not match the current revision."
+    );
+  }
+
+  const observation = event.payload.observation;
+
+  if (observation.revisionId === currentObservation.revisionId) {
+    throw new DomainError(
+      observation.contentDigest === currentObservation.contentDigest
+        ? "SOURCE_REVISION_NOT_ADVANCED"
+        : "SOURCE_REVISION_CONTENT_CONFLICT",
+      "A source revision cannot be observed with conflicting or duplicate content."
+    );
+  }
+
+  const incomingTimestamp = Date.parse(observation.occurredAt);
+  const currentTimestamp = Date.parse(
+    currentObservation.occurredAt
+  );
+
+  if (incomingTimestamp < currentTimestamp) {
+    throw new DomainError(
+      "SOURCE_REVISION_STALE",
+      "An older source revision cannot replace a newer observation."
+    );
+  }
+
+  if (incomingTimestamp === currentTimestamp) {
+    throw new DomainError(
+      "SOURCE_REVISION_ORDER_AMBIGUOUS",
+      "Different source revisions with the same timestamp cannot be ordered safely."
+    );
+  }
+
+  const externalLinks = workItem.externalLinks.map((item, index) =>
+    index === linkIndex
+      ? {
+          ...item,
+          url: observation.url ?? item.url,
+          lastObservation: { ...observation }
+        }
+      : item
+  );
+
+  return withWorkItem(workflow, event, {
+    ...workItem,
+    externalLinks
+  });
+}
+
+function baselineLegacyExternalLink({
+  workflow,
+  event,
+  workItem,
+  linkIndex,
+  link
+}) {
+  const baseline = event.payload.baseline;
+  const canBaseline =
+    link.legacy === true &&
+    (link.provider === "github" || link.provider === "linear") &&
+    link.objectType === "issue" &&
+    link.scopeRef === null &&
+    link.managedFields === null &&
+    link.lastObservation === null &&
+    baseline.providerObjectKey === link.providerObjectKey &&
+    baseline.objectType === "issue" &&
+    isProviderScopeRef(link.provider, baseline.scopeRef);
+
+  if (!canBaseline) {
+    throw new DomainError(
+      "EXTERNAL_LINK_BASELINE_INVALID",
+      "The baseline does not match an importable legacy issue link."
+    );
+  }
+
+  if (
+    baseline.managedFields.includes("title") &&
+    workItem.externalLinks.some(
+      (item, index) =>
+        index !== linkIndex &&
+        item.managedFields?.includes("title")
+    )
+  ) {
+    throw new DomainError(
+      "FIELD_AUTHORITY_CONFLICT",
+      "A work item field can be managed by only one external link."
+    );
+  }
+
+  const observation = event.payload.observation;
+  const externalLinks = workItem.externalLinks.map(
+    (item, index) => {
+      if (index !== linkIndex) {
+        return item;
+      }
+
+      return {
+        providerObjectKey: baseline.providerObjectKey,
+        provider: link.provider,
+        objectType: baseline.objectType,
+        externalId: link.externalId,
+        scopeRef: { ...baseline.scopeRef },
+        url: observation.url ?? link.url,
+        managedFields: [...baseline.managedFields],
+        lastObservation: { ...observation }
+      };
+    }
+  );
+
+  return withWorkItem(workflow, event, {
+    ...workItem,
+    externalLinks
+  });
+}
+
+function updateWorkItem(workflow, event) {
+  const workItem = requireWorkItem(workflow, event.workItemId);
+  const source = event.payload.source;
+  const titleChange = event.payload.changes.title;
+  const sourceLink = workItem.externalLinks.find(
+    (link) =>
+      link.providerObjectKey === source.providerObjectKey
+  );
+
+  if (!sourceLink) {
+    throw new DomainError(
+      "EXTERNAL_LINK_NOT_FOUND",
+      "A work item update must reference a linked provider object."
+    );
+  }
+
+  if (!sourceLink.managedFields?.includes("title")) {
+    throw new DomainError(
+      "FIELD_AUTHORITY_CONFLICT",
+      "The source external link does not manage the title field."
+    );
+  }
+
+  const observation = sourceLink.lastObservation;
+
+  if (
+    !observation ||
+    observation.revisionId !== source.revisionId ||
+    observation.contentDigest !== source.contentDigest ||
+    observation.title !== titleChange.after
+  ) {
+    throw new DomainError(
+      "SOURCE_REVISION_MISMATCH",
+      "The work item update must match the source link observation."
+    );
+  }
+
+  if (workItem.title !== titleChange.before) {
+    throw new DomainError(
+      "WORK_ITEM_UPDATE_PRECONDITION_FAILED",
+      "The work item title no longer matches the planned before value."
+    );
+  }
+
+  return withWorkItem(workflow, event, {
+    ...workItem,
+    title: titleChange.after
+  });
+}
+
+function findExternalLinkOwner(workflow, providerObjectKey) {
+  for (const workItem of Object.values(workflow.workItems)) {
+    const link = workItem.externalLinks.find(
+      (item) => item.providerObjectKey === providerObjectKey
+    );
+
+    if (link) {
+      return { workItemId: workItem.id, link };
+    }
+  }
+
+  return null;
+}
+
+function cloneExternalLink(link) {
+  const scopeRef = {
+    kind: link.scopeRef.kind,
+    key: link.scopeRef.key
+  };
+
+  if (link.scopeRef.parentKey !== undefined) {
+    scopeRef.parentKey = link.scopeRef.parentKey;
+  }
+
+  const lastObservation = {
+    revisionId: link.lastObservation.revisionId,
+    occurredAt: link.lastObservation.occurredAt,
+    contentDigest: link.lastObservation.contentDigest,
+    title: link.lastObservation.title
+  };
+
+  if (link.lastObservation.url !== undefined) {
+    lastObservation.url = link.lastObservation.url;
+  }
+
+  return {
+    providerObjectKey: link.providerObjectKey,
+    provider: link.provider,
+    objectType: link.objectType,
+    externalId: link.externalId,
+    scopeRef,
+    url: link.url,
+    managedFields: [...link.managedFields],
+    lastObservation
   };
 }
 
@@ -578,7 +921,7 @@ function validateEventPayload(event) {
       payload.requiredEvidence.every(isNonEmptyString);
 
     if (
-      !isNonEmptyString(payload.title) ||
+      !isTitle(payload.title) ||
       !evidenceIsValid ||
       !externalLink ||
       !isNonEmptyString(externalLink.provider) ||
@@ -587,6 +930,54 @@ function validateEventPayload(event) {
     ) {
       throw invalidPayload(event.type);
     }
+
+    if (
+      externalLink.providerObjectKey !== undefined &&
+      (!hasOnlyKeys(payload, [
+        "title",
+        "requiredEvidence",
+        "externalLink"
+      ]) ||
+        !isRichExternalLink(externalLink))
+    ) {
+      throw invalidPayload(event.type);
+    }
+  }
+
+  if (
+    event.type === "external_link.linked" &&
+    (!hasOnlyKeys(payload, ["link"]) ||
+      !isRichExternalLink(payload.link))
+  ) {
+    throw invalidPayload(event.type);
+  }
+
+  if (
+    event.type === "external_link.observed" &&
+    (!hasOnlyKeys(payload, [
+      "providerObjectKey",
+      "expectedRevisionId",
+      "observation",
+      "baseline"
+    ]) ||
+      !isNonEmptyString(payload.providerObjectKey) ||
+      (payload.expectedRevisionId !== null &&
+        !isNonEmptyString(payload.expectedRevisionId)) ||
+      !isObservation(payload.observation) ||
+      (payload.expectedRevisionId === null
+        ? !isExternalLinkBaseline(payload.baseline)
+        : payload.baseline !== undefined))
+  ) {
+    throw invalidPayload(event.type);
+  }
+
+  if (
+    event.type === "work_item.updated" &&
+    (!hasOnlyKeys(payload, ["source", "changes"]) ||
+      !isUpdateSource(payload.source) ||
+      !isTitleChanges(payload.changes))
+  ) {
+    throw invalidPayload(event.type);
   }
 
   if (
@@ -642,6 +1033,196 @@ function validateEventPayload(event) {
   }
 }
 
+function isRichExternalLink(value) {
+  return (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    hasOnlyKeys(value, [
+      "providerObjectKey",
+      "provider",
+      "objectType",
+      "externalId",
+      "scopeRef",
+      "url",
+      "managedFields",
+      "lastObservation"
+    ]) &&
+    isNonEmptyString(value.providerObjectKey) &&
+    isNonEmptyString(value.provider) &&
+    isNonEmptyString(value.objectType) &&
+    isNonEmptyString(value.externalId) &&
+    isProviderScopeRef(value.provider, value.scopeRef) &&
+    isHttpUrl(value.url) &&
+    isManagedFields(value.managedFields) &&
+    isObservation(value.lastObservation) &&
+    value.legacy === undefined
+  );
+}
+
+function isUpdateSource(value) {
+  return (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    hasOnlyKeys(value, [
+      "providerObjectKey",
+      "revisionId",
+      "contentDigest"
+    ]) &&
+    isNonEmptyString(value.providerObjectKey) &&
+    isNonEmptyString(value.revisionId) &&
+    isSha256Digest(value.contentDigest)
+  );
+}
+
+function isExternalLinkBaseline(value) {
+  return (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    hasOnlyKeys(value, [
+      "providerObjectKey",
+      "objectType",
+      "scopeRef",
+      "managedFields"
+    ]) &&
+    isNonEmptyString(value.providerObjectKey) &&
+    value.objectType === "issue" &&
+    isScopeRef(value.scopeRef) &&
+    isManagedFields(value.managedFields)
+  );
+}
+
+function isTitleChanges(value) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    !hasOnlyKeys(value, ["title"])
+  ) {
+    return false;
+  }
+
+  const title = value.title;
+  return (
+    title &&
+    typeof title === "object" &&
+    !Array.isArray(title) &&
+    hasOnlyKeys(title, ["before", "after"]) &&
+    isNonEmptyString(title.before) &&
+    isNonEmptyString(title.after) &&
+    codePointLength(title.before) <= 512 &&
+    codePointLength(title.after) <= 512
+  );
+}
+
+function isScopeRef(value) {
+  return (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    hasOnlyKeys(value, ["kind", "key", "parentKey"]) &&
+    isNonEmptyString(value.kind) &&
+    isNonEmptyString(value.key) &&
+    (value.parentKey === undefined ||
+      isNonEmptyString(value.parentKey))
+  );
+}
+
+function isManagedFields(value) {
+  return (
+    Array.isArray(value) &&
+    value.length <= 8 &&
+    new Set(value).size === value.length &&
+    value.every((field) => field === "title")
+  );
+}
+
+function isProviderScopeRef(provider, value) {
+  if (!isScopeRef(value)) {
+    return false;
+  }
+
+  if (provider === "github") {
+    return (
+      hasOnlyKeys(value, ["kind", "key"]) &&
+      value.kind === "repository" &&
+      /^github:repository:[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?\/[a-z0-9._-]{1,100}$/.test(
+        value.key
+      )
+    );
+  }
+
+  if (provider === "linear") {
+    return (
+      hasOnlyKeys(value, ["kind", "key", "parentKey"]) &&
+      value.kind === "team" &&
+      isScopedUuid(value.key, "linear:team:") &&
+      isScopedUuid(
+        value.parentKey,
+        "linear:organization:"
+      )
+    );
+  }
+
+  return false;
+}
+
+function isScopedUuid(value, prefix) {
+  const uuid =
+    isNonEmptyString(value) && value.startsWith(prefix)
+      ? value.slice(prefix.length)
+      : "";
+
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+    uuid
+  );
+}
+
+function isObservation(value) {
+  return (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    hasOnlyKeys(value, [
+      "revisionId",
+      "occurredAt",
+      "contentDigest",
+      "title",
+      "url"
+    ]) &&
+    isNonEmptyString(value.revisionId) &&
+    isValidTimestamp(value.occurredAt) &&
+    isSha256Digest(value.contentDigest) &&
+    isTitle(value.title) &&
+    (value.url === undefined || isHttpUrl(value.url))
+  );
+}
+
+function hasOnlyKeys(value, allowedKeys) {
+  return (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).every((key) => allowedKeys.includes(key))
+  );
+}
+
+function isValidTimestamp(value) {
+  return (
+    isNonEmptyString(value) &&
+    Number.isFinite(Date.parse(value))
+  );
+}
+
+function isSha256Digest(value) {
+  return (
+    typeof value === "string" &&
+    /^sha256:[0-9a-f]{64}$/.test(value)
+  );
+}
+
 function invalidPayload(type) {
   return new DomainError(
     "EVENT_PAYLOAD_INVALID",
@@ -686,6 +1267,17 @@ function stableStringify(value) {
 
 function isNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function isTitle(value) {
+  return (
+    isNonEmptyString(value) &&
+    codePointLength(value) <= 512
+  );
+}
+
+function codePointLength(value) {
+  return [...value].length;
 }
 
 class DomainError extends Error {
