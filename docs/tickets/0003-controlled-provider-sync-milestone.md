@@ -81,7 +81,7 @@
 
 ## T11.2 — 接入 Gitee 并提取内置插件契约
 
-- 状态：待执行；GitHub Issue `#10`。
+- 状态：已完成；GitHub Issue `#10`。
 - 目的：实现 Gitee `provider.health`/`work-item.read`，并从第三个现有实现中提取最小 `AdapterManifest`/ports。
 - 范围：Gitee config/read/normalizer/inspection、静态 `AdapterManifest`、capability 与 contract tests。
 - 不包含：私有仓库 token、PR/CI、Webhook、外部写入、动态插件代码或市场。

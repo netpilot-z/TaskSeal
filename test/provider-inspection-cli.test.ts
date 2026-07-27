@@ -188,6 +188,140 @@ test("inspect linear parses one explicit issue mapping", async () => {
   assert.equal(readJsonProperty(rendered, "provider"), "linear");
 });
 
+test("inspect gitee requires explicit v2 mapping and preserves Issue case", async () => {
+  const output = createOutput();
+  const calls: unknown[] = [];
+  const exitCode = await runCli({
+    args: [
+      "inspect",
+      "gitee",
+      "--issue",
+      "I4",
+      "--work-item",
+      "TS-GITEE-I4",
+      "--criterion",
+      "tests",
+      "--snapshot-version",
+      "2",
+      "--title-management",
+      "none"
+    ],
+    cwd: "project-root",
+    output,
+    inspectGitee: async (options) => {
+      calls.push(options);
+      return {
+        schemaVersion: 2,
+        mode: "read-only",
+        provider: "gitee",
+        facts: []
+      };
+    }
+  });
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(calls, [
+    {
+      cwd: "project-root",
+      issueReference: "I4",
+      workItemId: "TS-GITEE-I4",
+      requiredEvidence: ["tests"],
+      snapshotVersion: 2,
+      managedFields: []
+    }
+  ]);
+  assert.equal(
+    readJsonProperty(
+      JSON.parse(output.text()),
+      "provider"
+    ),
+    "gitee"
+  );
+});
+
+test("inspect gitee-health accepts no provider arguments", async () => {
+  const output = createOutput();
+  const calls: unknown[] = [];
+  const exitCode = await runCli({
+    args: ["inspect", "gitee-health"],
+    cwd: "project-root",
+    output,
+    inspectGiteeHealth: async (options) => {
+      calls.push(options);
+      return {
+        provider: "gitee",
+        status: "ready"
+      };
+    }
+  });
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(calls, [{ cwd: "project-root" }]);
+});
+
+test("inspect gitee rejects v1, missing v2 controls, and unknown arguments", async () => {
+  const scenarios = [
+    [
+      "inspect",
+      "gitee",
+      "--issue",
+      "I4",
+      "--work-item",
+      "TS-1",
+      "--criterion",
+      "tests"
+    ],
+    [
+      "inspect",
+      "gitee",
+      "--issue",
+      "I4",
+      "--work-item",
+      "TS-1",
+      "--criterion",
+      "tests",
+      "--snapshot-version",
+      "1"
+    ],
+    [
+      "inspect",
+      "gitee",
+      "--issue",
+      "I4",
+      "--work-item",
+      "TS-1",
+      "--criterion",
+      "tests",
+      "--snapshot-version",
+      "2",
+      "--title-management",
+      "none",
+      "--token",
+      "secret"
+    ],
+    ["inspect", "gitee-health", "--repository", "foreign/repo"]
+  ];
+
+  for (const args of scenarios) {
+    const output = createOutput();
+    let invoked = false;
+    const exitCode = await runCli({
+      args,
+      output,
+      inspectGitee: async () => {
+        invoked = true;
+      },
+      inspectGiteeHealth: async () => {
+        invoked = true;
+      }
+    });
+
+    assert.equal(exitCode, 2);
+    assert.equal(invoked, false);
+    assert.match(output.text(), /Usage:/);
+  }
+});
+
 test("inspect rejects incomplete arguments and renders safe provider errors", async () => {
   const usageOutput = createOutput();
   let invoked = false;

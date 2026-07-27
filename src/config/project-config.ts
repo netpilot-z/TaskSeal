@@ -4,6 +4,7 @@ import { join } from "node:path";
 export interface ProjectConfiguration {
   readonly project: string;
   readonly github?: Readonly<Record<string, unknown>>;
+  readonly gitee?: Readonly<Record<string, unknown>>;
   readonly linear?: Readonly<Record<string, unknown>>;
   readonly mode?: string;
 }
@@ -11,6 +12,7 @@ export interface ProjectConfiguration {
 type ProjectConfigErrorCode =
   | "PROJECT_CONFIG_INVALID"
   | "GITHUB_CONFIG_INVALID"
+  | "GITEE_CONFIG_INVALID"
   | "LINEAR_CONFIG_INVALID";
 
 export async function readProjectConfiguration({
@@ -47,6 +49,9 @@ export async function readProjectConfiguration({
     project: parsed.project,
     ...(isRecord(parsed.github)
       ? { github: { ...parsed.github } }
+      : {}),
+    ...(isRecord(parsed.gitee)
+      ? { gitee: { ...parsed.gitee } }
       : {}),
     ...(isRecord(parsed.linear)
       ? { linear: { ...parsed.linear } }
@@ -95,6 +100,40 @@ export function getLinearCoordinates(
   }
 
   return { workspace, team };
+}
+
+export function getGiteeCoordinates(
+  configuration: ProjectConfiguration | null | undefined
+): { repository: string } {
+  const gitee = configuration?.gitee;
+  const repository = gitee?.repository;
+  const parts =
+    typeof repository === "string" ? repository.split("/") : [];
+
+  if (
+    !gitee ||
+    Object.keys(gitee).length !== 1 ||
+    !Object.hasOwn(gitee, "repository") ||
+    typeof repository !== "string" ||
+    repository !== repository.trim() ||
+    repository.length > 201 ||
+    parts.length !== 2 ||
+    parts.some(
+      (part) =>
+        part.length === 0 ||
+        part.length > 100 ||
+        !/^[A-Za-z0-9_.-]+$/.test(part) ||
+        part === "." ||
+        part === ".."
+    )
+  ) {
+    throw configError(
+      "GITEE_CONFIG_INVALID",
+      "Gitee configuration requires only repository in owner/name format."
+    );
+  }
+
+  return { repository };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

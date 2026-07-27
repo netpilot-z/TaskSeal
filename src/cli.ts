@@ -6,12 +6,17 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
+  inspectGiteeHealthProvider,
+  inspectGiteeProvider,
   inspectGitHubIssueProvider,
   inspectGitHubProvider,
   inspectLinearProvider
 } from "./application/provider-inspection.ts";
 import { createLinearTicketDryRun } from "./application/linear-ticket-dry-run.ts";
 import { TaskSealService } from "./application/taskseal-service.ts";
+import {
+  isGiteeIssueReference
+} from "./connectors/gitee-read-client.ts";
 import { isLinearIssueReference } from "./connectors/linear.ts";
 import { CodexAppServerClient } from "./runners/codex-app-server-client.ts";
 import { CodexRunner } from "./runners/codex-runner.ts";
@@ -112,6 +117,21 @@ type LinearCommandOptions = {
 type LinearInspectOptions =
   LinearCommandOptions & { cwd: string };
 
+type GiteeCommandOptions = {
+  issueReference: string;
+  workItemId: string;
+  requiredEvidence: string[];
+  snapshotVersion: 2;
+  managedFields: ManagedField[];
+};
+
+type GiteeInspectOptions =
+  GiteeCommandOptions & { cwd: string };
+
+interface GiteeHealthInspectOptions {
+  cwd: string;
+}
+
 interface LinearDryRunOptions {
   cwd: string;
   source?: string | undefined;
@@ -125,6 +145,12 @@ type InspectGitHub = (
 ) => unknown | Promise<unknown>;
 type InspectLinear = (
   options: LinearInspectOptions
+) => unknown | Promise<unknown>;
+type InspectGitee = (
+  options: GiteeInspectOptions
+) => unknown | Promise<unknown>;
+type InspectGiteeHealth = (
+  options: GiteeHealthInspectOptions
 ) => unknown | Promise<unknown>;
 type CreateLinearDryRun = (
   options: LinearDryRunOptions
@@ -151,6 +177,8 @@ export interface RunCliOptions {
   inspectGitHubIssue?: InspectGitHubIssue | undefined;
   inspectGitHub?: InspectGitHub | undefined;
   inspectLinear?: InspectLinear | undefined;
+  inspectGitee?: InspectGitee | undefined;
+  inspectGiteeHealth?: InspectGiteeHealth | undefined;
   createLinearDryRun?: CreateLinearDryRun | undefined;
 }
 
@@ -322,6 +350,8 @@ const USAGE = `Usage:
   taskseal inspect github-issue --issue <number> --work-item <id> --criterion <key> [--snapshot-version 2 --title-management provider|none]
   taskseal inspect github --issue <number> --pr <number> --check <name> --work-item <id> --attempt <id> --criterion <key> [--snapshot-version 2 --title-management provider|none]
   taskseal inspect linear --issue <identifier-or-uuid> --work-item <id> --criterion <key> [--snapshot-version 2 --title-management provider|none]
+  taskseal inspect gitee-health
+  taskseal inspect gitee --issue <case-sensitive-reference> --work-item <id> --criterion <key> --snapshot-version 2 --title-management provider|none
   taskseal sync linear --dry-run [--source <repository-relative-path>]
 `;
 
@@ -337,6 +367,8 @@ export async function runCli({
   inspectGitHubIssue,
   inspectGitHub,
   inspectLinear,
+  inspectGitee,
+  inspectGiteeHealth,
   createLinearDryRun
 }: RunCliOptions = {}): Promise<CliExitCode> {
   const command = args[0] ?? "start";
@@ -453,6 +485,49 @@ export async function runCli({
       try {
         const execute = inspectLinear ?? inspectLinearProvider;
         const snapshot = await execute({ cwd, ...options });
+        output.write(`${JSON.stringify(snapshot, null, 2)}\n`);
+        return 0;
+      } catch (error) {
+        output.write(renderInspectError(error));
+        return 1;
+      }
+    }
+
+    if (provider === "gitee-health") {
+      if (args.length !== 2) {
+        output.write(USAGE);
+        return 2;
+      }
+
+      try {
+        const execute =
+          inspectGiteeHealth ?? inspectGiteeHealthProvider;
+        const health = await execute({ cwd });
+        output.write(`${JSON.stringify(health, null, 2)}\n`);
+        return 0;
+      } catch (error) {
+        output.write(renderInspectError(error));
+        return 1;
+      }
+    }
+
+    if (provider === "gitee") {
+      const options = parseGiteeInspectArguments(
+        args.slice(2)
+      );
+
+      if (!options) {
+        output.write(USAGE);
+        return 2;
+      }
+
+      try {
+        const execute =
+          inspectGitee ?? inspectGiteeProvider;
+        const snapshot = await execute({
+          cwd,
+          ...options
+        });
         output.write(`${JSON.stringify(snapshot, null, 2)}\n`);
         return 0;
       } catch (error) {
@@ -1199,6 +1274,47 @@ function parseLinearInspectArguments(
       readNamedArgument(values, "--criterion")
     ],
     ...versionOptions
+  };
+}
+
+function parseGiteeInspectArguments(
+  args: readonly string[]
+): GiteeCommandOptions | null {
+  const parsed = parseVersionedInspectArguments(args, [
+    "--issue",
+    "--work-item",
+    "--criterion"
+  ]);
+
+  if (
+    !parsed ||
+    parsed.versionOptions.snapshotVersion !== 2
+  ) {
+    return null;
+  }
+
+  const issueReference = readNamedArgument(
+    parsed.values,
+    "--issue"
+  );
+
+  if (!isGiteeIssueReference(issueReference)) {
+    return null;
+  }
+
+  return {
+    issueReference,
+    workItemId: readNamedArgument(
+      parsed.values,
+      "--work-item"
+    ),
+    requiredEvidence: [
+      readNamedArgument(parsed.values, "--criterion")
+    ],
+    snapshotVersion: 2,
+    managedFields: [
+      ...parsed.versionOptions.managedFields
+    ]
   };
 }
 

@@ -8,7 +8,8 @@ import type {
   WorkItemCreatedEvent
 } from "../domain/workflow.ts";
 
-export type ProviderName = "github" | "linear";
+// Read-model membership does not grant import; that allowlist is ImportProvider.
+export type ProviderName = "github" | "linear" | "gitee";
 
 export type ProviderObjectType =
   | "check"

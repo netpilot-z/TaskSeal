@@ -1,8 +1,19 @@
 import {
+  getGiteeCoordinates,
   getGitHubCoordinates,
   getLinearCoordinates,
   readProjectConfiguration
 } from "../config/project-config.ts";
+import {
+  createGiteeAdapter
+} from "../connectors/gitee.ts";
+import type {
+  GiteeHealthResult,
+  GiteeProviderSnapshotV2
+} from "../connectors/gitee.ts";
+import type {
+  GiteeFetchLike
+} from "../connectors/gitee-read-client.ts";
 import {
   normalizeGitHubCheck,
   normalizeGitHubCheckFact,
@@ -121,6 +132,24 @@ type LinearInspectionV2Options =
 type LinearInspectionOptions =
   | LinearInspectionV1Options
   | LinearInspectionV2Options;
+
+interface GiteeHealthInspectionOptions {
+  cwd: string;
+  now?: (() => unknown) | undefined;
+  fetchImpl?: GiteeFetchLike | undefined;
+}
+
+interface GiteeInspectionBaseOptions {
+  cwd: string;
+  issueReference: string;
+  workItemId: string;
+  requiredEvidence: string[];
+  now?: (() => unknown) | undefined;
+  fetchImpl?: GiteeFetchLike | undefined;
+}
+
+type GiteeInspectionOptions =
+  GiteeInspectionBaseOptions & SnapshotV2Options;
 
 export interface GitHubIssueSnapshotV1 {
   schemaVersion: 1;
@@ -255,6 +284,71 @@ type ResolvedSnapshotVersion =
   | ResolvedSnapshotV2;
 
 type InspectionErrorCode = "PROVIDER_MAPPING_INVALID";
+
+export async function inspectGiteeHealthProvider({
+  cwd,
+  now = () => new Date(),
+  fetchImpl = globalThis.fetch
+}: GiteeHealthInspectionOptions): Promise<GiteeHealthResult> {
+  const configuration =
+    await readProjectConfiguration({ cwd });
+  const { repository } =
+    getGiteeCoordinates(configuration);
+  const adapter = createGiteeAdapter({
+    fetchImpl,
+    now
+  });
+
+  return adapter.ports["provider.health"]({
+    repository
+  });
+}
+
+export async function inspectGiteeProvider({
+  cwd,
+  issueReference,
+  workItemId,
+  requiredEvidence,
+  snapshotVersion,
+  managedFields,
+  now = () => new Date(),
+  fetchImpl = globalThis.fetch
+}: GiteeInspectionOptions): Promise<GiteeProviderSnapshotV2> {
+  requireMappingString(workItemId, "workItemId");
+  const validatedEvidence =
+    requireEvidenceKeys(requiredEvidence);
+  const version = resolveSnapshotVersion({
+    snapshotVersion,
+    managedFields
+  });
+
+  if (version.schemaVersion !== 2) {
+    throw inspectionError(
+      "PROVIDER_MAPPING_INVALID",
+      "Gitee inspection supports only ProviderSnapshot version 2."
+    );
+  }
+
+  const configuration =
+    await readProjectConfiguration({ cwd });
+  const { repository } =
+    getGiteeCoordinates(configuration);
+  const adapter = createGiteeAdapter({
+    fetchImpl,
+    now
+  });
+
+  return adapter.ports["work-item.read"]({
+    repository,
+    issueReference,
+    mapping: {
+      workItemId,
+      requiredEvidence:
+        normalizeV2RequiredEvidence(validatedEvidence),
+      managedFields: [...version.managedFields]
+    }
+  });
+}
 
 export function inspectGitHubIssueProvider(
   options: GitHubIssueInspectionV1Options
