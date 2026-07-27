@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { normalizeLinearIssue } from "../src/connectors/linear.js";
+import { normalizeLinearIssue } from "../src/connectors/linear.ts";
 
 test("a Linear issue is normalized into a stable work item event", async () => {
   const fixture = JSON.parse(

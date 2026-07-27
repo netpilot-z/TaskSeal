@@ -34,13 +34,23 @@
 
 ## T12.4 — 迁移 provider adapters
 
-- 状态：GitHub Issue `#15`，依赖 `#13`、`#14`。
+- 状态：已完成；GitHub Issue `#15`，provider transport、normalizer、inspection 与 dry-run 已进入 strict TypeScript 门禁。
 - 目的：类型化 provider 原始事实、显式映射、canonical snapshot 和安全错误。
 - 范围：GitHub/Linear normalizer、read client、inspection、dry-run 和测试。
 - 不包含：provider 写入、SDK、通用插件市场。
 - 依赖：T12.2、T12.3。
 - 验收标准：HTTP/GraphQL 响应从 `unknown` 校验；provider 类型不泄漏到领域核心。
-- 验证：provider contract、inspection、dry-run 和全量测试。
+- 验证：7 个直接 TypeScript 测试文件 54/54、provider 与 snapshot import 契约回归 74/74、全量测试 229/229 通过；独立审查发现的两项 P2 已按 TDD 修复并复审关闭，最终无剩余 P0–P3。
+
+## T12.7 — 迁移 Snapshot Import
+
+- 状态：GitHub Issue `#22`；从 T12.4 拆出，避免把约千行 importer 与 provider transport 放入同一审查单元。
+- 目的：类型化不可信 snapshot 文本到确定性 ImportPlan 的完整 runtime guard、digest、冲突和排序边界。
+- 范围：snapshot importer、test-support fixture、preview/domain/apply 直接测试与临时声明清理。
+- 不包含：provider 网络、真实外部写入、CLI/server/runner、插件 SDK 或规则变更。
+- 依赖：T12.3、T12.4；应在 T12.5/T12.6 完成前独立关闭。
+- 验收标准：`JSON.parse` 结果保持 `unknown`；全部资源限制、schema、digest、冲突、排序、apply 和 crash recovery 语义兼容。
+- 验证：snapshot/import batch/journal crash 定向测试、全量测试和独立审查。
 
 ## T12.5 — 迁移 Codex runner
 

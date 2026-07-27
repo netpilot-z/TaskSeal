@@ -7,7 +7,7 @@ import {
 } from "../src/domain/workflow.ts";
 import {
   digestProviderFactContent
-} from "../src/lib/provider-snapshot.js";
+} from "../src/lib/provider-snapshot.ts";
 import {
   computeImportPlanDigest,
   deriveImportEventId
@@ -18,7 +18,7 @@ import {
 } from "../src/application/snapshot-import.js";
 import {
   normalizeLinearIssueFact
-} from "../src/connectors/linear.js";
+} from "../src/connectors/linear.ts";
 
 test("preview plans a deterministic first import without mutating its inputs", () => {
   const snapshot = createGitHubIssueSnapshot();
