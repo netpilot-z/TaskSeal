@@ -54,23 +54,33 @@
 
 ## T12.5 — 迁移 Codex runner
 
-- 状态：GitHub Issue `#16`，依赖 `#14` 与 `#22`。
+- 状态：已完成；GitHub Issue `#16`，Codex connector、App Server transport、runner、fake server 与直接测试已进入 strict TypeScript 门禁。
 - 目的：类型化 JSON-RPC、子进程生命周期、审批拒绝、timeout 和 Attempt 映射。
 - 范围：App Server client、runner、fake server 和测试。
 - 不包含：更换 Codex SDK、远程 runner、自动审批。
 - 依赖：T12.3、T12.7。
 - 验收标准：notification/response 使用可辨识类型并保持 fail-closed；真实 read-only smoke 行为不变。
-- 验证：runner 定向测试、全量测试和受控 read-only smoke。
+- 验证：Codex connector/client/runner 直接测试 29/29、CLI/demo import 间接回归、全量测试 242/242 通过；独立审查发现的错误正文泄漏、canonical cwd、listener 清理和不存在 cwd 放行均以 TDD 修复并复审。
 
-## T12.6 — 迁移 CLI 与本地 HTTP server
+## T12.6 — 迁移 Demo 与本地 HTTP server
 
-- 状态：GitHub Issue `#17`，依赖 `#14`、`#15`、`#16` 与 `#22`；后续按 Server/Demo 和 CLI/Bin 两个审查切片交付。
-- 目的：完成 Node.js 服务端源码迁移，并类型化命令、请求和关闭生命周期。
-- 范围：CLI、server、demo 和对应测试；最后更新 package bin/start。
-- 不包含：远程暴露、认证、NestJS 或前端构建。
+- 状态：GitHub Issue `#17`，依赖 `#16` 与 `#22`。
+- 目的：类型化本地 HTTP 请求、Demo replay 和关闭生命周期。
+- 范围：server、demo 和对应测试。
+- 不包含：CLI/bin、远程暴露、认证、NestJS 或前端构建。
 - 依赖：T12.3、T12.4、T12.5、T12.7。
-- 验收标准：CLI shebang/bin 可执行；loopback、CSRF、shutdown 和退出码行为不变。
-- 验证：CLI/server 定向测试、全量测试和本地浏览器走查。
+- 验收标准：loopback、CSRF、static、active/stalled shutdown 与 Demo 行为不变。
+- 验证：server/demo 定向测试、全量测试和本地浏览器走查。
+
+## T12.8 — 迁移 CLI 与 Bin
+
+- 状态：GitHub Issue `#28`，依赖 `#16`、`#17` 与 `#22`。
+- 目的：迁移正式入口并类型化命令参数、环境变量、退出码和 shutdown 调用。
+- 范围：CLI、CLI 集成测试与 `package.json` 的 bin/start/taskseal 入口。
+- 不包含：HTTP Server/Demo、浏览器构建、远程暴露、认证、NestJS 或 monorepo。
+- 依赖：T12.5、T12.6、T12.7。
+- 验收标准：CLI 参数与错误码兼容；shebang、直接 bin、npm scripts 在 Windows 与 POSIX 语义下可执行。
+- 验证：CLI/doctor/inspect/sync/run 定向测试、bin smoke、全量测试和独立审查。
 
 ## T13 — 重新评估 Control Room 前端工具链
 

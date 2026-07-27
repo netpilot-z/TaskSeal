@@ -41,17 +41,20 @@ TaskSealService ───────► Dashboard projection
 - 打开时重放 journal。
 - 提供 snapshot 和 WorkItem 查询。
 
-### `runners/codex-app-server-client.js`
+### `runners/codex-app-server-client.ts`
 
 - 启动和停止子进程。
 - 完成 initialize handshake。
-- 关联 request/response。
+- 从 `unknown` 解码并关联 request/response。
 - 处理通知、超时、无效 JSON 和进程退出。
+- 拒绝未知 response ID、畸形 method result、错配 thread/turn 和两类 approval request。
+- 外部 App Server 错误正文不进入异常或 Attempt 摘要。
 - 不创建 DomainEvent。
 
-### `runners/codex-runner.js`
+### `runners/codex-runner.ts`
 
 - 验证 WorkItem、cwd 和 Prompt。
+- 对 project root 与 cwd 执行 canonical containment；不存在或无法解析的路径在预留 Attempt 前失败。
 - 将 App Server 生命周期映射为 runner result。
 - 通过 service 记录 Attempt 事件。
 - 默认不处理或批准 App Server 权限请求。
@@ -75,7 +78,9 @@ TaskSealService ───────► Dashboard projection
 
 - journal 追加失败：不启动或不提交下一状态。
 - `attempt.started` 成功但 Codex 启动失败：追加 failed finish，留下可审计 Attempt。
+- cwd 不存在、无法解析或 canonical path 越界：在 `attempt.started` 前返回固定错误，不持久化机器路径。
 - App Server 未知通知：忽略并可记录摘要；未知 response ID 或无效 JSON：协议错误。
+- App Server error response 只暴露 method 与整数错误码，不传播不可信服务端 message。
 - HTTP 断开不取消已经开始的 runner；显式取消由后续命令实现。
 - 单进程串行 queue 防止 HTTP 与 CLI 并发 append 分叉；多进程写入暂不支持。
 
@@ -95,6 +100,7 @@ TaskSealService ───────► Dashboard projection
 - App Server 使用本地 stdio JSONL 和 `--strict-config`，每个 Attempt 创建一个独立进程、thread 和 turn。
 - command/file approval request 默认 decline；approval policy 固定为 `never`。
 - 常见 GitHub、Linear、Gitee、飞书环境凭证不会传入 runner 子进程。
+- Runner 将校验后的 canonical cwd 传给子进程；不存在的 cwd 不再推迟到 spawn 阶段处理。
 - Control Room 写入口只接受 loopback、same-origin、`application/json` 与启动时随机 CSRF token，界面默认 read-only。
 - 同一 WorkItem 的 Attempt 由 application service 原子预留；并发 HTTP 或 runner 调用只能有一个成功。
 - shutdown 会停止接单、Abort 活跃 turn 并等待终态；重启时遗留 running Attempt 被归一为 interrupted。

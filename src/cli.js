@@ -13,8 +13,8 @@ import {
 import { createLinearTicketDryRun } from "./application/linear-ticket-dry-run.ts";
 import { TaskSealService } from "./application/taskseal-service.ts";
 import { isLinearIssueReference } from "./connectors/linear.ts";
-import { CodexAppServerClient } from "./runners/codex-app-server-client.js";
-import { CodexRunner } from "./runners/codex-runner.js";
+import { CodexAppServerClient } from "./runners/codex-app-server-client.ts";
+import { CodexRunner } from "./runners/codex-runner.ts";
 import { createTaskSealServer } from "./server.js";
 import { FileEventJournal } from "./storage/event-journal.ts";
 

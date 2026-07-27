@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { normalizeCodexRun } from "../src/connectors/codex.js";
+import { normalizeCodexRun } from "../src/connectors/codex.ts";
 
 test("a started Codex run is normalized into an attempt event", async () => {
-  const fixture = JSON.parse(
+  const fixture: unknown = JSON.parse(
     await readFile(
       new URL("../fixtures/codex/run.started.json", import.meta.url),
       "utf8"
@@ -27,7 +27,7 @@ test("a started Codex run is normalized into an attempt event", async () => {
 });
 
 test("a completed Codex run is normalized into an explicit terminal event", async () => {
-  const fixture = JSON.parse(
+  const fixture: unknown = JSON.parse(
     await readFile(
       new URL("../fixtures/codex/run.completed.json", import.meta.url),
       "utf8"
@@ -49,4 +49,18 @@ test("a completed Codex run is normalized into an explicit terminal event", asyn
       summary: "Fixture agent completed the assigned turn."
     }
   });
+});
+
+test("Codex run normalization fails closed on non-object input", () => {
+  const invalidRuns: unknown[] = [null, [], "run-1", 1, true];
+
+  for (const invalidRun of invalidRuns) {
+    assert.throws(
+      () => normalizeCodexRun(invalidRun),
+      {
+        name: "TypeError",
+        message: "Codex run must be an object."
+      }
+    );
+  }
 });
