@@ -152,6 +152,54 @@ test("persistent API exposes journal state and runs one work item asynchronously
   assert.deepEqual(completed.runtime.activeWorkItemIds, []);
 });
 
+test("persistent health exposes a fenced service and requires reopen", async (t) => {
+  const service = {
+    ...createPersistentService(() => "planned"),
+    getHealth() {
+      return {
+        status: "fenced",
+        code: "IMPORT_COMMIT_OUTCOME_UNKNOWN",
+        planDigest: `sha256:${"a".repeat(64)}`
+      };
+    }
+  };
+  const server = createTaskSealServer({
+    service,
+    runWorkItem: async () => {}
+  });
+  const baseUrl = await listen(server, t);
+
+  const response = await fetch(`${baseUrl}/health`);
+
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {
+    status: "fenced",
+    code: "IMPORT_COMMIT_OUTCOME_UNKNOWN",
+    planDigest: `sha256:${"a".repeat(64)}`
+  });
+});
+
+test("persistent health keeps the established ok response while ready", async (t) => {
+  const service = {
+    ...createPersistentService(() => "planned"),
+    getHealth() {
+      return { status: "ready" };
+    }
+  };
+  const server = createTaskSealServer({
+    service,
+    runWorkItem: async () => {}
+  });
+  const baseUrl = await listen(server, t);
+
+  const response = await fetch(`${baseUrl}/health`);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    status: "ok"
+  });
+});
+
 test("persistent run endpoint validates work item and request body", async (t) => {
   const service = createPersistentService(() => "planned");
   let invoked = false;

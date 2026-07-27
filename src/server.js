@@ -81,7 +81,19 @@ export function createTaskSealServer({
       const pathname = new URL(request.url, "http://localhost").pathname;
 
       if (request.method === "GET" && pathname === "/health") {
-        return writeJson(response, 200, { status: "ok" });
+        const health =
+          persistent &&
+          typeof service.getHealth === "function"
+            ? service.getHealth()
+            : { status: "ok" };
+
+        if (health.status === "fenced") {
+          return writeJson(response, 503, health);
+        }
+
+        return writeJson(response, 200, {
+          status: "ok"
+        });
       }
 
       if (request.method === "GET" && pathname === "/api/dashboard") {

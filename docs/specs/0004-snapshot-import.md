@@ -3,9 +3,10 @@
 ## 状态
 
 - 对应 GitHub Issue：`#3`、`#4`、`#5`
-- 本文解决 `#3` 的契约决策；`#4` 实现 preview，`#5` 实现 apply。
-- 独立审查：`docs/reviews/0001-snapshot-import-contract.md`
+- `#3` 契约、`#4` preview 与 `#5` atomic apply 均已实现并验证。
+- 独立审查：`docs/reviews/0001-snapshot-import-contract.md`、`docs/reviews/0002-atomic-snapshot-apply.md`
 - 适用范围：本地单进程 TaskSeal 技术验证。
+- 首个 apply 切片只开放 application API；CLI/HTTP 写入口仍未开放，没有可信 ImportPolicy provider 时默认拒绝提交。
 
 ## 背景
 
@@ -761,6 +762,8 @@ Domain 不依赖 application、connector、storage、CLI 或 ProviderSnapshot。
 ## 安全与审计
 
 - Snapshot 是不可信输入；所有字符串、URL、数组、摘要和事件类型都必须有界并校验。
+- ImportPlan 的 action kind、reason、semantic target、event type、稳定排序和 warning/conflict 投影必须同构校验，不能只信任调用方重算的 digest。
+- ImportPlan/ImportBatch 在构造完整 canonical JSON 前先执行深度、宽度和字节预算；journal 在 JSON.parse 前拒绝超限记录。
 - URL 只保留规范化 HTTPS 地址，不保留认证信息、query token 或 fragment。
 - Provider 凭证只存在于 read client 请求边界，不进入 snapshot、plan、receipt、journal 或错误。
 - Preview 不调用网络，不访问文件系统，不读取环境变量。
@@ -770,8 +773,8 @@ Domain 不依赖 application、connector、storage、CLI 或 ProviderSnapshot。
 ## 兼容与回退
 
 - ProviderSnapshot v1 继续支持 display 和内存重放，但 import 必须失败关闭并要求重新 inspect。
-- 旧 bare-event journal 原样可读，不做破坏性迁移。
-- 只对带完整 v2 ExternalLink 的新 import create 强制 512-code-point title 上限；历史 bare `work_item.created` 保留旧版“非空”校验，避免升级后无法重放此前合法的长标题。
+- 4 MiB 单行上限内的旧 bare-event journal 原样可读，不做格式迁移；超过上限时失败关闭并要求离线迁移，不能在受限进程内无界加载。
+- 只对带完整 v2 ExternalLink 的新 import create 强制 512-code-point title 上限；单行上限内的历史 bare `work_item.created` 保留旧版“非空”校验，避免升级后无法重放此前合法的长标题。
 - Legacy upcaster 对历史 GitHub/Linear WorkItem link 确定性补充 `objectType: "issue"` 和由 provider/externalId 构造的 ProviderObjectKey，同时标记 `legacy: true`、`scopeRef: null`、`managedFields: null`、`lastObservation: null`。它不从 URL、当前配置或 WorkItem title 猜 scope/字段管理权。
 - 历史 `taskseal` self-link 或未知 provider 使用 `legacy:<provider>:<externalId>` 身份并保持本地管理；不能被一个 GitHub/Linear snapshot 基线升级。
 - 第一次匹配的 v2 observation 用 `expectedRevisionId: null` 和 baseline payload 补齐 scope、显式 managedFields 与 SourceRevision；非 legacy link、对象身份不匹配、重复 baseline 或字段管理权冲突均拒绝。
@@ -801,7 +804,7 @@ Domain 不依赖 application、connector、storage、CLI 或 ProviderSnapshot。
 - `external_link.observed` 的 previous revision、stale 与 ambiguous 校验。
 - Legacy link 只允许一次 `expectedRevisionId: null` baseline，非 legacy link 或第二次 null 必须拒绝。
 - 旧 GitHub/Linear link 可基线并在重启后保持相同身份；旧 self-link、错误 provider/externalId、scope mismatch 和 authority conflict 必须拒绝。
-- 历史 bare create 的长标题仍可重放；512-code-point 上限只约束新 rich import create 与 observation/update。
+- 单行上限内的历史 bare create 长标题仍可重放；512-code-point 上限只约束新 rich import create 与 observation/update。
 - `work_item.updated` 只能由 title 管理者修改 title，且验证 before 值。
 - 新增的 ExternalLink/WorkItem update 事件不得改变 AcceptanceDecision 或解除 Attempt/Evidence 约束；既有 artifact/evidence 事件继续按原规则影响状态。
 - event ID 精确重复幂等，同 ID 异内容仍失败。
@@ -814,12 +817,16 @@ Domain 不依赖 application、connector、storage、CLI 或 ProviderSnapshot。
 - commit 前每个可注入失败点都保持 journal 字节和内存不变。
 - commit 后响应丢失通过 planDigest 找回同一 receipt。
 - commit 后结果未知会 fence 当前 service，任何后续写入必须失败关闭。
+- fenced 状态通过 persistent `/health` 返回 `503`、原因和 planDigest；dashboard 与其他 service 读取继续失败关闭。
 - 初次、重复、no-op、多事件 batch 在重启后得到相同 workflow/receipt。
 - 含事件的完全相同重复 batch，无论相邻或出现在后续 bare event 之后都只应用一次；相同 batchId 任一字段不同都判损坏。
 - legacy event 与 import batch 混合重放。
 - 重放时先处理 seen batch 幂等；只有首次出现的 batch 在应用前验证 baseWorkflowDigest，并从 plan material 重算 planDigest、event IDs 和 summary。
 - 坏 batch 返回 `JOURNAL_CORRUPT`，不暴露部分 workflow。
 - 原子 replace 探针不通过时 apply 关闭；故障注入覆盖受支持平台的进程退出，不把未验证的断电行为声称为通过。
+- 原子 replace 探针只控制 batch apply；普通 Runner/canonical event append 保持可用，并在开始写入后的失败结果不确定时 fence service。
+- journal 以 chunk 级预算在整体回读前拒绝超过 3 MiB 的 import batch 和超过 4 MiB 的任意记录；3–4 MiB 的 legacy bare event 使用受限临时 spool 并继续可重放。
+- Service 的 workflow、WorkItem、Receipt 和 dashboard snapshot 均返回隔离副本，调用方不能绕过 journal 修改内存状态。
 
 ## 已关闭的设计问题
 
@@ -832,4 +839,4 @@ Domain 不依赖 application、connector、storage、CLI 或 ProviderSnapshot。
 - 多事件原子性：一个 ImportBatchRecord，通过 staged whole-file replace 提交。
 - 重试未知结果：按 planDigest 查询不可变 ImportReceipt。
 
-本规格没有阻塞 `#4` 和 `#5` 的未决契约问题。
+本规格的 preview 与 atomic apply 技术验证已经闭环。CLI/HTTP apply、provider 外部写回、多进程 writer 和断电 durability 仍属于后续独立切片。

@@ -92,7 +92,7 @@ export function buildPolicyBinding({
     throw scopeMismatch();
   }
 
-  const policyBinding = {
+  const policyBinding = normalizePolicyBinding({
     schemaVersion: 1,
     capability: APPLY_CAPABILITY,
     applyAllowed:
@@ -100,12 +100,53 @@ export function buildPolicyBinding({
     provider,
     scopeRef: normalizedScopeRef,
     requiredObjectTypes: normalizedTypes
-  };
+  });
 
   return {
     policyBinding,
-    policyDigest: digestCanonicalJson(policyBinding)
+    policyDigest: computePolicyDigest(policyBinding)
   };
+}
+
+export function normalizePolicyBinding(value) {
+  if (
+    !isPlainRecord(value) ||
+    !hasOnlyKeys(value, [
+      "schemaVersion",
+      "capability",
+      "applyAllowed",
+      "provider",
+      "scopeRef",
+      "requiredObjectTypes"
+    ]) ||
+    value.schemaVersion !== 1 ||
+    value.capability !== APPLY_CAPABILITY ||
+    typeof value.applyAllowed !== "boolean" ||
+    !Object.hasOwn(PROVIDER_OBJECT_TYPES, value.provider)
+  ) {
+    throw invalidPolicy();
+  }
+
+  return {
+    schemaVersion: 1,
+    capability: APPLY_CAPABILITY,
+    applyAllowed: value.applyAllowed,
+    provider: value.provider,
+    scopeRef: normalizeScopeRef(
+      value.provider,
+      value.scopeRef
+    ),
+    requiredObjectTypes: normalizeObjectTypes(
+      value.provider,
+      value.requiredObjectTypes
+    )
+  };
+}
+
+export function computePolicyDigest(policyBinding) {
+  return digestCanonicalJson(
+    normalizePolicyBinding(policyBinding)
+  );
 }
 
 function normalizeAllowedScope(value) {

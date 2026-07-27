@@ -14,7 +14,7 @@
 
 ## T12.2 — 迁移领域工作流与总览投影
 
-- 状态：GitHub Issue `#13`，等待 snapshot atomic apply `#5` 合并后执行，避免在领域事件仍变化时制造迁移冲突。
+- 状态：GitHub Issue `#13`，snapshot atomic apply `#5` 已完成，可作为下一项执行。
 - 目的：让 WorkItem、Attempt、Artifact、Evidence 和 Acceptance 的核心契约进入 strict 类型检查。
 - 范围：workflow、dashboard projection、对应 fixture 和测试类型。
 - 不包含：改变领域状态、不变量或事件 schema。
