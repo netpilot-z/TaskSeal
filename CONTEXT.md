@@ -21,6 +21,8 @@ TaskSeal 让人类和 AI Agent 的“已完成”变成有证据、可验收、�
 
 Provider Observation v1 已使用独立 `.taskseal/provider-observations.json` 保存每个 configured target 的最新脱敏状态。它按 operation start freshness 拒绝晚返回的旧结果，先对账 configured target 与 observed scope，再通过 persistent-only `GET /api/providers` 暴露五态；真实 preview/apply 由持有 verified resolved-scope binding 的 observed application façade 组合，跨 Provider/foreign scope 在业务提交前拒绝，不保存 raw payload、标题、URL、凭证或错误正文，也不会进入 Workflow journal。
 
+Provider Operation Journal v1 已使用固定 `.taskseal/provider-operations.json` 保存受控写的完整 version 历史。它从 v1 开始逐条 parse、逐对验证相邻状态转换，以 `expectedVersion + operationKey + planDigest` 在单实例队列内 compare-and-append；exact latest retry 只返回 idempotent。文件采用 16 MiB / 512 records 硬边界与原子 whole-file replace，rename 后按已 sync temp identity 复核 target，未知结果会 fence 当前实例；合法 orphan temp 可经 identity/single-link 检查复用。当前尚未接 transport、CLI/HTTP 或真实 Linear mutation；多进程 CAS、密码学防删改和不可信本地并发写者不在首版保证内，pathname rename 也不承诺对同权限恶意跨进程替换零越界副作用。
+
 ## 统一语言
 
 | 名称 | 含义 |
