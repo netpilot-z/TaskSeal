@@ -24,6 +24,12 @@ import {
   ProviderObservationReadModel
 } from "./application/provider-observation.ts";
 import {
+  ProviderOperationJournal
+} from "./application/provider-operation-journal.ts";
+import {
+  ProviderSyncProjectionQuery
+} from "./application/provider-sync-projection.ts";
+import {
   ObservedSnapshotImportFacade
 } from "./application/observed-snapshot-import.ts";
 import { TaskSealService } from "./application/taskseal-service.ts";
@@ -44,6 +50,9 @@ import { FileEventJournal } from "./storage/event-journal.ts";
 import {
   FileProviderObservationStorage
 } from "./storage/provider-observation-store.ts";
+import {
+  FileProviderOperationJournalStorage
+} from "./storage/provider-operation-journal.ts";
 import type {
   ManagedField,
   WorkItem,
@@ -67,6 +76,12 @@ import type {
   ProviderObservationTarget,
   ProviderObservationQueryPort
 } from "./application/provider-observation.ts";
+import type {
+  ProviderOperationJournalQueryPort
+} from "./application/provider-operation-journal.ts";
+import type {
+  ProviderSyncQueryPort
+} from "./application/provider-sync-projection.ts";
 import type {
   SnapshotImportApplyPort
 } from "./application/observed-snapshot-import.ts";
@@ -372,11 +387,18 @@ interface StartPersistentControlRoomOptions {
             readModel: ProviderObservationQueryPort;
           }>)
     | undefined;
+  providerOperationQueryFactory?:
+    | ((options: {
+        cwd: string;
+      }) =>
+        | ProviderOperationJournalQueryPort
+        | Promise<ProviderOperationJournalQueryPort>)
+    | undefined;
   serverFactory?:
     | ((
         options: {
           service: PersistentServicePort;
-          providerObservations: ProviderObservationQueryPort;
+          providerStatus: ProviderSyncQueryPort;
           runWorkItem: (
             options: RunWorkItemOptions
           ) => unknown | Promise<unknown>;
@@ -964,6 +986,26 @@ export async function createLocalProviderObservationRuntime({
     coordinator,
     createSnapshotImportFacade
   };
+}
+
+export async function createLocalProviderOperationQuery({
+  cwd
+}: {
+  cwd: string;
+}): Promise<ProviderOperationJournalQueryPort> {
+  const journal =
+    await ProviderOperationJournal.open({
+    storage:
+      new FileProviderOperationJournalStorage({
+        workspaceRoot: cwd
+      })
+  });
+  return Object.freeze({
+    get: journal.get.bind(journal),
+    history: journal.history.bind(journal),
+    listLatest:
+      journal.listLatest.bind(journal)
+  });
 }
 
 function captureConfigurationSeedTimestamp(
@@ -1891,6 +1933,8 @@ export async function startPersistentControlRoom({
   runtimeFactory = createLocalCodexRuntime,
   providerObservationRuntimeFactory =
     createLocalProviderObservationRuntime,
+  providerOperationQueryFactory =
+    createLocalProviderOperationQuery,
   serverFactory = createTaskSealServer,
   signalSource = processSignalSource
 }: StartPersistentControlRoomOptions): Promise<
@@ -1914,6 +1958,13 @@ export async function startPersistentControlRoom({
   await initialize({ cwd });
   const { readModel: providerObservations } =
     await providerObservationRuntimeFactory({ cwd });
+  const providerOperations =
+    await providerOperationQueryFactory({ cwd });
+  const providerStatus =
+    new ProviderSyncProjectionQuery({
+      observations: providerObservations,
+      operations: providerOperations
+    });
   const {
     service,
     runner
@@ -1924,7 +1975,7 @@ export async function startPersistentControlRoom({
   });
   const server = serverFactory({
     service,
-    providerObservations,
+    providerStatus,
     runWorkItem: (options) =>
       runner.run({
         ...options,

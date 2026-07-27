@@ -8,7 +8,7 @@ TaskSeal 是一个 AI Delivery Control Plane 技术验证项目。它把外部�
 
 - fixture 证据链：`Linear → Codex → GitHub → Acceptance`
 - 真实运行链：`Local WorkItem → Codex App Server → Attempt terminal state → Control Room`
-- provider 只读链：`GitHub/Linear/Gitee API → explicit mapping → canonical snapshot → Provider Observation → Control Room API`
+- provider 只读链：`Provider Observation + Operation Journal → safe projection → Control Room API`
 
 ## 项目坐标
 
@@ -42,7 +42,7 @@ npm start
 
 `doctor` 会检查项目配置、Codex 可执行文件和登录状态。在 Windows 上，TaskSeal 会比较 PATH 与本机 Codex App 的可用版本并选择较新的版本；也可通过 `TASKSEAL_CODEX_BIN` 显式指定。
 
-启动后访问 `http://127.0.0.1:4317`。Control Room 会读取 `.taskseal/events.jsonl` 的持久交付状态，并可从界面派发一个 Codex Attempt。Provider 面板独立轮询 `GET /api/providers`，从 `.taskseal/provider-observations.json` 展示脱敏的配置、scope、snapshot、mapping、缺失证据和诊断状态；刷新失败时保留最后一次已知结果并明确标记 stale。两种存储不会互相重放，浏览器也不会据此推断审批或触发外部写入。
+启动后访问 `http://127.0.0.1:4317`。Control Room 会读取 `.taskseal/events.jsonl` 的持久交付状态，并可从界面派发一个 Codex Attempt。Provider 面板独立轮询只读的 `GET /api/providers`：它组合 `.taskseal/provider-observations.json` 的配置、scope、snapshot、mapping、缺失证据和诊断状态，以及 `.taskseal/provider-operations.json` 的脱敏 latest 审批、提交、未知结果与对账状态。刷新失败或 source version 回退时保留最后一次已知完整结果并明确标记 stale；三个存储不会互相重放，浏览器没有审批、submit 或 reconcile 写入口。
 
 当前 HTTP 控制面只允许 loopback；远程团队访问需要后续先补认证、TLS、租户权限与审计，不能通过修改 `HOST` 直接暴露。
 
@@ -117,11 +117,12 @@ node src/cli.ts sync linear --dry-run
 10. fixture 仍验证 revision-bound Artifact/Evidence 与幂等验收规则。
 11. Gitee 内置 AdapterManifest v1、`provider.health` 与 `work-item.read` 已实现，并用公共 `oschina/git-osc#I4` 完成匿名 smoke；Gitee preview、apply 与 candidate direct append 均失败关闭，飞书保留为后续异构压力测试。
 12. Provider Observation v1 已建立独立、有界、原子替换的 JSON 读模型；按 operation start freshness 拒绝乱序覆盖，通过 observed snapshot-import façade 组合真实 preview/apply，并以 persistent-only `GET /api/providers` 暴露 `configured`、`scope_mismatch`、`sample_missing`、`snapshot_ready` 与 `sync_failed`。
-13. Control Room 已具备 Provider 五态卡片、最新 observation 列表、手动刷新、独立轮询、乱序响应防护和 stale 保留视图；完整审批、提交未知与对账时间线仍由受控写 operation journal 提供。
-14. 受控 Linear 写已具备离线 OperationPlan v1、人工审批绑定、严格状态机、client UUID correlation、resolved Team 校验和相邻 snapshot 防篡改合同；尚未接入持久 Operation Journal、transport 或任何真实 mutation。
+13. Control Room 已具备 Provider 五态卡片、最新 observation 列表、手动刷新、独立轮询、乱序响应防护和 stale 保留视图。
+14. 受控 Linear 写已具备 OperationPlan v1、人工审批绑定、严格状态机、client UUID correlation、resolved Team 校验和相邻 snapshot 防篡改合同；任何真实 mutation 仍未接入。
 15. Provider Operation Journal v1 已提供独立 `.taskseal/provider-operations.json`、完整 version replay、单实例 CAS、exact-latest idempotency、16 MiB / 512 records 边界、原子替换和崩溃/unknown reopen fence；尚未接 transport、CLI/HTTP 或真实 Linear mutation。首版只适用于可信本地 single writer；Node pathname API 不能消除同权限恶意跨进程 TOCTOU，后置复核只保护 committed/transport 判定，不保证零越界副作用，强保证需要 native `openat/renameat`、SQLite 或独立单写服务。
 16. Fake Linear Write Transport v1 已提供 application-owned create/query port、固定 client UUID/Team correlation、128 KiB request 与 64 KiB response guard，以及 created/not-dispatched/outcome-unknown/found/absent/failed/ambiguous 分类；只接受显式注入的内存 fake exchange，没有 global fetch、凭证或真实 Linear 请求。
 17. Controlled Write Coordinator v1 已跑通 prepare→approve/reject→submit→reconcile：只有 committed submitting version 能消费一次 fake create permit，并覆盖并发幂等、response-lost UUID 对账、absent 显式重查、journal unknown 零派发和 file-backed restart recovery；仍无 CLI/HTTP 或真实 Linear mutation。
+18. Provider status v2 已通过独立 query ports 组合 Observation 与 Operation Journal 的安全 latest projection；Control Room 展示 10 种受控写状态、operation-only target 和 source-local 防回退，任一 source 失败固定 503 并保留浏览器 last-known，且没有新增写 route。
 
 ## 项目结构
 
@@ -145,4 +146,4 @@ test/          领域、连接器、集成和 HTTP 测试
 
 计划内 Node.js 服务端源码已迁移到 TypeScript；浏览器原生脚本 `public/` 暂不进入 TypeScript 构建。当前 `private: true` 包只支持源码 checkout 运行，尚不把 `bin: src/cli.ts` 视为可安装 npm 发布物。TypeScript、NestJS 与 monorepo 的取舍见 `docs/adr/0002-typescript-repository-strategy.md`，迁移规格见 `docs/specs/0005-typescript-migration.md`。
 
-实验结果见 `docs/experiments/`，Runner 设计见 `docs/architecture/codex-runner.md`，连接器演进方向见 `docs/architecture/connectors.md`，现有 Provider 契约见 `docs/research/0001-github-linear-read-contracts.md`，第二 Provider 选择证据见 `docs/research/0002-gitee-feishu-provider-probe.md` 与 `docs/adr/0003-select-gitee-as-second-provider.md`。Provider Observation 的边界与持久化决策见 `docs/specs/0007-provider-observation-read-model.md` 和 `docs/adr/0004-provider-observation-read-model.md`；受控写状态、Operation Journal、fake Linear transport、coordinator、持久化边界与 Linear correlation 证据见 `docs/specs/0009-controlled-linear-write-operation.md`、`docs/specs/0010-provider-operation-journal.md`、`docs/specs/0011-fake-linear-write-transport.md`、`docs/specs/0012-controlled-write-coordinator.md`、`docs/adr/0005-controlled-write-operation-journal.md` 和 `docs/research/0003-linear-controlled-write-correlation.md`。
+实验结果见 `docs/experiments/`，Runner 设计见 `docs/architecture/codex-runner.md`，连接器演进方向见 `docs/architecture/connectors.md`，现有 Provider 契约见 `docs/research/0001-github-linear-read-contracts.md`，第二 Provider 选择证据见 `docs/research/0002-gitee-feishu-provider-probe.md` 与 `docs/adr/0003-select-gitee-as-second-provider.md`。Provider Observation 的边界与持久化决策见 `docs/specs/0007-provider-observation-read-model.md` 和 `docs/adr/0004-provider-observation-read-model.md`；受控写状态、Operation Journal、fake Linear transport、coordinator、安全 UI 投影、持久化边界与 Linear correlation 证据见 `docs/specs/0009-controlled-linear-write-operation.md`、`docs/specs/0010-provider-operation-journal.md`、`docs/specs/0011-fake-linear-write-transport.md`、`docs/specs/0012-controlled-write-coordinator.md`、`docs/specs/0013-provider-operation-projection.md`、`docs/adr/0005-controlled-write-operation-journal.md` 和 `docs/research/0003-linear-controlled-write-correlation.md`。

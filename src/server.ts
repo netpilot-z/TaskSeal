@@ -9,8 +9,8 @@ import type {
 import { projectDashboard } from "./dashboard/projection.ts";
 import { replayDemoSteps } from "./demo/scenario.ts";
 import type {
-  ProviderObservationQueryPort
-} from "./application/provider-observation.ts";
+  ProviderSyncQueryPort
+} from "./application/provider-sync-projection.ts";
 import type { DashboardProjection } from "./dashboard/projection.ts";
 import type { DemoStep } from "./demo/scenario.ts";
 
@@ -46,13 +46,13 @@ export interface DemoTaskSealServerOptions {
   steps: readonly DemoStep[];
   initialStep?: number | undefined;
   service?: never;
-  providerObservations?: never;
+  providerStatus?: never;
   runWorkItem?: never;
 }
 
 export interface PersistentTaskSealServerOptions {
   service: PersistentServicePort;
-  providerObservations: ProviderObservationQueryPort;
+  providerStatus: ProviderSyncQueryPort;
   runWorkItem: RunWorkItem;
   steps?: never;
   initialStep?: never;
@@ -76,7 +76,7 @@ interface DemoRuntime {
 interface PersistentRuntime {
   mode: "persistent";
   service: PersistentServicePort;
-  providerObservations: ProviderObservationQueryPort;
+  providerStatus: ProviderSyncQueryPort;
   runWorkItem: RunWorkItem;
   csrfToken: string;
 }
@@ -235,7 +235,7 @@ export function createTaskSealServer(
         return writeJson(
           response,
           200,
-          await runtime.providerObservations.list()
+          await runtime.providerStatus.list()
         );
       }
 
@@ -462,8 +462,8 @@ function createServerRuntime(
     if (
       typeof service.snapshot !== "function" ||
       typeof service.getWorkItem !== "function" ||
-      !isRecord(options.providerObservations) ||
-      typeof options.providerObservations.list !== "function" ||
+      !isRecord(options.providerStatus) ||
+      typeof options.providerStatus.list !== "function" ||
       typeof options.runWorkItem !== "function"
     ) {
       throw new TypeError(
@@ -474,7 +474,7 @@ function createServerRuntime(
     return {
       mode: "persistent",
       service,
-      providerObservations: options.providerObservations,
+      providerStatus: options.providerStatus,
       runWorkItem: options.runWorkItem,
       csrfToken: randomBytes(32).toString("base64url")
     };
@@ -850,6 +850,22 @@ function normalizeResponseError(
 
   if (
     isRecord(error) &&
+    error.name ===
+      "ProviderSyncProjectionError"
+  ) {
+    return {
+      statusCode: 503,
+      code:
+        readProviderSyncProjectionErrorCode(
+          error
+        ),
+      message:
+        "TaskSeal provider status is unavailable and must be reopened."
+    };
+  }
+
+  if (
+    isRecord(error) &&
     error.name === "ProviderObservationError"
   ) {
     return {
@@ -891,6 +907,23 @@ function readSafeErrorCode(
   }
 
   return fallback;
+}
+
+function readProviderSyncProjectionErrorCode(
+  error: unknown
+):
+  | "PROVIDER_SYNC_PROJECTION_INVALID"
+  | "PROVIDER_SYNC_PROJECTION_UNAVAILABLE" {
+  if (
+    isRecord(error) &&
+    (error.code ===
+      "PROVIDER_SYNC_PROJECTION_INVALID" ||
+      error.code ===
+        "PROVIDER_SYNC_PROJECTION_UNAVAILABLE")
+  ) {
+    return error.code;
+  }
+  return "PROVIDER_SYNC_PROJECTION_UNAVAILABLE";
 }
 
 class HttpError extends Error {

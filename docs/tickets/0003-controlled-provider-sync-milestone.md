@@ -49,7 +49,7 @@
 
 ## T09 — 实现受控 Linear Issue 创建
 
-- 状态：T08 已满足；仍等待新的明确外部写授权。
+- 状态：离线状态模型、Operation Journal、fake transport 与 coordinator 已完成（GitHub Issue `#6` 的 `#39`–`#42`）；真实单票 smoke 仍由 `#7` 等待新的明确外部写授权。
 - 目的：把已审查 dry-run 草案按最小权限同步到正确 Linear team。
 - 范围：独立 `work-item.write` 能力开关、Organization/Team UUID、持久 client UUID v4、operation key、payload digest、逐条审批、审计和查询对账。
 - 不包含：自动关闭、批量状态迁移、评论、双向实时同步或无人值守写入。
@@ -60,13 +60,13 @@
 
 ## T10 — 在 Control Room 展示 Provider 与同步状态
 
-- 状态：Provider 读模型与只读前端切片已完成；GitHub Issue `#23` 已实现持久化与 `GET /api/providers`，`#24` 已实现五态卡片、独立轮询与 stale 视图，审批/提交/对账状态仍等待 `#6` 和 `#29`。
+- 状态：已完成；GitHub Issue `#23` 提供 Observation 读模型，`#24` 提供五态卡片、独立轮询与 stale 视图，`#29` 通过 Provider status v2 补齐审批、提交、未知结果、对账与 sync failure 的安全 latest projection。
 - 目的：让操作者从总览看到 scope 健康、snapshot 时间、映射、缺失证据、dry-run 数量和待审批写操作。
 - 范围：只读投影、诊断卡片、事件时间线、审批前摘要；默认不在浏览器展示原始 Token 或 raw payload。
 - 不包含：公网部署、多租户 RBAC、完整日志终端和批量无人审批。
 - 依赖：T08；Provider 五态 API 已不依赖外部写入，写操作面板依赖 T09。
 - 验收标准：Control Room 能区分 `configured`、`scope mismatch`、`sample missing`、`snapshot ready`、`approval required` 和 `sync failed`。
-- 验证：observation/store freshness、重启、损坏与 HTTP 集成测试已完成；`#24` 已完成前端状态测试、桌面/移动浏览器、键盘与控制台走查，审批/提交未知/对账状态将在 `#29` 合并。
+- 验证：observation/operation source-local freshness、重启、损坏、HTTP v2、前端十态与 anti-regression 测试均已完成；桌面/移动浏览器、键盘、可访问性文本和控制台走查通过。
 - 风险与回退：UI 只能投影 application 状态，不能直接调用 provider 或绕过审批服务。
 
 ## T11.1 — 用契约探针选择第二个 Provider

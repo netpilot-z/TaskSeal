@@ -29,6 +29,9 @@ import type {
   PersistentTaskSealServerOptions
 } from "../src/server.ts";
 import { FileEventJournal } from "../src/storage/event-journal.ts";
+import {
+  digestCanonicalJson
+} from "../src/lib/canonical-json.ts";
 
 test("package entrypoints target the source-checkout TypeScript CLI", async () => {
   const packageJson: unknown = JSON.parse(
@@ -391,9 +394,21 @@ test("persistent start wires one service and runner into the Control Room", asyn
     async list() {
       return {
         schemaVersion: 1 as const,
-        revision: `sha256:${"0".repeat(64)}`,
+        revision:
+          digestCanonicalJson([]),
         providers: []
       };
+    }
+  };
+  const providerOperations = {
+    async get() {
+      return null;
+    },
+    async history() {
+      return [];
+    },
+    async listLatest() {
+      return [];
     }
   };
   let initialized = false;
@@ -433,6 +448,8 @@ test("persistent start wires one service and runner into the Control Room", asyn
     providerObservationRuntimeFactory: async () => ({
       readModel: providerObservations
     }),
+    providerOperationQueryFactory: async () =>
+      providerOperations,
     serverFactory: (options) => {
       serverOptions = options;
       return new FakeServer();
@@ -443,9 +460,19 @@ test("persistent start wires one service and runner into the Control Room", asyn
   assert.equal(server instanceof FakeServer, true);
   assert.ok(serverOptions);
   assert.equal(serverOptions.service, service);
+  const providerProjection =
+    await serverOptions.providerStatus.list();
   assert.equal(
-    serverOptions.providerObservations,
-    providerObservations
+    providerProjection.schemaVersion,
+    2
+  );
+  assert.deepEqual(
+    providerProjection.providers,
+    []
+  );
+  assert.deepEqual(
+    providerProjection.operations,
+    []
   );
   const signal = new AbortController().signal;
   await serverOptions.runWorkItem({

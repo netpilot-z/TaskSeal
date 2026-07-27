@@ -6,6 +6,8 @@
 
 本切片对应 GitHub Issue `#24`，只消费 Issue `#23` 已稳定的 `GET /api/providers`。它不新增 Provider 请求、外部写入或本地 apply 入口。
 
+> 2026-07-27 补充：本规格记录 Provider Observation v1 的首个 UI 切片。Issue `#29` 与[规格 0013](0013-provider-operation-projection.md)在不改变只读边界的前提下把同一路由升级为 v2，并接入 Operation Journal 的安全 latest projection；浏览器继续兼容 v1。
+
 ## 数据边界
 
 浏览器只读取同源：
@@ -77,7 +79,7 @@ Provider · operation · status · observedAt
 
 该列表明确标注为“每个 configured target 的最新记录”，不是历史时间线。它不从 `snapshot.preview`、`planDigest`、`missingEvidence` 或 `snapshot_ready` 推断审批状态，因为成功 preview 仍可能含冲突或不可 apply。
 
-审批区域固定显示 `Operation journal not connected`。完整 `approval required`、逐操作历史、审批请求生命周期和未知提交结果时间线由 Issue `#6` 与 `#29` 提供后再接入本面板。
+在 v1 响应中，审批区域固定显示 `Operation journal not connected`。v2 响应会按[规格 0013](0013-provider-operation-projection.md)展示 latest operation 的审批、提交、未知结果与对账摘要；仍不提供浏览器写按钮，也不把 latest projection 冒充完整历史时间线。
 
 ## 汇总与可访问性
 
@@ -99,7 +101,7 @@ Provider · operation · status · observedAt
 ## 验收
 
 1. persistent Control Room 能展示全部 Provider 卡片、五态和最新观察时间。
-2. UI 不从 preview observation 猜测审批；明确显示 operation journal 尚未接入。
+2. UI 不从 preview observation 猜测审批；v1 明确显示 operation journal 尚未接入，v2 只消费独立的安全 operation projection。
 3. loading、empty、first-error、stale-error 和 stale observation 均有明确文本。
 4. 较旧请求晚返回时不能覆盖较新结果。
 5. demo mode 不请求 Provider API。

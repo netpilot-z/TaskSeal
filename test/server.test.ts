@@ -115,7 +115,7 @@ test("persistent API exposes journal state and runs one work item asynchronously
   const service = createPersistentService(() => status);
   const server = createTaskSealServer({
     service,
-    providerObservations: createProviderObservations(),
+    providerStatus: createProviderStatus(),
     runWorkItem: async ({ signal, ...options }) => {
       calls.push({
         ...options,
@@ -225,7 +225,7 @@ test("persistent health exposes a fenced service and requires reopen", async (t)
   };
   const server = createTaskSealServer({
     service,
-    providerObservations: createProviderObservations(),
+    providerStatus: createProviderStatus(),
     runWorkItem: async () => {}
   });
   const baseUrl = await listen(server, t);
@@ -249,7 +249,7 @@ test("persistent health keeps the established ok response while ready", async (t
   };
   const server = createTaskSealServer({
     service,
-    providerObservations: createProviderObservations(),
+    providerStatus: createProviderStatus(),
     runWorkItem: async () => {}
   });
   const baseUrl = await listen(server, t);
@@ -271,7 +271,7 @@ test("persistent dashboard preserves a safe service reopen error", async (t) => 
   };
   const server = createTaskSealServer({
     service,
-    providerObservations: createProviderObservations(),
+    providerStatus: createProviderStatus(),
     runWorkItem: async () => {}
   });
   const baseUrl = await listen(server, t);
@@ -296,7 +296,7 @@ test("persistent run preserves a safe service reopen error", async (t) => {
   };
   const server = createTaskSealServer({
     service,
-    providerObservations: createProviderObservations(),
+    providerStatus: createProviderStatus(),
     runWorkItem: async () => {}
   });
   const baseUrl = await listen(server, t);
@@ -335,7 +335,7 @@ test("persistent run endpoint validates work item and request body", async (t) =
   let invoked = false;
   const server = createTaskSealServer({
     service,
-    providerObservations: createProviderObservations(),
+    providerStatus: createProviderStatus(),
     runWorkItem: async () => {
       invoked = true;
     }
@@ -378,7 +378,7 @@ test("persistent run endpoint rejects cross-site and non-JSON requests", async (
   const calls: RunWorkItemOptions[] = [];
   const server = createTaskSealServer({
     service,
-    providerObservations: createProviderObservations(),
+    providerStatus: createProviderStatus(),
     runWorkItem: async (options) => {
       calls.push(options);
     }
@@ -433,7 +433,7 @@ test("persistent run endpoint fails closed on non-object JSON bodies", async (t)
   const calls: RunWorkItemOptions[] = [];
   const server = createTaskSealServer({
     service,
-    providerObservations: createProviderObservations(),
+    providerStatus: createProviderStatus(),
     runWorkItem: async (options) => {
       calls.push(options);
     }
@@ -474,7 +474,7 @@ test("persistent run endpoint rejects missing and malformed Host headers", async
   const calls: RunWorkItemOptions[] = [];
   const server = createTaskSealServer({
     service,
-    providerObservations: createProviderObservations(),
+    providerStatus: createProviderStatus(),
     runWorkItem: async (options) => {
       calls.push(options);
     }
@@ -511,7 +511,7 @@ test("persistent run reservation is atomic and defaults to read-only", async (t)
   const calls: RunWorkItemOptions[] = [];
   const server = createTaskSealServer({
     service,
-    providerObservations: createProviderObservations(),
+    providerStatus: createProviderStatus(),
     runWorkItem: async (options) => {
       calls.push(options);
       await runGate;
@@ -554,7 +554,7 @@ test("server shutdown aborts active runs before closing", async (t) => {
   let aborted = false;
   const server = createTaskSealServer({
     service,
-    providerObservations: createProviderObservations(),
+    providerStatus: createProviderStatus(),
     runWorkItem: ({ signal }) =>
       new Promise<never>((_resolve, reject) => {
         signal.addEventListener(
@@ -615,7 +615,7 @@ test("server shutdown rejects a request stalled before run reservation", async (
   );
   const server = createTaskSealServer({
     service,
-    providerObservations: createProviderObservations(),
+    providerStatus: createProviderStatus(),
     runWorkItem: ({ workItemId, signal }) => {
       calls.push({
         workItemId,
@@ -840,14 +840,19 @@ function createPersistentService(
   };
 }
 
-function createProviderObservations() {
+function createProviderStatus() {
   return {
     async list() {
       return {
-        schemaVersion: 1 as const,
+        schemaVersion: 2 as const,
         revision:
           `sha256:${"0".repeat(64)}`,
-        providers: []
+        observationRevision:
+          `sha256:${"1".repeat(64)}`,
+        operationRevision:
+          `sha256:${"2".repeat(64)}`,
+        providers: [],
+        operations: []
       };
     }
   };

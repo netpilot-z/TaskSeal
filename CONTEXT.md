@@ -13,7 +13,7 @@ TaskSeal 让人类和 AI Agent 的“已完成”变成有证据、可验收、�
 - provider import：`GitHub/Linear read-only fact → ProviderSnapshot v2 → deterministic ImportPlan → atomic local batch → ImportReceipt`
 - provider extension：已以 Gitee 的匿名 `provider.health`/`work-item.read` 提取内置 Adapter Contract v1；下一步用飞书多维表格做异构压力测试
 - provider observation：`inspection/preview/import → redacted latest-state model → GET /api/providers`，独立于 canonical journal
-- controlled external write（离线验证中）：`OperationPlan → human approval → versioned Operation Journal → fake submit → client UUID reconciliation`
+- controlled external write（fake 验证中）：`OperationPlan → human approval → versioned Operation Journal → fake submit → client UUID reconciliation → safe Control Room projection`
 
 本阶段不构建通用 Agent 市场、多租户权限、计费、生产数据库或真实外部写入。Snapshot apply 当前只提供默认关闭的 application API；没有可信 ImportPolicy provider 时不能提交，也尚未开放 CLI/HTTP apply 入口。Linear workspace `netpilot-z`、team `netpilot` 与 project `TaskSeal` 是已只读验证的真实坐标；仓库 tickets 默认不自动同步。
 
@@ -21,11 +21,13 @@ TaskSeal 让人类和 AI Agent 的“已完成”变成有证据、可验收、�
 
 Provider Observation v1 已使用独立 `.taskseal/provider-observations.json` 保存每个 configured target 的最新脱敏状态。它按 operation start freshness 拒绝晚返回的旧结果，先对账 configured target 与 observed scope，再通过 persistent-only `GET /api/providers` 暴露五态；真实 preview/apply 由持有 verified resolved-scope binding 的 observed application façade 组合，跨 Provider/foreign scope 在业务提交前拒绝，不保存 raw payload、标题、URL、凭证或错误正文，也不会进入 Workflow journal。
 
-Provider Operation Journal v1 已使用固定 `.taskseal/provider-operations.json` 保存受控写的完整 version 历史。它从 v1 开始逐条 parse、逐对验证相邻状态转换，以 `expectedVersion + operationKey + planDigest` 在单实例队列内 compare-and-append；exact latest retry 只返回 idempotent。文件采用 16 MiB / 512 records 硬边界与原子 whole-file replace，rename 后按已 sync temp identity 复核 target，未知结果会 fence 当前实例；合法 orphan temp 可经 identity/single-link 检查复用。当前尚未接 transport、CLI/HTTP 或真实 Linear mutation；多进程 CAS、密码学防删改和不可信本地并发写者不在首版保证内，pathname rename 也不承诺对同权限恶意跨进程替换零越界副作用。
+Provider Operation Journal v1 已使用固定 `.taskseal/provider-operations.json` 保存受控写的完整 version 历史。它从 v1 开始逐条 parse、逐对验证相邻状态转换，以 `expectedVersion + operationKey + planDigest` 在单实例队列内 compare-and-append；exact latest retry 只返回 idempotent。文件采用 16 MiB / 512 records 硬边界与原子 whole-file replace，rename 后按已 sync temp identity 复核 target，未知结果会 fence 当前实例；合法 orphan temp 可经 identity/single-link 检查复用。当前仅通过 query port 接入只读 Control Room projection，没有 CLI/HTTP command 或真实 Linear mutation；多进程 CAS、密码学防删改和不可信本地并发写者不在首版保证内，pathname rename 也不承诺对同权限恶意跨进程替换零越界副作用。
 
 Fake Linear Write Transport v1 已建立 application-owned `createIssue/queryByClientUuid` port 和只能显式注入 exchange 的 connector。create 使用 client UUID 作为 Issue ID 并绑定 resolved Team；只有明确未派发可返回 not-dispatched，其余派发后不确定性进入 outcome unknown。query 只按 client UUID 精确读取，区分 found、absent、failed 与 correlation ambiguous。当前 exchange 仅为内存 fake，不存在 global fetch、凭证、真实 endpoint、journal/coordinator wiring 或真实 mutation。
 
 Controlled Write Coordinator v1 已组合 prepare/approve/reject/submit/reconcile，并以 per-operation queue 覆盖 journal→transport→journal。只有本次 committed submitting version 能消费一次 fake create permit；idempotent/unknown append、拒绝和非法状态均为零调用。response lost 进入 outcome unknown，再按 client UUID 显式对账；reopen 会把遗留 submitting/reconciling 转为安全本地状态而不调用 transport。当前没有 CLI/HTTP、浏览器审批、global fetch、真实凭证或真实 Linear mutation。
+
+Provider status v2 已由 application façade 并行读取 Provider Observation 与 Operation Journal latest，并通过 persistent-only `GET /api/providers` 返回两个 component revision 和一个 combined content fingerprint。它只白名单投影 target、version、状态、安全 diagnostic 与不含 actor 的 approval 决策；payload、client UUID、resolved UUID、plan digest、Issue identity、错误正文和本地路径不会进入 API。浏览器分别按 Observation startedAt 与 Operation version 防回退，展示 10 种受控写状态和 operation-only target；任一 source 失败整次返回固定 503，last-known 只在浏览器保留。该组合不是跨文件原子快照，也没有任何浏览器写入口。
 
 ## 统一语言
 
@@ -68,3 +70,4 @@ Controlled Write Coordinator v1 已组合 prepare/approve/reject/submit/reconcil
 13. 在所有 ExternalLink journal ingress 都具备可信 registry gate 前，领域层继续显式拒绝未知 Provider 的 rich/managed link；既有 legacy reference 保持非托管且不可 baseline。Provider-agnostic 重构必须与 per-provider/per-scope apply 授权一起完成，不能先放宽领域再补门禁。
 14. Provider Observation 的损坏、越界路径、写失败或未知提交结果不得改变 inspection、preview、import 或 Workflow 的业务结果；它只能让 Provider 查询面降级或要求重新打开。
 15. 外部写必须先持久化审批与 submitting version，再消费一次 transport call；无法证明未派发的结果一律进入 OutcomeUnknown，重启或重试不得绕过 client UUID 对账。Operation Journal replay 必须同时校验单条 snapshot 和相邻状态转换，不能只凭 version 连续接受审批人、plan 或既有审计字段漂移。
+16. Provider status 组合必须保持 Observation 与 Operation 的独立所有权和 source-local freshness；不得跨来源比较时间戳、把写状态覆盖到 Observation 五态、返回 partial success，或把 combined revision 描述成全局可排序版本。

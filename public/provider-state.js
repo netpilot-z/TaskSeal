@@ -41,6 +41,69 @@ const STATUSES = {
   }
 };
 
+const OPERATION_STATUSES = {
+  approval_required: {
+    label: "Approval required",
+    icon: "◇",
+    tone: "warning",
+    priority: 2
+  },
+  approved: {
+    label: "Approved",
+    icon: "✓",
+    tone: "neutral",
+    priority: 5
+  },
+  rejected: {
+    label: "Rejected",
+    icon: "×",
+    tone: "neutral",
+    priority: 8
+  },
+  submitting: {
+    label: "Submitting",
+    icon: "→",
+    tone: "active",
+    priority: 4
+  },
+  created: {
+    label: "Created",
+    icon: "✓",
+    tone: "ready",
+    priority: 7
+  },
+  outcome_unknown: {
+    label: "Outcome unknown",
+    icon: "!",
+    tone: "danger",
+    priority: 0
+  },
+  reconciling: {
+    label: "Reconciling",
+    icon: "↻",
+    tone: "active",
+    priority: 4
+  },
+  reconciliation_absent: {
+    label: "Not found; decision required",
+    icon: "?",
+    tone: "warning",
+    priority: 1
+  },
+  reconciled: {
+    label: "Reconciled",
+    icon: "✓",
+    tone: "ready",
+    priority: 7
+  },
+  sync_failed: {
+    label: "Sync failed",
+    icon: "×",
+    tone: "danger",
+    priority: 3
+  }
+};
+
 const OPERATIONS = {
   configuration: "Configuration",
   inspection: "Inspection",
@@ -65,6 +128,18 @@ const OBSERVATION_KEYS = [
   "missingEvidence",
   "diagnosticCode",
   "resolution"
+];
+const CONTROLLED_OPERATION_KEYS = [
+  "schemaVersion",
+  "provider",
+  "operationKey",
+  "configuredTarget",
+  "version",
+  "status",
+  "approval",
+  "diagnosticCode",
+  "createdAt",
+  "updatedAt"
 ];
 
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
@@ -160,42 +235,133 @@ const SAFE_DIAGNOSTIC_CODES = new Set([
   "JOURNAL_COMMIT_OUTCOME_UNKNOWN",
   "JOURNAL_CORRUPT",
   "JOURNAL_WRITE_FAILED",
-  "SERVICE_REOPEN_REQUIRED"
+  "SERVICE_REOPEN_REQUIRED",
+  "LINEAR_WRITE_NOT_DISPATCHED",
+  "LINEAR_WRITE_OUTCOME_UNKNOWN",
+  "LINEAR_RECONCILIATION_FAILED",
+  "LINEAR_RECONCILIATION_AMBIGUOUS"
 ]);
 const ATTENTION_STATUSES = new Set([
   "scope_mismatch",
   "sample_missing",
   "sync_failed"
 ]);
+const CONTROLLED_DIAGNOSTIC_CODES = new Set([
+  "LINEAR_WRITE_NOT_DISPATCHED",
+  "LINEAR_WRITE_OUTCOME_UNKNOWN",
+  "LINEAR_RECONCILIATION_FAILED",
+  "LINEAR_RECONCILIATION_AMBIGUOUS"
+]);
 
 export function createProviderPanelModel(projection) {
+  if (!isPlainRecord(projection)) {
+    throw invalidProjection();
+  }
+
+  let operationJournalConnected;
+  let observationRevision;
+  let operationRevision;
+  let providerValues;
+  let operationValues;
+
   if (
-    !isPlainRecord(projection) ||
-    !hasExactKeys(projection, [
+    projection.schemaVersion === 1 &&
+    hasExactKeys(projection, [
       "schemaVersion",
       "revision",
       "providers"
-    ]) ||
-    projection.schemaVersion !== 1 ||
+    ])
+  ) {
+    operationJournalConnected = false;
+    observationRevision = projection.revision;
+    operationRevision = null;
+    providerValues = projection.providers;
+    operationValues = [];
+  } else if (
+    projection.schemaVersion === 2 &&
+    hasExactKeys(projection, [
+      "schemaVersion",
+      "revision",
+      "observationRevision",
+      "operationRevision",
+      "providers",
+      "operations"
+    ])
+  ) {
+    operationJournalConnected = true;
+    observationRevision =
+      projection.observationRevision;
+    operationRevision =
+      projection.operationRevision;
+    providerValues = projection.providers;
+    operationValues = projection.operations;
+  } else {
+    throw invalidProjection();
+  }
+
+  if (
     !isDigest(projection.revision) ||
-    !Array.isArray(projection.providers) ||
-    projection.providers.length > 64
+    !isDigest(observationRevision) ||
+    (operationJournalConnected
+      ? !isDigest(operationRevision)
+      : operationRevision !== null) ||
+    !Array.isArray(providerValues) ||
+    providerValues.length > 64 ||
+    !Array.isArray(operationValues) ||
+    operationValues.length > 512
   ) {
     throw invalidProjection();
   }
 
+  const operationIdentities = new Set();
+  const operations = operationValues.map(
+    (operation) => {
+      const projected =
+        projectControlledOperation(operation);
+      if (
+        operationIdentities.has(
+          projected.operationKey
+        )
+      ) {
+        throw invalidProjection();
+      }
+      operationIdentities.add(
+        projected.operationKey
+      );
+      return projected;
+    }
+  );
+  operations.sort(compareOperationRecency);
+
   const identities = new Set();
-  const cards = projection.providers.map((observation) => {
-    const card = projectProviderCard(observation);
+  const cards = providerValues.map((observation) => {
+    const base = projectProviderCard(observation);
     const identity =
-      `${card.provider}\u0000` +
-      card.configuredTarget.key;
+      providerTargetIdentity(base);
 
     if (identities.has(identity)) {
       throw invalidProjection();
     }
     identities.add(identity);
-    return card;
+    const controlledOperations =
+      operations.filter(
+        (operation) =>
+          providerTargetIdentity(operation) ===
+          identity
+      );
+    const rollup = [...controlledOperations].sort(
+      compareOperationAttention
+    )[0];
+    return {
+      ...base,
+      controlledOperations,
+      controlledWrite: rollup ?? null,
+      approvalLabel:
+        operationJournalConnected
+          ? rollup?.statusLabel ??
+            "No controlled writes"
+          : "Operation journal not connected"
+    };
   });
   const latest = [...cards].sort(
     (left, right) =>
@@ -210,9 +376,19 @@ export function createProviderPanelModel(projection) {
   );
 
   return {
+    sourceSchemaVersion:
+      projection.schemaVersion,
     revision: projection.revision,
+    observationRevision,
+    operationRevision,
+    operationJournalConnected,
     cards,
     latest,
+    operations,
+    contentFingerprint: JSON.stringify({
+      cards,
+      operations
+    }),
     summary: {
       total: cards.length,
       ready: cards.filter(
@@ -222,6 +398,23 @@ export function createProviderPanelModel(projection) {
         (card) =>
           ATTENTION_STATUSES.has(card.status) ||
           card.missingEvidence.length > 0
+      ).length,
+      operations: operations.length,
+      approvalRequired: operations.filter(
+        (operation) =>
+          operation.status ===
+          "approval_required"
+      ).length,
+      uncertain: operations.filter(
+        (operation) =>
+          operation.status ===
+            "outcome_unknown" ||
+          operation.status ===
+            "reconciliation_absent"
+      ).length,
+      syncFailed: operations.filter(
+        (operation) =>
+          operation.status === "sync_failed"
       ).length
     }
   };
@@ -245,9 +438,10 @@ export function createProviderContentRenderKey(state) {
   const model = state.model;
   const view =
     model && isProviderPanelModel(model)
-      ? model.cards.length === 0
+      ? model.cards.length === 0 &&
+        model.operations.length === 0
         ? "empty"
-        : "observations"
+        : "provider-status"
       : state.phase === "error"
         ? "error"
         : "loading";
@@ -290,9 +484,25 @@ export function reduceProviderPanelState(state, action) {
     action.type === "success" &&
     isProviderPanelModel(action.model)
   ) {
+    if (
+      state.model &&
+      isProviderPanelModel(state.model) &&
+      !isNonRegressingProviderModel(
+        state.model,
+        action.model
+      )
+    ) {
+      return {
+        phase: "stale",
+        model: state.model,
+        message:
+          "Refresh returned older Provider status. Showing the last known state."
+      };
+    }
     return {
       phase:
-        action.model.cards.length === 0
+        action.model.cards.length === 0 &&
+        action.model.operations.length === 0
           ? "empty"
           : "ready",
       model: action.model,
@@ -305,8 +515,8 @@ export function reduceProviderPanelState(state, action) {
       phase: state.model ? "stale" : "error",
       model: state.model ?? null,
       message: state.model
-        ? "Refresh failed. Showing the last known Provider observations."
-        : "Provider observations are unavailable."
+        ? "Refresh failed. Showing the last known Provider status."
+        : "Provider status is unavailable."
     };
   }
 
@@ -317,18 +527,18 @@ export function reduceProviderPanelState(state, action) {
 
 export function createProviderAccessibleSummary(state) {
   if (state.phase === "idle" || state.phase === "loading") {
-    return "Loading Provider observations.";
+    return "Loading Provider status.";
   }
   if (state.phase === "error") {
-    return "Provider observations are unavailable.";
+    return "Provider status is unavailable.";
   }
   if (state.phase === "empty") {
-    return "No Provider observations are configured.";
+    return "No Provider observations or controlled operations are available.";
   }
 
   const model = state.model;
   if (!isProviderPanelModel(model)) {
-    return "Provider observations are unavailable.";
+    return "Provider status is unavailable.";
   }
 
   const stalePrefix =
@@ -352,7 +562,11 @@ export function createProviderAccessibleSummary(state) {
     stalePrefix +
     `${model.summary.total} Provider observations; ` +
     `${model.summary.ready} snapshot ready; ` +
-    `${model.summary.attention} need attention. ` +
+    `${model.summary.attention} observations need attention; ` +
+    `${model.summary.operations} controlled operations; ` +
+    `${model.summary.approvalRequired} require approval; ` +
+    `${model.summary.uncertain} have an uncertain outcome; ` +
+    `${model.summary.syncFailed} sync failed. ` +
     `${cardSummary}.`
   );
 }
@@ -439,8 +653,299 @@ function projectProviderCard(observation) {
     missingEvidence: [...observation.missingEvidence],
     diagnosticCode: observation.diagnosticCode,
     resolution: observation.resolution,
-    approvalLabel: "Operation journal not connected"
+    observationFingerprint:
+      createObservationFingerprint(
+        observation
+      )
   };
+}
+
+function projectControlledOperation(operation) {
+  if (
+    !isPlainRecord(operation) ||
+    !hasExactKeys(
+      operation,
+      CONTROLLED_OPERATION_KEYS
+    ) ||
+    operation.schemaVersion !== 1 ||
+    operation.provider !== "linear" ||
+    !isDigest(operation.operationKey) ||
+    !isControlledOperationTarget(
+      operation.configuredTarget
+    ) ||
+    !Number.isSafeInteger(operation.version) ||
+    operation.version < 1 ||
+    !Object.hasOwn(
+      OPERATION_STATUSES,
+      operation.status
+    ) ||
+    !isCanonicalTimestamp(operation.createdAt) ||
+    !isCanonicalTimestamp(operation.updatedAt) ||
+    Date.parse(operation.updatedAt) <
+      Date.parse(operation.createdAt) ||
+    Date.parse(operation.createdAt) > Date.now() ||
+    Date.parse(operation.updatedAt) > Date.now() ||
+    !(
+      operation.diagnosticCode === null ||
+      (typeof operation.diagnosticCode ===
+        "string" &&
+        CONTROLLED_DIAGNOSTIC_CODES.has(
+          operation.diagnosticCode
+        ))
+    )
+  ) {
+    throw invalidProjection();
+  }
+
+  const approval =
+    projectControlledApproval(
+      operation.approval
+    );
+  if (
+    !hasValidControlledOperationSemantics(
+      operation,
+      approval
+    )
+  ) {
+    throw invalidProjection();
+  }
+
+  const statusView =
+    OPERATION_STATUSES[operation.status];
+  const projected = {
+    operationKey: operation.operationKey,
+    provider: operation.provider,
+    providerLabel: PROVIDERS.linear.label,
+    configuredTarget: {
+      kind: operation.configuredTarget.kind,
+      key: operation.configuredTarget.key
+    },
+    version: operation.version,
+    status: operation.status,
+    statusLabel: statusView.label,
+    statusIcon: statusView.icon,
+    tone: statusView.tone,
+    priority: statusView.priority,
+    approval,
+    diagnosticCode:
+      operation.diagnosticCode,
+    createdAt: operation.createdAt,
+    updatedAt: operation.updatedAt
+  };
+
+  return {
+    ...projected,
+    operationFingerprint:
+      JSON.stringify(projected)
+  };
+}
+
+function projectControlledApproval(value) {
+  if (value === null) {
+    return null;
+  }
+  if (
+    !isPlainRecord(value) ||
+    !hasExactKeys(value, [
+      "decision",
+      "decidedAt"
+    ]) ||
+    (value.decision !== "approved" &&
+      value.decision !== "rejected") ||
+    !isCanonicalTimestamp(value.decidedAt)
+  ) {
+    throw invalidProjection();
+  }
+  return {
+    decision: value.decision,
+    decidedAt: value.decidedAt
+  };
+}
+
+function hasValidControlledOperationSemantics(
+  operation,
+  approval
+) {
+  if (
+    operation.status === "approval_required"
+  ) {
+    return (
+      approval === null &&
+      operation.diagnosticCode === null &&
+      operation.updatedAt ===
+        operation.createdAt
+    );
+  }
+  if (
+    approval === null ||
+    Date.parse(approval.decidedAt) <
+      Date.parse(operation.createdAt) ||
+    Date.parse(approval.decidedAt) >
+      Date.parse(operation.updatedAt)
+  ) {
+    return false;
+  }
+  if (
+    (operation.status === "rejected") !==
+    (approval.decision === "rejected")
+  ) {
+    return false;
+  }
+  if (operation.status === "sync_failed") {
+    return (
+      operation.diagnosticCode ===
+      "LINEAR_WRITE_NOT_DISPATCHED"
+    );
+  }
+  if (
+    operation.status === "outcome_unknown"
+  ) {
+    return (
+      operation.diagnosticCode ===
+        "LINEAR_WRITE_OUTCOME_UNKNOWN" ||
+      operation.diagnosticCode ===
+        "LINEAR_RECONCILIATION_FAILED" ||
+      operation.diagnosticCode ===
+        "LINEAR_RECONCILIATION_AMBIGUOUS"
+    );
+  }
+  if (operation.status === "reconciling") {
+    return (
+      operation.diagnosticCode === null ||
+      operation.diagnosticCode ===
+        "LINEAR_WRITE_OUTCOME_UNKNOWN" ||
+      operation.diagnosticCode ===
+        "LINEAR_RECONCILIATION_FAILED" ||
+      operation.diagnosticCode ===
+        "LINEAR_RECONCILIATION_AMBIGUOUS"
+    );
+  }
+  return operation.diagnosticCode === null;
+}
+
+function compareOperationRecency(left, right) {
+  return (
+    Date.parse(right.updatedAt) -
+      Date.parse(left.updatedAt) ||
+    left.operationKey.localeCompare(
+      right.operationKey
+    )
+  );
+}
+
+function compareOperationAttention(left, right) {
+  return (
+    left.priority - right.priority ||
+    compareOperationRecency(left, right)
+  );
+}
+
+function providerTargetIdentity(value) {
+  return (
+    `${value.provider}\u0000` +
+    value.configuredTarget.key
+  );
+}
+
+function isNonRegressingProviderModel(
+  current,
+  incoming
+) {
+  if (
+    current.operationJournalConnected &&
+    !incoming.operationJournalConnected
+  ) {
+    return false;
+  }
+  if (
+    current.revision === incoming.revision &&
+    current.contentFingerprint !==
+      incoming.contentFingerprint
+  ) {
+    return false;
+  }
+
+  const incomingCards = new Map(
+    incoming.cards.map((card) => [
+      providerTargetIdentity(card),
+      card
+    ])
+  );
+  for (const currentCard of current.cards) {
+    const incomingCard = incomingCards.get(
+      providerTargetIdentity(currentCard)
+    );
+    if (!incomingCard) {
+      return false;
+    }
+    const freshness =
+      Date.parse(incomingCard.startedAt) -
+      Date.parse(currentCard.startedAt);
+    if (
+      freshness < 0 ||
+      (freshness === 0 &&
+        (incomingCard.observationId !==
+          currentCard.observationId ||
+          incomingCard.observationFingerprint !==
+            currentCard.observationFingerprint))
+    ) {
+      return false;
+    }
+  }
+
+  if (
+    current.observationRevision ===
+      incoming.observationRevision &&
+    JSON.stringify(
+      current.cards.map((card) => [
+        providerTargetIdentity(card),
+        card.observationFingerprint
+      ])
+    ) !==
+      JSON.stringify(
+        incoming.cards.map((card) => [
+          providerTargetIdentity(card),
+          card.observationFingerprint
+        ])
+      )
+  ) {
+    return false;
+  }
+
+  const incomingOperations = new Map(
+    incoming.operations.map((operation) => [
+      operation.operationKey,
+      operation
+    ])
+  );
+  for (const currentOperation of current.operations) {
+    const incomingOperation =
+      incomingOperations.get(
+        currentOperation.operationKey
+      );
+    if (
+      !incomingOperation ||
+      incomingOperation.version <
+        currentOperation.version ||
+      (incomingOperation.version ===
+        currentOperation.version &&
+        incomingOperation.operationFingerprint !==
+          currentOperation.operationFingerprint)
+    ) {
+      return false;
+    }
+  }
+
+  if (
+    current.operationRevision !== null &&
+    current.operationRevision ===
+      incoming.operationRevision &&
+    JSON.stringify(current.operations) !==
+      JSON.stringify(incoming.operations)
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function isProviderPanelModel(value) {
@@ -448,7 +953,67 @@ function isProviderPanelModel(value) {
     isPlainRecord(value) &&
     Array.isArray(value.cards) &&
     Array.isArray(value.latest) &&
+    Array.isArray(value.operations) &&
+    typeof value.operationJournalConnected ===
+      "boolean" &&
     isPlainRecord(value.summary)
+  );
+}
+
+function createObservationFingerprint(
+  observation
+) {
+  return JSON.stringify({
+    schemaVersion: observation.schemaVersion,
+    observationId: observation.observationId,
+    operation: observation.operation,
+    provider: observation.provider,
+    configuredTarget: {
+      kind: observation.configuredTarget.kind,
+      key: observation.configuredTarget.key
+    },
+    observedScope:
+      observation.observedScope === null
+        ? null
+        : {
+            kind: observation.observedScope.kind,
+            key: observation.observedScope.key,
+            parentKey:
+              observation.observedScope.parentKey
+          },
+    status: observation.status,
+    startedAt: observation.startedAt,
+    observedAt: observation.observedAt,
+    sourceRevisions:
+      observation.sourceRevisions.map(
+        (revision) => ({
+          objectType: revision.objectType,
+          id: revision.id,
+          occurredAt: revision.occurredAt,
+          contentDigest:
+            revision.contentDigest
+        })
+      ),
+    snapshotDigest: observation.snapshotDigest,
+    mappingDigest: observation.mappingDigest,
+    planDigest: observation.planDigest,
+    missingEvidence: [
+      ...observation.missingEvidence
+    ],
+    diagnosticCode: observation.diagnosticCode,
+    resolution: observation.resolution
+  });
+}
+
+function isControlledOperationTarget(value) {
+  return (
+    isPlainRecord(value) &&
+    hasExactKeys(value, ["kind", "key"]) &&
+    value.kind === "team" &&
+    isTrimmedString(value.key, MAX_KEY_LENGTH) &&
+    /^linear:team-ref:[^\s/]+\/[^\s/]+$/.test(
+      value.key
+    )
   );
 }
 

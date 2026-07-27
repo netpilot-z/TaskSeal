@@ -39,6 +39,12 @@ const elements = {
   providerLatest: document.querySelector(
     "#provider-latest"
   ),
+  providerOperations: document.querySelector(
+    "#provider-operations"
+  ),
+  providerOperationsEmpty: document.querySelector(
+    "#provider-operations-empty"
+  ),
   providerLiveStatus: document.querySelector(
     "#provider-live-status"
   ),
@@ -383,9 +389,13 @@ function renderProviderPanel() {
           "The workflow remains isolated. Refresh after the observation store is available."
       });
     elements.providerLatestPanel.hidden = true;
-  } else if (model && model.cards.length === 0) {
+  } else if (
+    model &&
+    model.cards.length === 0 &&
+    model.operations.length === 0
+  ) {
     elements.providerOverview.textContent =
-      "0 configured targets";
+      "0 targets · 0 controlled writes";
     elements.providerCards.innerHTML =
       renderProviderStateMessage({
         className: "",
@@ -399,13 +409,30 @@ function renderProviderPanel() {
     elements.providerOverview.textContent =
       `${model.summary.total} targets · ` +
       `${model.summary.ready} ready · ` +
-      `${model.summary.attention} need attention`;
-    elements.providerCards.innerHTML = model.cards
-      .map(renderProviderCard)
-      .join("");
+      `${model.summary.operations} controlled writes · ` +
+      `${model.summary.approvalRequired} need approval`;
+    elements.providerCards.innerHTML =
+      model.cards.length > 0
+        ? model.cards
+            .map(renderProviderCard)
+            .join("")
+        : renderProviderStateMessage({
+            className: "",
+            icon: "○",
+            title:
+              "No Provider observations yet",
+            description:
+              "Controlled operations remain visible while the observation read model is empty."
+          });
     elements.providerLatest.innerHTML = model.latest
       .map(renderLatestProviderObservation)
       .join("");
+    elements.providerOperations.innerHTML =
+      model.operations
+        .map(renderLatestControlledOperation)
+        .join("");
+    elements.providerOperationsEmpty.hidden =
+      model.operations.length > 0;
     elements.providerLatestPanel.hidden = false;
   }
 
@@ -508,7 +535,14 @@ function renderProviderCard(card, index) {
         <div class="provider-fact">
           <span class="detail-label">Approval</span>
           <strong>${escapeHtml(card.approvalLabel)}</strong>
-          <small>Requires #6 and #29</small>
+          <small>${
+            card.controlledWrite
+              ? `Operation v${card.controlledWrite.version}`
+              : card.approvalLabel ===
+                  "Operation journal not connected"
+                ? "Read-only v1 compatibility"
+                : "No operation for this target"
+          }</small>
         </div>
       </div>
 
@@ -552,6 +586,20 @@ function renderProviderCard(card, index) {
             "Resolution",
             card.resolution ?? "—"
           )}
+          ${renderProviderTechnicalDetail(
+            "Controlled operation",
+            card.controlledWrite
+              ? shortDigest(
+                  card.controlledWrite
+                    .operationKey
+                ) ?? "—"
+              : "—"
+          )}
+          ${renderProviderTechnicalDetail(
+            "Write status",
+            card.controlledWrite
+              ?.statusLabel ?? "—"
+          )}
         </dl>
       </details>
     </article>
@@ -587,6 +635,42 @@ function renderLatestProviderObservation(card) {
           data-observed-at="${escapeAttribute(card.observedAt)}"
         >
           ${escapeHtml(formatObservationTime(card.observedAt))}
+        </time>
+      </div>
+    </li>
+  `;
+}
+
+function renderLatestControlledOperation(
+  operation
+) {
+  const diagnostic = operation.diagnosticCode
+    ? ` · ${operation.diagnosticCode}`
+    : "";
+
+  return `
+    <li data-tone="${escapeAttribute(operation.tone)}">
+      <span class="provider-latest-icon" aria-hidden="true">
+        ${escapeHtml(operation.statusIcon)}
+      </span>
+      <div class="provider-latest-copy">
+        <strong>
+          ${escapeHtml(operation.providerLabel)} ·
+          ${escapeHtml(operation.statusLabel)}
+        </strong>
+        <span>
+          ${escapeHtml(operation.configuredTarget.key)} ·
+          v${escapeHtml(String(operation.version))} ·
+          ${escapeHtml(
+            shortDigest(operation.operationKey) ??
+              operation.operationKey
+          )}${escapeHtml(diagnostic)}
+        </span>
+        <time
+          datetime="${escapeAttribute(operation.updatedAt)}"
+          data-observed-at="${escapeAttribute(operation.updatedAt)}"
+        >
+          ${escapeHtml(formatObservationTime(operation.updatedAt))}
         </time>
       </div>
     </li>
