@@ -6,6 +6,8 @@ import test from "node:test";
 import type { TestContext } from "node:test";
 
 import {
+  inspectGiteeHealthProvider,
+  inspectGiteeProvider,
   inspectGitHubIssueProvider,
   inspectGitHubProvider,
   inspectLinearProvider
@@ -74,6 +76,87 @@ const LINEAR_ISSUE = {
     key: "NET"
   }
 };
+
+const GITEE_REPOSITORY = {
+  id: 1_322_341,
+  full_name: "oschina/git-osc"
+};
+
+const GITEE_ISSUE = {
+  id: 2_614,
+  number: "I4",
+  title: "Git push crashes",
+  html_url: "https://gitee.com/oschina/git-osc/issues/I4",
+  created_at: "2013-04-12T12:15:08+08:00",
+  updated_at: "2022-07-22T05:01:31+08:00",
+  state: "open",
+  repository: {
+    full_name: "oschina/git-osc"
+  }
+};
+
+test("Gitee health inspection returns only normalized public scope state", async (t) => {
+  const cwd = await createConfiguredProject(t);
+  const snapshot = await inspectGiteeHealthProvider({
+    cwd,
+    now: () => new Date("2026-07-27T08:00:00.000Z"),
+    fetchImpl: async () => textResponse(GITEE_REPOSITORY)
+  });
+
+  assert.deepEqual(snapshot, {
+    provider: "gitee",
+    status: "ready",
+    checkedAt: "2026-07-27T08:00:00.000Z",
+    scope: {
+      kind: "repository",
+      key: "gitee:repository:oschina/git-osc"
+    }
+  });
+  assert.doesNotMatch(
+    JSON.stringify(snapshot),
+    new RegExp(escapeRegExp(cwd))
+  );
+});
+
+test("Gitee inspection emits one display-only v2 Issue fact", async (t) => {
+  const cwd = await createConfiguredProject(t);
+  const snapshot = await inspectGiteeProvider({
+    cwd,
+    issueReference: "I4",
+    workItemId: "TS-GITEE-I4",
+    requiredEvidence: ["tests"],
+    snapshotVersion: 2,
+    managedFields: [],
+    now: () => new Date("2026-07-27T08:00:00.000Z"),
+    fetchImpl: async () => textResponse(GITEE_ISSUE)
+  });
+
+  assert.equal(snapshot.schemaVersion, 2);
+  assert.equal(snapshot.mode, "read-only");
+  assert.equal(snapshot.provider, "gitee");
+  assert.deepEqual(snapshot.scope, {
+    kind: "repository",
+    key: "gitee:repository:oschina/git-osc"
+  });
+  assert.deepEqual(snapshot.mapping, {
+    workItemId: "TS-GITEE-I4",
+    requiredEvidence: ["tests"],
+    managedFields: []
+  });
+  assert.equal(snapshot.facts.length, 1);
+  assert.equal(
+    snapshot.facts[0]?.sourceObject.providerObjectKey,
+    "gitee:issue:oschina/git-osc#I4"
+  );
+  assert.doesNotMatch(
+    JSON.stringify(snapshot),
+    /"id":2614|"state":"open"/
+  );
+  assert.doesNotMatch(
+    JSON.stringify(snapshot),
+    new RegExp(escapeRegExp(cwd))
+  );
+});
 
 test("GitHub issue inspection emits one redacted read-only WorkItem snapshot", async (t) => {
   const cwd = await createConfiguredProject(t);
@@ -464,10 +547,26 @@ async function createConfiguredProject(
     JSON.stringify({
       project: "TaskSeal",
       github: { repository: "netpilot-z/TaskSeal" },
+      gitee: { repository: "oschina/git-osc" },
       linear: { workspace: "TaskSeal", team: "netpilot" }
     })
   );
   return cwd;
+}
+
+function textResponse(body: unknown): unknown {
+  return {
+    ok: true,
+    status: 200,
+    headers: {
+      get() {
+        return null;
+      }
+    },
+    async text() {
+      return JSON.stringify(body);
+    }
+  };
 }
 
 function jsonResponse(

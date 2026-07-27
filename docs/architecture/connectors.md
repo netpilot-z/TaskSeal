@@ -21,6 +21,7 @@ External provider
 - 显式映射后的裁剪 snapshot 与内存重放。
 - 仓库 tickets 到 Linear Issue 草案的离线 dry-run。
 - ProviderSnapshot v2 的 preview、受策略约束的原子 apply 与可恢复 receipt。
+- 静态 AdapterManifest v1、capability/port runtime contract，以及 Gitee 匿名 repository health 与单 Issue read。
 
 当前没有 Provider Webhook 或任何外部写入。
 
@@ -84,15 +85,21 @@ Snapshot import 契约已由 `docs/specs/0004-snapshot-import.md` 与 `docs/adr/
 
 Atomic apply 已通过故障注入、并发、未知提交结果 fencing 和重启恢复验证；apply capability 默认关闭，只有可信 ImportPolicy 明确允许的 scope 才可写入本地 journal。
 
-## 下一阶段：第二 Provider 与受控写回
+## 已实现阶段：Gitee 只读 Adapter
 
-ADR 0003 已选择 Gitee Issue 作为第二个只读 Provider：
+ADR 0003 选择的 Gitee Issue 只读切片已经完成：
 
-1. 先实现匿名公开仓库的 `provider.health` 与单 Issue `work-item.read`；
-2. 从 GitHub/Linear/Gitee 的真实重复模式提取内置 `AdapterManifest`/ports；
-3. 首个 Gitee 切片不修改领域/import allowlist；snapshot 自带 rich candidateEvent，所有 Gitee preview/apply 与该 candidate 的 direct append 都失败关闭；
-4. Gitee 不获得 transition/comment/close 或 snapshot apply 能力；GitHub Issue `#34` 跟踪统一 ingress registry gate、per-scope apply 与后续 Provider-agnostic domain；
-5. Gitee 契约稳定后，再用飞书多维表格的 token、动态字段和业务 error envelope 做异构压力测试。
+1. `AdapterManifest v1` 精确声明 `provider.health` 与 `work-item.read`，并与同名 ports 一一对应；
+2. Gitee 只使用固定 origin、匿名 GET、有界响应和精确 repository/Issue/URL 对账；
+3. Gitee Issue 使用 repository-scoped、区分大小写的 identity，snapshot 自带 rich candidateEvent；
+4. read-model 可表达 `provider = gitee`，import 层仍只有 GitHub/Linear；Gitee preview、伪造 apply 与 candidate direct append 均零写入失败关闭；
+5. 公共 `oschina/git-osc#I4` health/read smoke 成功，前后 journal 哈希相同。
+
+## 下一阶段：统一 ingress gate 与异构 Provider
+
+- GitHub Issue `#34` 建立统一 ingress registry gate、per-provider/per-scope apply 与后续 Provider-agnostic domain。
+- 用飞书多维表格的 token、动态字段和业务 error envelope 对 AdapterManifest v1 做异构压力测试。
+- Gitee 或其他 Provider 的 import/write 只有在独立能力、策略、审计和明确授权同时成立后才能开放。
 
 只有成功样本与插件边界验证后才考虑：
 

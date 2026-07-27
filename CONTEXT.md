@@ -11,11 +11,11 @@ TaskSeal 让人类和 AI Agent 的“已完成”变成有证据、可验收、�
 - fixture：`Linear WorkItem → Codex Attempt → GitHub Artifact/Evidence → AcceptanceDecision`
 - persistent：`Local WorkItem → Codex App Server Attempt → Control Room`
 - provider import：`GitHub/Linear read-only fact → ProviderSnapshot v2 → deterministic ImportPlan → atomic local batch → ImportReceipt`
-- provider extension：先以 Gitee 的匿名 `provider.health`/`work-item.read` 提取内置 Adapter Contract v1，再用飞书多维表格做异构压力测试
+- provider extension：已以 Gitee 的匿名 `provider.health`/`work-item.read` 提取内置 Adapter Contract v1；下一步用飞书多维表格做异构压力测试
 
 本阶段不构建通用 Agent 市场、多租户权限、计费、生产数据库或真实外部写入。Snapshot apply 当前只提供默认关闭的 application API；没有可信 ImportPolicy provider 时不能提交，也尚未开放 CLI/HTTP apply 入口。Linear workspace `netpilot-z`、team `netpilot` 与 project `TaskSeal` 是已只读验证的真实坐标；仓库 tickets 默认不自动同步。
 
-当前真实环境中，Linear Issue `NP-1` 已完成成功 snapshot；GitHub Issue `#1`、Draft PR `#2` 与 PR head 上的 `tests` Check 已完成完整只读 snapshot 和真实内存重放。结果进入 `reviewing`，Evidence passed，AcceptanceDecision 仍为空，journal 未变化。Issue、PR 与 CI 的创建均来自操作者明确授权；TaskSeal 不会从只读检查隐式创建、更新、合并或关闭外部对象。
+当前真实环境中，Linear Issue `NP-1` 已完成成功 snapshot；GitHub Issue `#1`、Draft PR `#2` 与 PR head 上的 `tests` Check 已完成完整只读 snapshot 和真实内存重放。Gitee 公共 `oschina/git-osc#I4` 已完成匿名 health/read smoke，输出 repository-scoped rich candidate，但 preview、apply 与 direct append 都不可用，journal 哈希未变化。Issue、PR 与 CI 的创建均来自操作者明确授权；TaskSeal 不会从只读检查隐式创建、更新、合并或关闭外部对象。
 
 ## 统一语言
 
@@ -27,7 +27,7 @@ TaskSeal 让人类和 AI Agent 的“已完成”变成有证据、可验收、�
 | `Evidence` | 支持验收判断的可复核事实，例如测试结果、截图、审查结论。 |
 | `AcceptanceDecision` | 对 WorkItem 作出的接受或拒绝决定。 |
 | `ExternalLink` | WorkItem 与 GitHub、Linear 等外部对象之间的持久关联；同一外部对象全局只能关联一个 WorkItem。 |
-| `ProviderObjectKey` | Connector 根据 provider、对象类型与不可变外部 ID 生成的稳定对象身份；不使用标题、名称或 URL 作为身份。 |
+| `ProviderObjectKey` | Connector 根据 provider、对象类型与 provider 定义的 scope/object reference 生成稳定对象身份；不使用标题或 URL 作为身份。Gitee 使用 repository-scoped、区分大小写的 Issue reference。 |
 | `SourceRevision` | Provider 对象的一次可排序版本，由稳定 revision ID、来源更新时间和规范化内容摘要组成。 |
 | `ProviderSnapshot` | 只读 Connector 输出的、经过裁剪且带来源版本的外部事实集合；snapshot 本身不获得写权限。 |
 | `ProviderAdapter` | 仓库内受信任的 Provider 边界，实现 manifest 声明的窄 health/read ports；不直接拥有领域 append、snapshot apply 或未声明的外部写能力。 |

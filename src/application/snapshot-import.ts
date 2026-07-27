@@ -26,7 +26,6 @@ import type {
   ProviderFact,
   ProviderIssueFact,
   ProviderIssueObservation,
-  ProviderName,
   ProviderObjectType,
   ProviderPullRequestFact,
   ProviderPullRequestObservation,
@@ -38,6 +37,7 @@ import {
   buildPolicyBinding
 } from "./import-policy.ts";
 import type {
+  ImportProvider,
   ProviderScopeRef
 } from "./import-policy.ts";
 import {
@@ -61,7 +61,7 @@ import type {
 
 interface UnboundNormalizedSnapshot {
   schemaVersion: 2;
-  provider: ProviderName;
+  provider: ImportProvider;
   scope: unknown;
   mapping: ProviderSnapshotMapping;
   facts: ProviderFact[];
@@ -324,7 +324,7 @@ function normalizeProviderSnapshot(
       "facts"
     ]) ||
     snapshot.mode !== "read-only" ||
-    !isProviderName(snapshot.provider) ||
+    !isBoundedString(snapshot.provider, ID_LIMIT) ||
     !isTimestamp(snapshot.capturedAt) ||
     codePointLength(snapshot.capturedAt) > ID_LIMIT ||
     !Array.isArray(snapshot.facts) ||
@@ -333,12 +333,19 @@ function normalizeProviderSnapshot(
     throw snapshotInvalid();
   }
 
+  if (!isImportProvider(snapshot.provider)) {
+    throw new SnapshotImportError(
+      "SNAPSHOT_PROVIDER_NOT_IMPORTABLE",
+      "The snapshot provider is readable but not enabled for import."
+    );
+  }
+
   if (snapshot.facts.length > SNAPSHOT_FACT_LIMIT) {
     throw snapshotLimit("facts", SNAPSHOT_FACT_LIMIT);
   }
 
   const provider =
-    normalizeProviderName(snapshot.provider);
+    normalizeImportProvider(snapshot.provider);
   const mapping = normalizeMapping(snapshot.mapping);
   const facts = snapshot.facts.map((fact) =>
     normalizeFact({
@@ -649,7 +656,7 @@ function normalizeFact({
   mapping
 }: {
   fact: unknown;
-  provider: ProviderName;
+  provider: ImportProvider;
   scope: unknown;
   mapping: ProviderSnapshotMapping;
 }): ProviderFact {
@@ -766,7 +773,7 @@ function normalizeSourceObject({
   scope
 }: {
   value: unknown;
-  provider: ProviderName;
+  provider: ImportProvider;
   scope: unknown;
 }): ProviderSourceObject {
   if (
@@ -1179,7 +1186,7 @@ function normalizeProviderUrl({
   url,
   scope
 }: {
-  provider: ProviderName;
+  provider: ImportProvider;
   objectType: ProviderObjectType;
   url: string;
   scope: unknown;
@@ -2209,16 +2216,16 @@ function isDeliveryFact(
   );
 }
 
-function isProviderName(
+function isImportProvider(
   value: unknown
-): value is ProviderName {
+): value is ImportProvider {
   return value === "github" || value === "linear";
 }
 
-function normalizeProviderName(
+function normalizeImportProvider(
   value: unknown
-): ProviderName {
-  if (!isProviderName(value)) {
+): ImportProvider {
+  if (!isImportProvider(value)) {
     throw snapshotInvalid();
   }
 

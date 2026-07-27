@@ -8,7 +8,7 @@ TaskSeal 是一个 AI Delivery Control Plane 技术验证项目。它把外部�
 
 - fixture 证据链：`Linear → Codex → GitHub → Acceptance`
 - 真实运行链：`Local WorkItem → Codex App Server → Attempt terminal state → Control Room`
-- provider 只读链：`GitHub/Linear API → explicit mapping → canonical snapshot`
+- provider 只读链：`GitHub/Linear/Gitee API → explicit mapping → canonical snapshot`
 
 ## 项目坐标
 
@@ -54,7 +54,7 @@ npm test
 
 ## Provider 只读检查
 
-TaskSeal 可以预览 GitHub 与 Linear 的真实只读事实，但不会把 snapshot 写入 journal：
+TaskSeal 可以预览 GitHub、Linear 与 Gitee 的真实只读事实，但不会仅因读取 snapshot 就写入 journal：
 
 ```bash
 node src/cli.ts inspect github-issue \
@@ -74,9 +74,20 @@ node src/cli.ts inspect linear \
   --issue NP-1 \
   --work-item TS-1 \
   --criterion tests
+
+node src/cli.ts inspect gitee-health
+
+node src/cli.ts inspect gitee \
+  --issue I4 \
+  --work-item TS-GITEE-I4 \
+  --criterion review \
+  --snapshot-version 2 \
+  --title-management none
 ```
 
 GitHub 公开仓库可以匿名读取，也可通过 `GITHUB_TOKEN` 或 `GH_TOKEN` 提供只读 Token。Linear 使用 `LINEAR_API_KEY`，或使用 `LINEAR_ACCESS_TOKEN` 提供 OAuth access token；两者不能同时配置。
+
+Gitee 首版只支持匿名公开仓库，配置为 `config/project.json` 中的非敏感 `gitee.repository` 坐标，不读取或接受 Token。`gitee-health` 验证精确 repository scope；`inspect gitee` 只接受显式、区分大小写的 Issue reference，并固定输出 ProviderSnapshot v2。公共 `oschina/git-osc#I4` 只用于 smoke，不代表 TaskSeal 项目的 Gitee 坐标。
 
 `inspect github-issue` 用于先验证单个 Issue 到 WorkItem 的映射；`inspect github` 用于验证完整 Issue → PR → Check 交付链。两者都要求显式映射，不通过标题或时间猜测关联。成功时只输出裁剪后的 provider scope、source reference 和 canonical events，不输出 Token、原始响应、本地路径，也不修改 `.taskseal/events.jsonl`。
 
@@ -104,7 +115,7 @@ node src/cli.ts sync linear --dry-run
 8. Linear ticket dry-run 对相同输入确定性输出八个草案，网络请求与外部写入均为零。
 9. Linear、GitHub、Gitee 与飞书仍无真实写入；仓库 tickets 不会自动同步到 Linear。
 10. fixture 仍验证 revision-bound Artifact/Evidence 与幂等验收规则。
-11. ADR 0003 已选择 Gitee Issue 作为第二个只读 Provider；生产 adapter 尚未实现，飞书保留为后续异构压力测试。
+11. Gitee 内置 AdapterManifest v1、`provider.health` 与 `work-item.read` 已实现，并用公共 `oschina/git-osc#I4` 完成匿名 smoke；Gitee preview、apply 与 candidate direct append 均失败关闭，飞书保留为后续异构压力测试。
 
 ## 项目结构
 

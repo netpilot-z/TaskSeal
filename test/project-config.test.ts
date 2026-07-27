@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
 import {
+  getGiteeCoordinates,
   getGitHubCoordinates,
   getLinearCoordinates,
   readProjectConfiguration
@@ -15,6 +16,7 @@ test("project configuration exposes validated non-secret provider coordinates", 
   await writeConfiguration(cwd, {
     project: "TaskSeal",
     github: { repository: "netpilot-z/TaskSeal" },
+    gitee: { repository: "NetPilot-Z/TaskSeal" },
     linear: { workspace: "TaskSeal", team: "netpilot" },
     mode: "persistent"
   });
@@ -24,6 +26,9 @@ test("project configuration exposes validated non-secret provider coordinates", 
   assert.equal(configuration.project, "TaskSeal");
   assert.deepEqual(getGitHubCoordinates(configuration), {
     repository: "netpilot-z/TaskSeal"
+  });
+  assert.deepEqual(getGiteeCoordinates(configuration), {
+    repository: "NetPilot-Z/TaskSeal"
   });
   assert.deepEqual(getLinearCoordinates(configuration), {
     workspace: "TaskSeal",
@@ -57,6 +62,21 @@ test("project configuration reports invalid JSON and provider coordinates safely
     () => getLinearCoordinates(configuration),
     hasCode("LINEAR_CONFIG_INVALID")
   );
+
+  for (const gitee of [
+    { repository: "../private" },
+    { repository: "owner/repository", token: "must-not-be-configured" },
+    { repository: "https://gitee.com/owner/repository" }
+  ]) {
+    assert.throws(
+      () =>
+        getGiteeCoordinates({
+          project: "TaskSeal",
+          gitee
+        }),
+      hasCode("GITEE_CONFIG_INVALID")
+    );
+  }
 });
 
 async function writeConfiguration(
