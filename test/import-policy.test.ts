@@ -3,15 +3,14 @@ import test from "node:test";
 
 import {
   buildPolicyBinding,
-  normalizeImportPolicy
+  normalizeImportPolicy,
+  normalizePolicyBinding
 } from "../src/application/import-policy.ts";
 
-test("import policies normalize scopes and object types deterministically", () => {
+test("import policies normalize per-scope capabilities and object types deterministically", () => {
   const first = createPolicy({
     allowedScopes: [
-      createLinearScope({
-        objectTypes: ["issue"]
-      }),
+      createLinearScope(),
       createGitHubScope({
         key: "github:repository:NetPilot-Z/TaskSeal",
         objectTypes: ["pull_request", "issue", "check"]
@@ -55,9 +54,7 @@ test("policy bindings depend only on the selected target and required object typ
   });
   const targetOnly = buildPolicyBinding({
     importPolicy: createPolicy({
-      allowedScopes: [
-        createGitHubScope()
-      ]
+      allowedScopes: [createGitHubScope()]
     }),
     ...target
   });
@@ -76,57 +73,173 @@ test("policy bindings depend only on the selected target and required object typ
       requiredObjectTypes: ["check", "issue"]
     }
   );
-  assert.deepEqual(
-    withUnrelatedScope,
-    targetOnly
-  );
+  assert.equal(withUnrelatedScope.previewAllowed, true);
+  assert.deepEqual(withUnrelatedScope, targetOnly);
   assert.match(
     withUnrelatedScope.policyDigest,
     /^sha256:[0-9a-f]{64}$/
   );
 });
 
-test("a disabled apply capability still produces a preview binding", () => {
-  const enabled = buildPolicyBinding({
-    importPolicy: createPolicy(),
-    provider: "github",
-    scopeRef: {
-      kind: "repository",
-      key: "github:repository:netpilot-z/taskseal"
-    },
-    requiredObjectTypes: ["issue"]
+test("preview and apply capabilities are isolated per exact scope", () => {
+  const policy = createPolicy({
+    allowedScopes: [
+      createGitHubScope(),
+      createGitHubScope({
+        key: "github:repository:netpilot-z/preview-only",
+        applyAllowed: false
+      }),
+      createGitHubScope({
+        key: "github:repository:netpilot-z/revoked",
+        previewAllowed: false,
+        applyAllowed: false
+      })
+    ]
   });
-  const disabled = buildPolicyBinding({
-    importPolicy: createPolicy({
-      applyAllowed: false
-    }),
-    provider: "github",
-    scopeRef: {
-      kind: "repository",
-      key: "github:repository:netpilot-z/taskseal"
-    },
-    requiredObjectTypes: ["issue"]
-  });
+  const bind = (key: string) =>
+    buildPolicyBinding({
+      importPolicy: policy,
+      provider: "github",
+      scopeRef: {
+        kind: "repository",
+        key
+      },
+      requiredObjectTypes: ["issue"]
+    });
 
-  assert.equal(disabled.policyBinding.applyAllowed, false);
-  assert.notEqual(disabled.policyDigest, enabled.policyDigest);
+  const enabled = bind(
+    "github:repository:netpilot-z/taskseal"
+  );
+  const previewOnly = bind(
+    "github:repository:netpilot-z/preview-only"
+  );
+  const revoked = bind(
+    "github:repository:netpilot-z/revoked"
+  );
+
+  assert.equal(enabled.previewAllowed, true);
+  assert.equal(enabled.policyBinding.applyAllowed, true);
+  assert.equal(previewOnly.previewAllowed, true);
+  assert.equal(
+    previewOnly.policyBinding.applyAllowed,
+    false
+  );
+  assert.equal(revoked.previewAllowed, false);
+  assert.equal(revoked.policyBinding.applyAllowed, false);
+  assert.notEqual(
+    enabled.policyDigest,
+    previewOnly.policyDigest
+  );
 });
 
-test("import policy rejects unknown fields, duplicates, and malformed scopes", () => {
+test("Gitee repository scopes are explicit and case-normalized without widening object types", () => {
+  const bound = buildPolicyBinding({
+    importPolicy: createPolicy({
+      allowedScopes: [
+        createGiteeScope({
+          key: "gitee:repository:OSChina/Git-Osc"
+        })
+      ]
+    }),
+    provider: "gitee",
+    scopeRef: {
+      kind: "repository",
+      key: "gitee:repository:oschina/git-osc"
+    },
+    requiredObjectTypes: ["issue"]
+  });
+
+  assert.equal(bound.previewAllowed, true);
+  assert.equal(bound.policyBinding.schemaVersion, 2);
+  assert.deepEqual(bound.policyBinding.scopeRef, {
+    kind: "repository",
+    key: "gitee:repository:oschina/git-osc"
+  });
+  assert.throws(
+    () =>
+      buildPolicyBinding({
+        importPolicy: createPolicy({
+          allowedScopes: [createGiteeScope()]
+        }),
+        provider: "gitee",
+        scopeRef: {
+          kind: "repository",
+          key: "gitee:repository:oschina/git-osc"
+        },
+        requiredObjectTypes: ["pull_request"]
+      }),
+    hasCode("SNAPSHOT_SCOPE_MISMATCH")
+  );
+});
+
+test("PolicyBinding versions keep legacy providers on v1 and introduce Gitee through v2", () => {
+  assert.equal(
+    buildPolicyBinding({
+      importPolicy: createPolicy(),
+      provider: "github",
+      scopeRef: {
+        kind: "repository",
+        key: "github:repository:netpilot-z/taskseal"
+      },
+      requiredObjectTypes: ["issue"]
+    }).policyBinding.schemaVersion,
+    1
+  );
+
+  for (const binding of [
+    {
+      schemaVersion: 1,
+      capability: "snapshot.import.apply",
+      applyAllowed: true,
+      provider: "gitee",
+      scopeRef: {
+        kind: "repository",
+        key: "gitee:repository:oschina/git-osc"
+      },
+      requiredObjectTypes: ["issue"]
+    },
+    {
+      schemaVersion: 2,
+      capability: "snapshot.import.apply",
+      applyAllowed: true,
+      provider: "github",
+      scopeRef: {
+        kind: "repository",
+        key: "github:repository:netpilot-z/taskseal"
+      },
+      requiredObjectTypes: ["issue"]
+    }
+  ]) {
+    assert.throws(
+      () => normalizePolicyBinding(binding),
+      hasCode("IMPORT_POLICY_INVALID")
+    );
+  }
+});
+
+test("import policy rejects v1 global grants, invalid capability matrices, and malformed scopes", () => {
   const sparseScopes = new Array(1);
   const sparseObjectTypes = new Array(1);
   const invalidPolicies = [
     {
-      ...createPolicy(),
-      token: "not-allowed"
+      schemaVersion: 1,
+      capabilities: {
+        "snapshot.import.apply": true
+      },
+      allowedScopes: [createGitHubScope()]
     },
     {
       ...createPolicy(),
-      capabilities: {
-        "snapshot.import.apply": true,
-        "snapshot.import.force": true
-      }
+      token: "not-allowed"
     },
+    createPolicy({
+      allowedScopes: [
+        createGitHubScope({
+          previewAllowed: false,
+          applyAllowed: true
+        })
+      ]
+    }),
     createPolicy({
       allowedScopes: [
         createGitHubScope(),
@@ -138,14 +251,6 @@ test("import policy rejects unknown fields, duplicates, and malformed scopes", (
         createGitHubScope({
           objectTypes: ["issue", "issue"]
         })
-      ]
-    }),
-    createPolicy({
-      allowedScopes: [
-        {
-          ...createGitHubScope(),
-          provider: "gitee"
-        }
       ]
     }),
     createPolicy({
@@ -177,9 +282,7 @@ test("import policy rejects unknown fields, duplicates, and malformed scopes", (
         }
       ]
     }),
-    createPolicy({
-      allowedScopes: sparseScopes
-    }),
+    createPolicy({ allowedScopes: sparseScopes }),
     createPolicy({
       allowedScopes: [
         createGitHubScope({
@@ -235,30 +338,29 @@ test("binding fails closed when the scope or object type is not allowed", () => 
 });
 
 function createPolicy({
-  applyAllowed = true,
   allowedScopes = [
     createGitHubScope(),
     createLinearScope()
   ]
 }: {
-  applyAllowed?: boolean;
   allowedScopes?: unknown[];
 } = {}) {
   return {
-    schemaVersion: 1,
-    capabilities: {
-      "snapshot.import.apply": applyAllowed
-    },
+    schemaVersion: 2,
     allowedScopes
   };
 }
 
 function createGitHubScope({
   key = "github:repository:netpilot-z/taskseal",
-  objectTypes = ["check", "issue", "pull_request"]
+  objectTypes = ["check", "issue", "pull_request"],
+  previewAllowed = true,
+  applyAllowed = true
 }: {
   key?: string;
   objectTypes?: unknown[];
+  previewAllowed?: boolean;
+  applyAllowed?: boolean;
 } = {}) {
   return {
     provider: "github",
@@ -266,7 +368,11 @@ function createGitHubScope({
       kind: "repository",
       key
     },
-    objectTypes
+    objectTypes,
+    capabilities: {
+      "snapshot.import.preview": previewAllowed,
+      "snapshot.import.apply": applyAllowed
+    }
   };
 }
 
@@ -275,11 +381,15 @@ function createLinearScope({
     "linear:team:22222222-2222-4222-8222-222222222222",
   parentKey =
     "linear:organization:33333333-3333-4333-8333-333333333333",
-  objectTypes = ["issue"]
+  objectTypes = ["issue"],
+  previewAllowed = true,
+  applyAllowed = true
 }: {
   key?: string;
   parentKey?: string;
   objectTypes?: unknown[];
+  previewAllowed?: boolean;
+  applyAllowed?: boolean;
 } = {}) {
   return {
     provider: "linear",
@@ -288,7 +398,34 @@ function createLinearScope({
       key,
       parentKey
     },
-    objectTypes
+    objectTypes,
+    capabilities: {
+      "snapshot.import.preview": previewAllowed,
+      "snapshot.import.apply": applyAllowed
+    }
+  };
+}
+
+function createGiteeScope({
+  key = "gitee:repository:oschina/git-osc",
+  previewAllowed = true,
+  applyAllowed = true
+}: {
+  key?: string;
+  previewAllowed?: boolean;
+  applyAllowed?: boolean;
+} = {}) {
+  return {
+    provider: "gitee",
+    scopeRef: {
+      kind: "repository",
+      key
+    },
+    objectTypes: ["issue"],
+    capabilities: {
+      "snapshot.import.preview": previewAllowed,
+      "snapshot.import.apply": applyAllowed
+    }
   };
 }
 

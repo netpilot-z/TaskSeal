@@ -1,5 +1,9 @@
 import { projectDashboard } from "../dashboard/projection.ts";
-import { applyEvent, createWorkflow } from "../domain/workflow.ts";
+import {
+  applyEvent,
+  classifyProcessedEvent,
+  createWorkflow
+} from "../domain/workflow.ts";
 import type { DashboardProjection } from "../dashboard/projection.ts";
 import type {
   AttemptStartedEvent,
@@ -19,6 +23,9 @@ import type {
 import {
   computeBaseWorkflowDigest
 } from "./import-plan.ts";
+import type {
+  ImportPlan
+} from "./import-plan.ts";
 import {
   buildPolicyBinding,
   normalizeImportPolicy
@@ -27,6 +34,14 @@ import type {
   BoundImportPolicy,
   PolicyBinding
 } from "./import-policy.ts";
+import {
+  DEFAULT_PROVIDER_INGRESS_REGISTRY,
+  authorizeProviderIngress,
+  authorizeProviderIngressFact
+} from "./provider-ingress-registry.ts";
+import type {
+  ProviderIngressRegistry
+} from "./provider-ingress-registry.ts";
 
 export interface EventJournal {
   readAll(): Promise<unknown[]>;
@@ -37,6 +52,7 @@ export interface EventJournal {
 export interface TaskSealServiceOpenOptions {
   journal: EventJournal;
   importPolicyProvider?: () => unknown | Promise<unknown>;
+  providerIngressRegistry?: ProviderIngressRegistry;
   clock?: () => unknown;
 }
 
@@ -56,6 +72,7 @@ interface TaskSealServiceConstructorOptions {
   importPolicyProvider?:
     | (() => unknown | Promise<unknown>)
     | undefined;
+  providerIngressRegistry: ProviderIngressRegistry;
   clock?: (() => unknown) | undefined;
 }
 
@@ -99,6 +116,8 @@ export class TaskSealService {
   static async open({
     journal,
     importPolicyProvider,
+    providerIngressRegistry =
+      DEFAULT_PROVIDER_INGRESS_REGISTRY,
     clock = () => new Date()
   }: TaskSealServiceOpenOptions): Promise<TaskSealService> {
     const records = await journal.readAll();
@@ -173,6 +192,7 @@ export class TaskSealService {
       receiptsByPlanDigest,
       batchesById,
       importPolicyProvider,
+      providerIngressRegistry,
       clock
     });
   }
@@ -182,6 +202,7 @@ export class TaskSealService {
   #writeQueue: Promise<void>;
   #importPolicyProvider:
     | TaskSealServiceOpenOptions["importPolicyProvider"];
+  #providerIngressRegistry: ProviderIngressRegistry;
   #clock: () => unknown;
   #health: TaskSealServiceHealth;
 
@@ -191,6 +212,7 @@ export class TaskSealService {
     receiptsByPlanDigest = new Map(),
     batchesById = new Map(),
     importPolicyProvider,
+    providerIngressRegistry,
     clock = () => new Date()
   }: TaskSealServiceConstructorOptions) {
     this.#journal = journal;
@@ -201,6 +223,8 @@ export class TaskSealService {
     };
     this.#writeQueue = Promise.resolve();
     this.#importPolicyProvider = importPolicyProvider;
+    this.#providerIngressRegistry =
+      providerIngressRegistry;
     this.#clock = clock;
     this.#health = {
       status: "ready"
@@ -238,6 +262,20 @@ export class TaskSealService {
     event: CanonicalEvent
   ): Promise<Workflow> {
     this.assertAvailable();
+    const processed = classifyProcessedEvent(
+      this.#state.workflow,
+      event
+    );
+
+    if (processed === "EXACT_EVENT_DUPLICATE") {
+      return structuredClone(this.#state.workflow);
+    }
+
+    if (processed === "EVENT_ID_CONFLICT") {
+      applyEvent(this.#state.workflow, event);
+    }
+
+    assertDirectIngressAllowed(event);
     const candidate = applyEvent(
       this.#state.workflow,
       event
@@ -327,6 +365,17 @@ export class TaskSealService {
       };
     }
 
+    this.assertProviderIngress(
+      normalizedPlan.policyBinding
+    );
+
+    const actionByEventId =
+      assertImportPlanIngressPreflight({
+        plan: normalizedPlan,
+        workflow: this.#state.workflow,
+        registry: this.#providerIngressRegistry
+      });
+
     const currentBinding =
       await this.readCurrentPolicyBinding(
         normalizedPlan.policyBinding
@@ -367,19 +416,12 @@ export class TaskSealService {
       );
     }
 
-    let candidate = this.#state.workflow;
-
-    try {
-      for (const event of normalizedPlan.events) {
-        candidate = applyEvent(candidate, event);
-      }
-    } catch (error) {
-      throw new TaskSealServiceError(
-        "IMPORT_PLAN_TAMPERED",
-        "ImportPlan events no longer satisfy canonical domain invariants.",
-        { cause: error }
-      );
-    }
+    const candidate = projectAuthorizedImportPlan({
+      plan: normalizedPlan,
+      workflow: this.#state.workflow,
+      registry: this.#providerIngressRegistry,
+      actionByEventId
+    });
 
     const record = createImportBatchRecord({
       plan: normalizedPlan,
@@ -499,17 +541,6 @@ export class TaskSealService {
       );
     }
 
-    if (
-      !normalizedPolicy.capabilities[
-        "snapshot.import.apply"
-      ]
-    ) {
-      throw new TaskSealServiceError(
-        "IMPORT_APPLY_FORBIDDEN",
-        "Current ImportPolicy does not allow snapshot apply."
-      );
-    }
-
     try {
       return buildPolicyBinding({
         importPolicy: normalizedPolicy,
@@ -523,6 +554,25 @@ export class TaskSealService {
         "IMPORT_POLICY_STALE",
         "Current ImportPolicy no longer covers the planned provider scope.",
         { cause: error }
+      );
+    }
+  }
+
+  private assertProviderIngress(
+    binding: PolicyBinding
+  ): void {
+    try {
+      authorizeProviderIngress({
+        registry: this.#providerIngressRegistry,
+        provider: binding.provider,
+        scopeRef: binding.scopeRef,
+        requiredObjectTypes:
+          binding.requiredObjectTypes
+      });
+    } catch {
+      throw new TaskSealServiceError(
+        "PROVIDER_INGRESS_FORBIDDEN",
+        "Provider snapshot ingress is not enabled for this target."
       );
     }
   }
@@ -673,6 +723,529 @@ export class TaskSealServiceError extends Error {
     this.name = "TaskSealServiceError";
     this.code = code;
   }
+}
+
+function assertDirectIngressAllowed(
+  event: CanonicalEvent
+): void {
+  const payload = readOwnDataProperty(
+    event,
+    "payload"
+  );
+  const externalLink = isRecord(payload)
+    ? readOwnDataProperty(payload, "externalLink")
+    : undefined;
+  const isProviderManaged =
+    event.type === "external_link.linked" ||
+    event.type === "external_link.observed" ||
+    event.type === "work_item.updated" ||
+    (
+      event.type === "work_item.created" &&
+      isRecord(externalLink) &&
+      Object.prototype.hasOwnProperty.call(
+        externalLink,
+        "providerObjectKey"
+      )
+    );
+
+  if (isProviderManaged) {
+    throw new TaskSealServiceError(
+      "PROVIDER_INGRESS_FORBIDDEN",
+      "Provider-managed canonical events require an authorized snapshot import batch."
+    );
+  }
+}
+
+function readOwnDataProperty(
+  value: object,
+  key: string
+): unknown {
+  const descriptor =
+    Object.getOwnPropertyDescriptor(value, key);
+  return descriptor && "value" in descriptor
+    ? descriptor.value
+    : undefined;
+}
+
+type ImportActionByEventId = Map<
+  string,
+  ImportPlan["actions"][number]
+>;
+
+function assertImportPlanIngressPreflight({
+  plan,
+  workflow,
+  registry
+}: {
+  plan: ImportPlan;
+  workflow: Workflow;
+  registry: ProviderIngressRegistry;
+}): ImportActionByEventId {
+  const binding = plan.policyBinding;
+  const actionByEventId: ImportActionByEventId =
+    new Map(
+      plan.actions.flatMap((action) =>
+        action.eventIds.map((eventId) => [
+          eventId,
+          action
+        ] as const)
+      )
+    );
+
+  for (const action of plan.actions) {
+    const objectType = readProviderObjectType(
+      action.sourceObjectKey,
+      binding.provider
+    );
+
+    if (
+      objectType === null ||
+      !binding.requiredObjectTypes.includes(
+        objectType as
+          PolicyBinding["requiredObjectTypes"][number]
+      )
+    ) {
+      throw importPlanIngressMismatch();
+    }
+
+    if (
+      action.kind === "skip" &&
+      action.eventIds.length === 0
+    ) {
+      authorizeExistingSkippedAction({
+        workflow,
+        workItemId: action.workItemId,
+        sourceObjectKey: action.sourceObjectKey,
+        objectType,
+        binding,
+        registry
+      });
+    }
+  }
+
+  const plannedRichLinks = new Set<string>();
+
+  for (const event of plan.events) {
+    const action = actionByEventId.get(event.eventId);
+    if (!action) {
+      throw importPlanIngressMismatch();
+    }
+
+    if (event.type === "work_item.created") {
+      authorizePlanFact({
+        registry,
+        binding,
+        sourceObjectKey: action.sourceObjectKey,
+        fact: {
+          kind: "rich-link",
+          value: event.payload.externalLink
+        }
+      });
+      plannedRichLinks.add(
+        richLinkIdentity(
+          event.workItemId,
+          action.sourceObjectKey
+        )
+      );
+    } else if (event.type === "external_link.linked") {
+      authorizePlanFact({
+        registry,
+        binding,
+        sourceObjectKey: action.sourceObjectKey,
+        fact: {
+          kind: "rich-link",
+          value: event.payload.link
+        }
+      });
+      plannedRichLinks.add(
+        richLinkIdentity(
+          event.workItemId,
+          action.sourceObjectKey
+        )
+      );
+    } else if (event.type === "external_link.observed") {
+      if (event.payload.expectedRevisionId === null) {
+        authorizePlannedBaselineLink({
+          workflow,
+          workItemId: event.workItemId,
+          sourceObjectKey: action.sourceObjectKey,
+          payload: event.payload,
+          binding,
+          registry
+        });
+        plannedRichLinks.add(
+          richLinkIdentity(
+            event.workItemId,
+            action.sourceObjectKey
+          )
+        );
+      } else {
+        authorizeProjectedLink({
+          workflow,
+          workItemId: event.workItemId,
+          sourceObjectKey: action.sourceObjectKey,
+          binding,
+          registry
+        });
+      }
+    } else if (
+      event.type === "work_item.updated" &&
+      !plannedRichLinks.has(
+        richLinkIdentity(
+          event.workItemId,
+          action.sourceObjectKey
+        )
+      )
+    ) {
+      authorizeProjectedLink({
+        workflow,
+        workItemId: event.workItemId,
+        sourceObjectKey: action.sourceObjectKey,
+        binding,
+        registry
+      });
+    }
+
+    if (event.type === "artifact.linked") {
+      authorizePlanFact({
+        registry,
+        binding,
+        sourceObjectKey: action.sourceObjectKey,
+        fact: {
+          kind: "artifact",
+          value: event.payload
+        }
+      });
+    } else if (event.type === "evidence.recorded") {
+      authorizePlanFact({
+        registry,
+        binding,
+        sourceObjectKey: action.sourceObjectKey,
+        fact: {
+          kind: "evidence",
+          value: event.payload
+        }
+      });
+    }
+  }
+
+  return actionByEventId;
+}
+
+function projectAuthorizedImportPlan({
+  plan,
+  workflow,
+  registry,
+  actionByEventId
+}: {
+  plan: ImportPlan;
+  workflow: Workflow;
+  registry: ProviderIngressRegistry;
+  actionByEventId: ImportActionByEventId;
+}): Workflow {
+  const binding = plan.policyBinding;
+  let projected = workflow;
+
+  for (const event of plan.events) {
+    const action = actionByEventId.get(event.eventId);
+    if (!action) {
+      throw importPlanIngressMismatch();
+    }
+
+    try {
+      projected = applyEvent(projected, event);
+    } catch {
+      throw importPlanIngressMismatch();
+    }
+
+    if (
+      event.type === "work_item.created" ||
+      event.type === "external_link.linked" ||
+      event.type === "external_link.observed" ||
+      event.type === "work_item.updated"
+    ) {
+      authorizeProjectedLink({
+        workflow: projected,
+        workItemId: event.workItemId,
+        sourceObjectKey: action.sourceObjectKey,
+        binding,
+        registry
+      });
+    }
+  }
+
+  return projected;
+}
+
+function richLinkIdentity(
+  workItemId: string,
+  sourceObjectKey: string
+): string {
+  return `${workItemId}\u0000${sourceObjectKey}`;
+}
+
+function authorizeExistingSkippedAction({
+  workflow,
+  workItemId,
+  sourceObjectKey,
+  objectType,
+  binding,
+  registry
+}: {
+  workflow: Workflow;
+  workItemId: string;
+  sourceObjectKey: string;
+  objectType: string;
+  binding: PolicyBinding;
+  registry: ProviderIngressRegistry;
+}): void {
+  const workItem = workflow.workItems[workItemId];
+  const link = workItem?.externalLinks.find(
+    (candidate) =>
+      candidate.providerObjectKey === sourceObjectKey
+  );
+  if (link && link.legacy !== true) {
+    authorizePlanFact({
+      registry,
+      binding,
+      sourceObjectKey,
+      fact: {
+        kind: "rich-link",
+        value: link
+      }
+    });
+    return;
+  }
+
+  const externalId = readProviderExternalId(
+    sourceObjectKey,
+    binding.provider
+  );
+  if (!workItem || externalId === null) {
+    throw importPlanIngressMismatch();
+  }
+
+  if (objectType === "pull_request") {
+    const artifact = workItem.artifacts.find(
+      (candidate) =>
+        candidate.id === `pr-${externalId}`
+    );
+    if (!artifact) {
+      throw importPlanIngressMismatch();
+    }
+    authorizePlanFact({
+      registry,
+      binding,
+      sourceObjectKey,
+      fact: {
+        kind: "artifact",
+        value: {
+          artifactId: artifact.id,
+          kind: artifact.kind,
+          url: artifact.url
+        }
+      }
+    });
+    return;
+  }
+
+  if (objectType === "check") {
+    const evidence = workItem.evidence.find(
+      (candidate) =>
+        candidate.id === `check-${externalId}`
+    );
+    if (!evidence) {
+      throw importPlanIngressMismatch();
+    }
+    authorizePlanFact({
+      registry,
+      binding,
+      sourceObjectKey,
+      fact: {
+        kind: "evidence",
+        value: {
+          evidenceId: evidence.id,
+          url: evidence.url
+        }
+      }
+    });
+    return;
+  }
+
+  throw importPlanIngressMismatch();
+}
+
+function authorizePlannedBaselineLink({
+  workflow,
+  workItemId,
+  sourceObjectKey,
+  payload,
+  binding,
+  registry
+}: {
+  workflow: Workflow;
+  workItemId: string;
+  sourceObjectKey: string;
+  payload: Record<string, unknown>;
+  binding: PolicyBinding;
+  registry: ProviderIngressRegistry;
+}): void {
+  const link = workflow.workItems[
+    workItemId
+  ]?.externalLinks.find(
+    (candidate) =>
+      candidate.providerObjectKey === sourceObjectKey
+  );
+  const baseline = payload.baseline;
+  const observation = payload.observation;
+
+  if (
+    !link ||
+    link.legacy !== true ||
+    payload.providerObjectKey !== sourceObjectKey ||
+    !isRecord(baseline) ||
+    baseline.providerObjectKey !== sourceObjectKey ||
+    !isRecord(observation)
+  ) {
+    throw importPlanIngressMismatch();
+  }
+
+  authorizePlanFact({
+    registry,
+    binding,
+    sourceObjectKey,
+    fact: {
+      kind: "rich-link",
+      value: {
+        providerObjectKey: sourceObjectKey,
+        provider: link.provider,
+        objectType: baseline.objectType,
+        externalId: link.externalId,
+        scopeRef: baseline.scopeRef,
+        url:
+          observation.url === undefined
+            ? link.url
+            : observation.url,
+        managedFields: baseline.managedFields,
+        lastObservation: observation
+      }
+    }
+  });
+}
+
+function authorizeProjectedLink({
+  workflow,
+  workItemId,
+  sourceObjectKey,
+  binding,
+  registry
+}: {
+  workflow: Workflow;
+  workItemId: string;
+  sourceObjectKey: string;
+  binding: PolicyBinding;
+  registry: ProviderIngressRegistry;
+}): void {
+  const link = workflow.workItems[
+    workItemId
+  ]?.externalLinks.find(
+    (candidate) =>
+      candidate.providerObjectKey === sourceObjectKey
+  );
+
+  if (!link || link.legacy === true) {
+    throw importPlanIngressMismatch();
+  }
+
+  authorizePlanFact({
+    registry,
+    binding,
+    sourceObjectKey,
+    fact: {
+      kind: "rich-link",
+      value: link
+    }
+  });
+}
+
+function authorizePlanFact({
+  registry,
+  binding,
+  sourceObjectKey,
+  fact
+}: {
+  registry: ProviderIngressRegistry;
+  binding: PolicyBinding;
+  sourceObjectKey: string;
+  fact:
+    | {
+        kind: "rich-link";
+        value: unknown;
+      }
+    | {
+        kind: "artifact";
+        value: unknown;
+      }
+    | {
+        kind: "evidence";
+        value: unknown;
+      };
+}): void {
+  try {
+    authorizeProviderIngressFact({
+      registry,
+      provider: binding.provider,
+      scopeRef: binding.scopeRef,
+      sourceObjectKey,
+      fact
+    });
+  } catch {
+    throw importPlanIngressMismatch();
+  }
+}
+
+function readProviderObjectType(
+  providerObjectKey: string,
+  provider: string
+): string | null {
+  const prefix = `${provider}:`;
+  if (!providerObjectKey.startsWith(prefix)) {
+    return null;
+  }
+
+  const remainder = providerObjectKey.slice(
+    prefix.length
+  );
+  const separator = remainder.indexOf(":");
+  return separator > 0
+    ? remainder.slice(0, separator)
+    : null;
+}
+
+function readProviderExternalId(
+  providerObjectKey: string,
+  provider: string
+): string | null {
+  const prefix = `${provider}:`;
+  if (!providerObjectKey.startsWith(prefix)) {
+    return null;
+  }
+
+  const remainder = providerObjectKey.slice(
+    prefix.length
+  );
+  const separator = remainder.indexOf(":");
+  return separator > 0 &&
+    separator < remainder.length - 1
+    ? remainder.slice(separator + 1)
+    : null;
+}
+
+function importPlanIngressMismatch(): TaskSealServiceError {
+  return new TaskSealServiceError(
+    "IMPORT_PLAN_TAMPERED",
+    "ImportPlan events do not match the authorized Provider ingress binding."
+  );
 }
 
 function readErrorMessage(error: unknown): string {

@@ -862,8 +862,9 @@ test("Linear v2 facts canonicalize uppercase UUIDs before preview", () => {
 });
 
 test("preview can be reviewed while apply capability remains disabled", () => {
-  const importPolicy = createImportPolicy();
-  importPolicy.capabilities["snapshot.import.apply"] = false;
+  const importPolicy = createImportPolicy({
+    applyAllowed: false
+  });
   const plan = previewSnapshotImport({
     snapshot: createGitHubIssueSnapshot(),
     workflow: createWorkflow(),
@@ -1358,15 +1359,14 @@ function createLocalWorkItemEvent(): WorkItemCreatedEvent {
 }
 
 function createImportPolicy({
-  objectTypes = ["issue"]
+  objectTypes = ["issue"],
+  applyAllowed = true
 }: {
   objectTypes?: ProviderObjectType[] | undefined;
+  applyAllowed?: boolean | undefined;
 } = {}): NormalizedImportPolicy {
   return {
-    schemaVersion: 1,
-    capabilities: {
-      "snapshot.import.apply": true
-    },
+    schemaVersion: 2,
     allowedScopes: [
       {
         provider: "github",
@@ -1374,7 +1374,11 @@ function createImportPolicy({
           kind: "repository",
           key: "github:repository:netpilot-z/taskseal"
         },
-        objectTypes
+        objectTypes,
+        capabilities: {
+          "snapshot.import.preview": true,
+          "snapshot.import.apply": applyAllowed
+        }
       }
     ]
   };
@@ -1383,10 +1387,7 @@ function createImportPolicy({
 function createLinearImportPolicy():
   NormalizedImportPolicy {
   return {
-    schemaVersion: 1,
-    capabilities: {
-      "snapshot.import.apply": true
-    },
+    schemaVersion: 2,
     allowedScopes: [
       {
         provider: "linear",
@@ -1397,7 +1398,11 @@ function createLinearImportPolicy():
           parentKey:
             "linear:organization:33333333-3333-4333-8333-333333333333"
         },
-        objectTypes: ["issue"]
+        objectTypes: ["issue"],
+        capabilities: {
+          "snapshot.import.preview": true,
+          "snapshot.import.apply": true
+        }
       }
     ]
   };

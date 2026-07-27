@@ -86,15 +86,16 @@ Snapshot import 契约已由 `docs/specs/0004-snapshot-import.md` 与 `docs/adr/
 
 Atomic apply 已通过故障注入、并发、未知提交结果 fencing 和重启恢复验证；apply capability 默认关闭，只有可信 ImportPolicy 明确允许的 scope 才可写入本地 journal。
 
-## 已实现阶段：Gitee 只读 Adapter
+## 已实现阶段：Gitee 只读 Adapter 与受控本地 import
 
 ADR 0003 选择的 Gitee Issue 只读切片已经完成：
 
 1. `AdapterManifest v1` 精确声明 `provider.health` 与 `work-item.read`，并与同名 ports 一一对应；
 2. Gitee 只使用固定 origin、匿名 GET、有界响应和精确 repository/Issue/URL 对账；
 3. Gitee Issue 使用 repository-scoped、区分大小写的 identity，snapshot 自带 rich candidateEvent；
-4. read-model 可表达 `provider = gitee`，import 层仍只有 GitHub/Linear；Gitee preview、伪造 apply 与 candidate direct append 均零写入失败关闭；
-5. 公共 `oschina/git-osc#I4` health/read smoke 成功，前后 journal 哈希相同。
+4. read-model 可表达 `provider = gitee`；完成 Issue `#34` 后，只有 trusted registry 与精确 per-scope ImportPolicy v2 同时允许时才可执行 Gitee 本地 preview/apply；
+5. Gitee candidate direct append 固定拒绝，apply 只写本地 atomic batch，不新增 Gitee 外部写权限；
+6. 公共 `oschina/git-osc#I4` health/read smoke 成功，前后 journal 哈希相同；本地 import 能力由自动化 fixture 验证。
 
 ## Provider Observation 读侧
 
@@ -121,11 +122,12 @@ configured target + operation start
 
 v1 只保证单一 read-model 实例内串行写入；多个进程并发 whole-file replace 不属于当前能力。Query 每次重载有界 JSON，使运行中的 Control Room 能看到后续 CLI 已完成的原子替换。多 writer 或远程平台出现后，应把写入集中到服务端或重新决策事务型存储。
 
-## 下一阶段：统一 ingress gate 与异构 Provider
+## Provider ingress 与下一阶段
 
-- GitHub Issue `#34` 建立统一 ingress registry gate、per-provider/per-scope apply 与后续 Provider-agnostic domain。
-- 用飞书多维表格的 token、动态字段和业务 error envelope 对 AdapterManifest v1 做异构压力测试。
-- Gitee 或其他 Provider 的 import/write 只有在独立能力、策略、审计和明确授权同时成立后才能开放。
+- GitHub Issue `#34` 已建立统一 ingress registry gate、per-provider/per-scope ImportPolicy v2、Provider-neutral rich link Domain 与 Gitee 本地 import。
+- Generic direct rich append 固定拒绝；read-only AdapterManifest 不自动授予 import，历史 replay 不读取当前 registry/policy。
+- 下一步用飞书多维表格的 token、动态字段和业务 error envelope 对 AdapterManifest v1 做异构压力测试。
+- 其他 Provider 的本地 import 仍需独立 registration、Provider-specific normalizer 与精确 scope policy；任何外部写回继续使用独立审批、幂等和审计合同。
 
 只有成功样本与插件边界验证后才考虑：
 

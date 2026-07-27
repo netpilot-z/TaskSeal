@@ -25,6 +25,12 @@ import {
   providerObservationScopeMatchesTarget
 } from "./provider-observation.ts";
 import {
+  DEFAULT_PROVIDER_INGRESS_REGISTRY
+} from "./provider-ingress-registry.ts";
+import type {
+  ProviderIngressRegistry
+} from "./provider-ingress-registry.ts";
+import {
   ProviderObservationCoordinator
 } from "./provider-observation-coordinator.ts";
 
@@ -46,6 +52,9 @@ interface ObservedSnapshotImportFacadeOptions {
   boundScope: ProviderObservationScope;
   coordinator: ProviderObservationCoordinator;
   imports: SnapshotImportApplyPort;
+  providerIngressRegistry?:
+    | ProviderIngressRegistry
+    | undefined;
 }
 
 export class ObservedSnapshotImportFacade {
@@ -54,17 +63,22 @@ export class ObservedSnapshotImportFacade {
   readonly #boundScope: ProviderObservationScope;
   readonly #coordinator: ProviderObservationCoordinator;
   readonly #imports: SnapshotImportApplyPort;
+  readonly #providerIngressRegistry:
+    ProviderIngressRegistry;
 
   constructor({
     provider,
     configuredTarget,
     boundScope,
     coordinator,
-    imports
+    imports,
+    providerIngressRegistry =
+      DEFAULT_PROVIDER_INGRESS_REGISTRY
   }: ObservedSnapshotImportFacadeOptions) {
     if (
       provider !== "github" &&
-      provider !== "linear"
+      provider !== "linear" &&
+      provider !== "gitee"
     ) {
       throw new TypeError(
         "Observed snapshot import provider is invalid."
@@ -104,6 +118,8 @@ export class ObservedSnapshotImportFacade {
     this.#boundScope = normalizedScope;
     this.#coordinator = coordinator;
     this.#imports = imports;
+    this.#providerIngressRegistry =
+      providerIngressRegistry;
   }
 
   previewSnapshotImport(
@@ -119,7 +135,11 @@ export class ObservedSnapshotImportFacade {
       observationSnapshot: () => normalizedSnapshot,
       execute: () => {
         this.assertSnapshotBinding(options.snapshot);
-        const plan = previewSnapshotImportPlan(options);
+        const plan = previewSnapshotImportPlan({
+          ...options,
+          providerIngressRegistry:
+            this.#providerIngressRegistry
+        });
         this.assertPlanBinding(plan);
         normalizedSnapshot =
           createObservationSnapshot(
@@ -246,7 +266,7 @@ function normalizeTarget(
 
   return {
     kind: value.kind,
-    key: value.key
+    key: normalizeObservationKey(provider, value.key)
   };
 }
 
@@ -276,9 +296,27 @@ function normalizeScope(
 
   return {
     kind: value.kind,
-    key: value.key,
-    parentKey: value.parentKey
+    key: normalizeObservationKey(provider, value.key),
+    parentKey:
+      value.parentKey === null
+        ? null
+        : normalizeObservationKey(
+            provider,
+            value.parentKey
+          )
   };
+}
+
+function normalizeObservationKey(
+  provider: ImportProvider,
+  value: string
+): string {
+  return (
+    provider === "github" ||
+    provider === "gitee"
+  )
+    ? value.toLowerCase()
+    : value;
 }
 
 function scopesEqual(
@@ -309,7 +347,10 @@ function tryNormalizeSnapshotScope(
   }
 
   if (
-    provider === "github" &&
+    (
+      provider === "github" ||
+      provider === "gitee"
+    ) &&
     hasExactKeys(value, ["kind", "key"]) &&
     value.kind === "repository"
   ) {

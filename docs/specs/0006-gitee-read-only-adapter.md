@@ -1,5 +1,7 @@
 # 规格 0006：Gitee 只读 Adapter 与插件契约
 
+> 后续状态：本文保留 Issue `#10` 的只读切片合同。完成统一门禁后的当前 Gitee 本地 import 行为由 [规格 0014](./0014-provider-ingress-gate.md) 定义；Gitee 外部写回仍不在范围内。
+
 ## 背景
 
 TaskSeal 已有 GitHub、Linear 的只读 inspection、ProviderSnapshot v2 和受 ImportPolicy 约束的原子导入。第二个 repository/work-item Provider 用来验证稳定的扩展边界，但当前 rich ExternalLink journal ingress 仍由领域 Provider allowlist 保护，snapshot apply 也是全局 capability。若在本切片直接开放 Gitee import，会扩大未经 registry gate 和 per-scope 授权保护的写入面。
@@ -158,19 +160,21 @@ candidate event 必须携带完整 rich ExternalLink：
 
 不得生成历史 `{ provider, externalId, url }` legacy candidate。Issue state 不映射为 TaskSeal WorkItem status。
 
-## 三重写入拒绝
+## Issue #10 验收时的三重写入拒绝
+
+> 后续状态：本节保留最小 read adapter 切片的历史验收边界。Issue `#34` 已按 [规格 0014](./0014-provider-ingress-gate.md) 增加 trusted registry、精确 per-scope ImportPolicy v2 与 Gitee `PolicyBinding v2`，因此当前 Gitee snapshot 可以受控 preview/apply；generic direct append 仍失败关闭。
 
 ### Snapshot preview
 
-snapshot importer 在生成 plan 前使用 `ImportProvider` allowlist。Gitee 返回稳定错误 `SNAPSHOT_PROVIDER_NOT_IMPORTABLE`，不修改 Workflow，也不调用 policy binding。
+Issue `#10` 当时由 `ImportProvider` allowlist 返回 `SNAPSHOT_PROVIDER_NOT_IMPORTABLE`。当前只有 registry registration 与精确 Gitee scope policy 同时成立时才可生成计划；撤销任一条件都在写入前失败。
 
 ### Plan apply
 
-合法 Gitee plan 无法由 preview 生成。测试仍需构造带 Gitee policy binding 的伪造 plan，证明 apply 在 plan normalization 阶段以 `IMPORT_PLAN_TAMPERED` 拒绝，且 policy provider、commitBatch、journal 和 Workflow 均未发生变化。
+Issue `#10` 当时无法生成合法 Gitee plan。当前 Gitee plan 使用 `PolicyBinding v2`，apply 会重验 registry/current policy，并逐项验证 action、rich link、URL 与 scope；伪造或跨 scope plan 仍以 `IMPORT_PLAN_TAMPERED` 零写入拒绝。
 
 ### Candidate direct append
 
-本切片不修改领域 rich ExternalLink Provider allowlist。将 snapshot 自带的 Gitee candidate event 直接传给 `TaskSealService.append` 必须返回 `EVENT_PAYLOAD_INVALID`，并在 journal append 之前失败。candidate 不得被转换为 legacy link。
+当前 Domain 可 replay Provider-neutral rich link，但 live Gitee candidate 直接传给 `TaskSealService.append` 必须返回固定 `PROVIDER_INGRESS_FORBIDDEN`，并在 journal append 之前失败。candidate 不得被转换为 legacy link。
 
 ## 安全与兼容不变量
 
@@ -187,10 +191,10 @@ snapshot importer 在生成 plan 前使用 `ImportProvider` allowlist。Gitee �
 2. fake transport 覆盖 exact URL、GET、无认证、timeout、redirect、primitive/null/array、非法 JSON、oversize、HTTP 分类、scope drift、number case 和 URL drift。
 3. normalizer 生成 repository-scoped identity、稳定 digest 与 rich candidate；不输出 API id、state 或 raw payload。
 4. health、inspection 与 CLI 的成功/参数/安全错误均有自动化测试。
-5. preview、伪造 apply 与 direct append 三个入口全部零写入失败关闭。
+5. 在 Issue `#10` 基线中，preview、伪造 apply 与 direct append 三个入口全部零写入失败关闭；当前行为由规格 0014 的受控 import 测试接替。
 6. 使用公开 `oschina/git-osc#I4` 完成匿名只读 smoke；运行前后项目 journal 不变，不保存 raw response。
 7. 全量测试与 typecheck 通过；独立架构、安全和 diff 审查无剩余 P0–P3。
 
 ## 回滚
 
-删除 Gitee adapter、CLI 分支和 readable provider union 即可回滚；由于本切片没有 Gitee journal event、import plan 或外部写入，不需要数据迁移。已存在的 GitHub/Linear snapshot 与 journal 不受影响。
+Issue `#10` 切片本身可删除 adapter、CLI 分支和 readable provider union 回滚；Issue `#34` 之后若已提交含 Gitee `PolicyBinding v2` 的 batch，则不能回滚到不识别 v2 的旧 reader。

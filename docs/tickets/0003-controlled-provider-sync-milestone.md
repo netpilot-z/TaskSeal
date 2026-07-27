@@ -101,10 +101,20 @@
 
 ## T11.4 — 建立 Provider ingress gate 与 per-scope import 授权
 
-- 状态：等待 T11.2；GitHub Issue `#34`。
+- 状态：已完成；GitHub Issue `#34`。
 - 目的：在开放 Gitee/第三方 import 前，关闭 direct append 绕过，并把全局 apply 开关收敛为 per-provider/per-scope 授权。
-- 范围：可信 Adapter registry gate、rich ExternalLink journal ingress、per-scope policy、撤销与 stale binding。
+- 范围：可信 ingress registry gate、rich ExternalLink journal ingress、per-scope policy、撤销与 stale binding、Provider-neutral Domain 与 Gitee 本地 import。
 - 不包含：Provider API read、外部写回、动态代码加载、插件市场或默认开启 apply。
 - 依赖：T11.2 的 `AdapterManifest v1`；Gitee read 不依赖本票。
 - 验收标准：新增 Provider 不能仅靠 canonical event 或 allowed scope 获得 rich link/apply；未知/撤销/stale 全部零写入。
 - 验证：direct append 绕过回归、policy 矩阵、并发/重启/legacy 全量回归和安全审查。
+
+## T11.5 — 建立 Provider fact provenance 与对象级 locator 绑定
+
+- 状态：待规划；GitHub Issue `#48`。
+- 目的：证明 GitHub database ID ↔ Issue/PR number、Linear UUID ↔ identifier/URL 等远端字段确属同一个 connector 已观察事实。
+- 范围：versioned source locator/provenance、可信 connector attestation 或 apply 只读 re-read、Plan reader migration、撤销与重启语义。
+- 不包含：Provider 外部写回、默认网络 apply、凭证落盘、动态第三方代码或把 URL 改成对象主键。
+- 依赖：T11.4 的 scope ingress gate。
+- 验收标准：同一获批 repo/team 内自构不一致 ID/URL 并重算公开 digest 仍不能提交；历史 batch/receipt 可回放。
+- 验证：规格/ADR、同 scope 伪造回归、断网/撤销/重启/回滚测试和独立安全审查。

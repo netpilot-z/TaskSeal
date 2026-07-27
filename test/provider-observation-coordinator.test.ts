@@ -349,6 +349,21 @@ test("configured targets are stable and keep Linear configuration separate from 
       key: "linear:team-ref:netpilot-z/netpilot"
     }
   );
+  assert.deepEqual(
+    configuredTargetForProvider(
+      {
+        project: "TaskSeal",
+        gitee: {
+          repository: "OSChina/Git-Osc"
+        }
+      },
+      "gitee"
+    ),
+    {
+      kind: "repository",
+      key: "gitee:repository:oschina/git-osc"
+    }
+  );
 });
 
 function createSnapshot(revisionId: string) {

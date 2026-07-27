@@ -21,7 +21,9 @@ import {
   digestProviderFactContent
 } from "../src/lib/provider-snapshot.ts";
 import type {
+  ProviderCheckFact,
   ProviderIssueFact,
+  ProviderPullRequestFact,
   ProviderSnapshotV2
 } from "../src/lib/provider-snapshot.ts";
 
@@ -128,15 +130,18 @@ export function createGitHubIssueSnapshot({
 }
 
 export function createImportPolicy({
-  applyAllowed = true
+  previewAllowed = true,
+  applyAllowed = true,
+  objectTypes = ["issue"]
 }: {
+  previewAllowed?: boolean | undefined;
   applyAllowed?: boolean | undefined;
+  objectTypes?:
+    | Array<"check" | "issue" | "pull_request">
+    | undefined;
 } = {}): NormalizedImportPolicy {
   return {
-    schemaVersion: 1,
-    capabilities: {
-      "snapshot.import.apply": applyAllowed
-    },
+    schemaVersion: 2,
     allowedScopes: [
       {
         provider: "github",
@@ -144,9 +149,119 @@ export function createImportPolicy({
           kind: "repository",
           key: "github:repository:netpilot-z/taskseal"
         },
-        objectTypes: ["issue"]
+        objectTypes,
+        capabilities: {
+          "snapshot.import.preview": previewAllowed,
+          "snapshot.import.apply": applyAllowed
+        }
       }
     ]
+  };
+}
+
+export function createGitHubDeliverySnapshot():
+  ProviderSnapshotV2 {
+  const pullRequestSource:
+    ProviderPullRequestFact["sourceObject"] = {
+      providerObjectKey: "github:pull_request:601",
+      provider: "github",
+      objectType: "pull_request",
+      externalId: "601",
+      url:
+        "https://github.com/netpilot-z/TaskSeal/pull/2"
+    };
+  const pullRequestObserved:
+    ProviderPullRequestFact["observed"] = {
+      headRevision: "abc123"
+    };
+  const pullRequest:
+    ProviderPullRequestFact = {
+      sourceObject: pullRequestSource,
+      revision: {
+        id: "2026-07-26T08:03:00.000Z",
+        occurredAt: "2026-07-26T08:03:00.000Z",
+        contentDigest: digestProviderFactContent({
+          sourceObject: pullRequestSource,
+          observed: pullRequestObserved
+        })
+      },
+      observed: pullRequestObserved,
+      candidateEvent: {
+        eventId:
+          "github:pr-601:abc123:2026-07-26T08:03:00.000Z",
+        workItemId: "TS-1",
+        type: "artifact.linked",
+        occurredAt: "2026-07-26T08:03:00.000Z",
+        payload: {
+          artifactId: "pr-601",
+          attemptId: "run-1",
+          kind: "pull_request",
+          revision: "abc123",
+          url: pullRequestSource.url
+        }
+      }
+    };
+  const checkSource:
+    ProviderCheckFact["sourceObject"] = {
+      providerObjectKey: "github:check:701",
+      provider: "github",
+      objectType: "check",
+      externalId: "701",
+      url:
+        "https://github.com/netpilot-z/TaskSeal/actions/runs/7"
+    };
+  const checkObserved:
+    ProviderCheckFact["observed"] = {
+      headRevision: "abc123",
+      outcome: "passed"
+    };
+  const check: ProviderCheckFact = {
+    sourceObject: checkSource,
+    revision: {
+      id: "2026-07-26T08:04:00.000Z",
+      occurredAt: "2026-07-26T08:04:00.000Z",
+      contentDigest: digestProviderFactContent({
+        sourceObject: checkSource,
+        observed: checkObserved
+      })
+    },
+    observed: checkObserved,
+    candidateEvent: {
+      eventId: "github:check-701:abc123",
+      workItemId: "TS-1",
+      type: "evidence.recorded",
+      occurredAt: "2026-07-26T08:04:00.000Z",
+      payload: {
+        evidenceId: "check-701",
+        attemptId: "run-1",
+        artifactId: "pr-601",
+        revision: "abc123",
+        criterionKey: "tests",
+        outcome: "passed",
+        url: checkSource.url
+      }
+    }
+  };
+
+  return {
+    schemaVersion: 2,
+    mode: "read-only",
+    provider: "github",
+    scope: {
+      kind: "repository",
+      key: "github:repository:netpilot-z/taskseal"
+    },
+    mapping: {
+      workItemId: "TS-1",
+      requiredEvidence: ["tests"],
+      managedFields: [],
+      attemptId: "run-1",
+      artifactId: "pr-601",
+      artifactRevision: "abc123",
+      criterionKey: "tests"
+    },
+    capturedAt: "2026-07-26T08:04:01.000Z",
+    facts: [pullRequest, check]
   };
 }
 
@@ -222,10 +337,7 @@ export function createLinearIssueSnapshot():
 export function createLinearImportPolicy():
   NormalizedImportPolicy {
   return {
-    schemaVersion: 1,
-    capabilities: {
-      "snapshot.import.apply": true
-    },
+    schemaVersion: 2,
     allowedScopes: [
       {
         provider: "linear",
@@ -236,7 +348,11 @@ export function createLinearImportPolicy():
           parentKey:
             "linear:organization:33333333-3333-4333-8333-333333333333"
         },
-        objectTypes: ["issue"]
+        objectTypes: ["issue"],
+        capabilities: {
+          "snapshot.import.preview": true,
+          "snapshot.import.apply": true
+        }
       }
     ]
   };

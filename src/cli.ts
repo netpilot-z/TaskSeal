@@ -32,6 +32,9 @@ import {
 import {
   ObservedSnapshotImportFacade
 } from "./application/observed-snapshot-import.ts";
+import {
+  DEFAULT_PROVIDER_INGRESS_REGISTRY
+} from "./application/provider-ingress-registry.ts";
 import { TaskSealService } from "./application/taskseal-service.ts";
 import {
   readProjectConfiguration
@@ -88,6 +91,9 @@ import type {
 import type {
   ImportProvider
 } from "./application/import-policy.ts";
+import type {
+  ProviderIngressRegistry
+} from "./application/provider-ingress-registry.ts";
 import type {
   ProviderName
 } from "./lib/provider-snapshot.ts";
@@ -847,10 +853,15 @@ export async function createLocalCodexRuntime({
 
 export async function createLocalProviderObservationRuntime({
   cwd,
-  clock = () => new Date()
+  clock = () => new Date(),
+  providerIngressRegistry =
+    DEFAULT_PROVIDER_INGRESS_REGISTRY
 }: {
   cwd: string;
   clock?: (() => unknown) | undefined;
+  providerIngressRegistry?:
+    | ProviderIngressRegistry
+    | undefined;
 }): Promise<{
   readModel: ProviderObservationReadModel;
   coordinator: ProviderObservationCoordinator;
@@ -923,7 +934,8 @@ export async function createLocalProviderObservationRuntime({
       configuredTarget,
       boundScope,
       coordinator,
-      imports
+      imports,
+      providerIngressRegistry
     });
   };
   let configuration;

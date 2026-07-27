@@ -266,7 +266,8 @@ export function configuredTargetForProvider(
       getGiteeCoordinates(configuration);
     return {
       kind: "repository",
-      key: `gitee:repository:${repository}`
+      key:
+        `gitee:repository:${repository.toLowerCase()}`
     };
   }
 
