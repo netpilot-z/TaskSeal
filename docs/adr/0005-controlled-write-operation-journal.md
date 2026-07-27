@@ -30,6 +30,7 @@ prepare → approval → submit → created
 - response 丢失进入 outcome unknown，在按 client UUID 查询对账前禁止再次提交。
 - submitting 必须先以 expected version 原子持久化，再消费一次 transport call permit；重启发现遗留 submitting 时只能进入 outcome unknown/reconciliation，不能重放 create。
 - transport 必须以可判别结果区分 `not_dispatched` 与 `outcome_unknown`；任何派发后不确定性都不能归为 terminal failed。
+- transport port 由 application 层拥有；首个 Linear adapter 只接受显式注入的 fake GraphQL exchange，没有 global fetch、凭证或真实 endpoint fallback。create 侧只有 exchange 明确返回未派发才能终止为 failed，其他请求/响应不确定性一律进入 unknown；query 侧只有合法 null 才是 absent。
 - Operation Journal 不复用 canonical workflow journal，也不写入 Provider Observation。
 - `#29` 只依赖窄 query port，组合安全 projection；不解析 operation 文件。
 - 首个 file adapter 固定使用 `.taskseal/provider-operations.json`、16 MiB / 512 records 硬边界和 whole-file atomic replace；达到上限时失败关闭，不淘汰历史。
@@ -68,3 +69,4 @@ prepare → approval → submit → created
 - reconciliation absent 保持未解决且禁止 create；允许显式再次 query，但不自动提交或重试，避免在尚未验证 Provider 查询一致性时扩大重复写风险。
 - 固定 `wx` temporary slot 把 rename 前残留限制为一个且不做路径清理；合法 orphan 只有在目录、lstat/open、single-link 与权限复核后才能原位复用，异常 temp 需要人工处理。首版也不提供 hash chain，拥有本地写权限的操作者删除完整合法 suffix 无法仅靠 replay 检出。
 - storage 处于可信本地单 writer 边界。Node 的 pathname-based rename 无法把目录 identity 与 rename syscall 原子绑定；rename 后复核能把替换识别为 unknown/fence，避免误报 committed 和后续 transport permit，但不能承诺对同权限恶意跨进程目录替换零越界文件系统副作用。需要该强保证时迁移到 owner-only ACL 加 native `openat/renameat`、SQLite 或独立单写服务。
+- fake Linear transport 会保存测试用 request/external-write counters 和内存 Issue，但这些不是生产审计；生产审计仍只由 Operation Journal 拥有。真实网络 adapter、凭证、schema probe 与权限边界需要新的规格和明确授权。

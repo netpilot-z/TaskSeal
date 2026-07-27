@@ -1,0 +1,62 @@
+export interface LinearWriteCreateInput {
+  clientRequestId: string;
+  teamId: string;
+  title: string;
+  description: string;
+}
+
+export interface LinearWriteQueryInput {
+  clientRequestId: string;
+  teamId: string;
+}
+
+export interface LinearWriteIssueIdentity {
+  readonly id: string;
+  readonly identifier: string;
+}
+
+export type LinearWriteCreateResult =
+  | {
+      readonly kind: "created";
+      readonly issue: LinearWriteIssueIdentity;
+      readonly observedTeamId: string;
+    }
+  | {
+      readonly kind: "not_dispatched";
+      readonly diagnosticCode:
+        "LINEAR_WRITE_NOT_DISPATCHED";
+    }
+  | {
+      readonly kind: "outcome_unknown";
+      readonly diagnosticCode:
+        "LINEAR_WRITE_OUTCOME_UNKNOWN";
+    };
+
+export type LinearWriteQueryResult =
+  | {
+      readonly kind: "found";
+      readonly issue: LinearWriteIssueIdentity;
+      readonly observedTeamId: string;
+    }
+  | {
+      readonly kind: "absent";
+    }
+  | {
+      readonly kind: "failed";
+      readonly diagnosticCode:
+        "LINEAR_RECONCILIATION_FAILED";
+    }
+  | {
+      readonly kind: "ambiguous";
+      readonly diagnosticCode:
+        "LINEAR_RECONCILIATION_AMBIGUOUS";
+    };
+
+export interface LinearWriteTransportPort {
+  createIssue(
+    input: LinearWriteCreateInput
+  ): Promise<LinearWriteCreateResult>;
+  queryByClientUuid(
+    input: LinearWriteQueryInput
+  ): Promise<LinearWriteQueryResult>;
+}
