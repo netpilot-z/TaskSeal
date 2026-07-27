@@ -1,14 +1,58 @@
 import {
   digestCanonicalJson
-} from "../lib/canonical-json.js";
+} from "../lib/canonical-json.ts";
 
 const APPLY_CAPABILITY = "snapshot.import.apply";
-const PROVIDER_OBJECT_TYPES = {
+export type ImportProvider = "github" | "linear";
+export type ProviderObjectType =
+  | "check"
+  | "issue"
+  | "pull_request";
+
+export interface ProviderScopeRef {
+  kind: "repository" | "team";
+  key: string;
+  parentKey?: string;
+}
+
+export interface AllowedImportScope {
+  provider: ImportProvider;
+  scopeRef: ProviderScopeRef;
+  objectTypes: ProviderObjectType[];
+}
+
+export interface NormalizedImportPolicy {
+  schemaVersion: 1;
+  capabilities: {
+    "snapshot.import.apply": boolean;
+  };
+  allowedScopes: AllowedImportScope[];
+}
+
+export interface PolicyBinding {
+  schemaVersion: 1;
+  capability: "snapshot.import.apply";
+  applyAllowed: boolean;
+  provider: ImportProvider;
+  scopeRef: ProviderScopeRef;
+  requiredObjectTypes: ProviderObjectType[];
+}
+
+export interface BoundImportPolicy {
+  policyBinding: PolicyBinding;
+  policyDigest: string;
+}
+
+const PROVIDER_OBJECT_TYPES: Readonly<
+  Record<ImportProvider, ReadonlySet<string>>
+> = {
   github: new Set(["check", "issue", "pull_request"]),
   linear: new Set(["issue"])
 };
 
-export function normalizeImportPolicy(importPolicy) {
+export function normalizeImportPolicy(
+  importPolicy: unknown
+): NormalizedImportPolicy {
   if (
     !isPlainRecord(importPolicy) ||
     !hasOnlyKeys(importPolicy, [
@@ -32,7 +76,7 @@ export function normalizeImportPolicy(importPolicy) {
   const normalizedScopes = importPolicy.allowedScopes.map(
     normalizeAllowedScope
   );
-  const seenScopes = new Set();
+  const seenScopes = new Set<string>();
 
   for (const scope of normalizedScopes) {
     const identity = `${scope.provider}:${scope.scopeRef.key}`;
@@ -61,15 +105,25 @@ export function buildPolicyBinding({
   provider,
   scopeRef,
   requiredObjectTypes
-}) {
+}: {
+  importPolicy: unknown;
+  provider: unknown;
+  scopeRef: unknown;
+  requiredObjectTypes: unknown;
+}): BoundImportPolicy {
   const normalizedPolicy = normalizeImportPolicy(importPolicy);
-  let normalizedScopeRef;
-  let normalizedTypes;
+  let normalizedProvider: ImportProvider;
+  let normalizedScopeRef: ProviderScopeRef;
+  let normalizedTypes: ProviderObjectType[];
 
   try {
-    normalizedScopeRef = normalizeScopeRef(provider, scopeRef);
+    normalizedProvider = normalizeProvider(provider);
+    normalizedScopeRef = normalizeScopeRef(
+      normalizedProvider,
+      scopeRef
+    );
     normalizedTypes = normalizeObjectTypes(
-      provider,
+      normalizedProvider,
       requiredObjectTypes
     );
   } catch {
@@ -78,7 +132,7 @@ export function buildPolicyBinding({
 
   const allowedScope = normalizedPolicy.allowedScopes.find(
     (scope) =>
-      scope.provider === provider &&
+      scope.provider === normalizedProvider &&
       scopeRefsEqual(scope.scopeRef, normalizedScopeRef)
   );
 
@@ -97,7 +151,7 @@ export function buildPolicyBinding({
     capability: APPLY_CAPABILITY,
     applyAllowed:
       normalizedPolicy.capabilities[APPLY_CAPABILITY],
-    provider,
+    provider: normalizedProvider,
     scopeRef: normalizedScopeRef,
     requiredObjectTypes: normalizedTypes
   });
@@ -108,7 +162,9 @@ export function buildPolicyBinding({
   };
 }
 
-export function normalizePolicyBinding(value) {
+export function normalizePolicyBinding(
+  value: unknown
+): PolicyBinding {
   if (
     !isPlainRecord(value) ||
     !hasOnlyKeys(value, [
@@ -122,7 +178,7 @@ export function normalizePolicyBinding(value) {
     value.schemaVersion !== 1 ||
     value.capability !== APPLY_CAPABILITY ||
     typeof value.applyAllowed !== "boolean" ||
-    !Object.hasOwn(PROVIDER_OBJECT_TYPES, value.provider)
+    !isProvider(value.provider)
   ) {
     throw invalidPolicy();
   }
@@ -143,13 +199,17 @@ export function normalizePolicyBinding(value) {
   };
 }
 
-export function computePolicyDigest(policyBinding) {
+export function computePolicyDigest(
+  policyBinding: unknown
+): string {
   return digestCanonicalJson(
     normalizePolicyBinding(policyBinding)
   );
 }
 
-function normalizeAllowedScope(value) {
+function normalizeAllowedScope(
+  value: unknown
+): AllowedImportScope {
   if (
     !isPlainRecord(value) ||
     !hasOnlyKeys(value, [
@@ -157,7 +217,7 @@ function normalizeAllowedScope(value) {
       "scopeRef",
       "objectTypes"
     ]) ||
-    !Object.hasOwn(PROVIDER_OBJECT_TYPES, value.provider)
+    !isProvider(value.provider)
   ) {
     throw invalidPolicy();
   }
@@ -175,7 +235,10 @@ function normalizeAllowedScope(value) {
   };
 }
 
-function normalizeScopeRef(provider, value) {
+function normalizeScopeRef(
+  provider: ImportProvider,
+  value: unknown
+): ProviderScopeRef {
   if (!isPlainRecord(value)) {
     throw invalidPolicy();
   }
@@ -183,7 +246,8 @@ function normalizeScopeRef(provider, value) {
   if (
     provider === "github" &&
     hasOnlyKeys(value, ["kind", "key"]) &&
-    value.kind === "repository"
+    value.kind === "repository" &&
+    typeof value.key === "string"
   ) {
     const match =
       /^github:repository:([^/]+)\/([^/]+)$/.exec(value.key);
@@ -192,21 +256,29 @@ function normalizeScopeRef(provider, value) {
       throw invalidPolicy();
     }
 
-    const owner = match[1].toLowerCase();
-    const repository = match[2].toLowerCase();
+    const owner = match?.[1];
+    const repository = match?.[2];
+
+    if (!owner || !repository) {
+      throw invalidPolicy();
+    }
+
+    const normalizedOwner = owner.toLowerCase();
+    const normalizedRepository = repository.toLowerCase();
 
     if (
       !/^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(
-        owner
+        normalizedOwner
       ) ||
-      !/^[a-z0-9._-]{1,100}$/.test(repository)
+      !/^[a-z0-9._-]{1,100}$/.test(normalizedRepository)
     ) {
       throw invalidPolicy();
     }
 
     return {
       kind: "repository",
-      key: `github:repository:${owner}/${repository}`
+      key:
+        `github:repository:${normalizedOwner}/${normalizedRepository}`
     };
   }
 
@@ -234,7 +306,10 @@ function normalizeScopeRef(provider, value) {
   throw invalidPolicy();
 }
 
-function normalizeScopedUuid(value, prefix) {
+function normalizeScopedUuid(
+  value: unknown,
+  prefix: string
+): string {
   if (
     typeof value !== "string" ||
     !value.startsWith(prefix)
@@ -255,27 +330,41 @@ function normalizeScopedUuid(value, prefix) {
   return uuid;
 }
 
-function normalizeObjectTypes(provider, value) {
+function normalizeObjectTypes(
+  provider: ImportProvider,
+  value: unknown
+): ProviderObjectType[] {
   const allowedTypes = PROVIDER_OBJECT_TYPES[provider];
 
   if (
-    !allowedTypes ||
     !isDenseArray(value) ||
-    value.length === 0 ||
-    new Set(value).size !== value.length ||
-    value.some(
-      (objectType) =>
-        typeof objectType !== "string" ||
-        !allowedTypes.has(objectType)
-    )
+    value.length === 0
   ) {
     throw invalidPolicy();
   }
 
-  return [...value].sort();
+  const normalized: ProviderObjectType[] = [];
+  for (const objectType of value) {
+    if (
+      !isProviderObjectType(objectType) ||
+      !allowedTypes.has(objectType)
+    ) {
+      throw invalidPolicy();
+    }
+    normalized.push(objectType);
+  }
+
+  if (new Set(normalized).size !== normalized.length) {
+    throw invalidPolicy();
+  }
+
+  return normalized.toSorted();
 }
 
-function scopeRefsEqual(left, right) {
+function scopeRefsEqual(
+  left: ProviderScopeRef,
+  right: ProviderScopeRef
+): boolean {
   return (
     left.kind === right.kind &&
     left.key === right.key &&
@@ -283,18 +372,24 @@ function scopeRefsEqual(left, right) {
   );
 }
 
-function compareAllowedScopes(left, right) {
+function compareAllowedScopes(
+  left: AllowedImportScope,
+  right: AllowedImportScope
+): number {
   return (
     compareStrings(left.provider, right.provider) ||
     compareStrings(left.scopeRef.key, right.scopeRef.key)
   );
 }
 
-function compareStrings(left, right) {
+function compareStrings(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function hasOnlyKeys(value, allowedKeys) {
+function hasOnlyKeys(
+  value: Record<string, unknown>,
+  allowedKeys: readonly string[]
+): boolean {
   const keys = Reflect.ownKeys(value);
 
   return (
@@ -307,7 +402,9 @@ function hasOnlyKeys(value, allowedKeys) {
   );
 }
 
-function isPlainRecord(value) {
+function isPlainRecord(
+  value: unknown
+): value is Record<string, unknown> {
   if (
     !value ||
     typeof value !== "object" ||
@@ -319,20 +416,28 @@ function isPlainRecord(value) {
   const prototype = Object.getPrototypeOf(value);
   const descriptors = Object.getOwnPropertyDescriptors(value);
 
-  return (
-    (prototype === Object.prototype || prototype === null) &&
-    Reflect.ownKeys(value).every((key) => {
-      const descriptor = descriptors[key];
-      return (
-        typeof key === "string" &&
-        descriptor.enumerable &&
-        "value" in descriptor
-      );
-    })
-  );
+  if (prototype !== Object.prototype && prototype !== null) {
+    return false;
+  }
+
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string") {
+      return false;
+    }
+    const descriptor = descriptors[key];
+    if (
+      !descriptor ||
+      !descriptor.enumerable ||
+      !("value" in descriptor)
+    ) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
-function isDenseArray(value) {
+function isDenseArray(value: unknown): value is unknown[] {
   if (!Array.isArray(value)) {
     return false;
   }
@@ -347,14 +452,14 @@ function isDenseArray(value) {
   );
 }
 
-function invalidPolicy() {
+function invalidPolicy(): ImportPolicyError {
   return new ImportPolicyError(
     "IMPORT_POLICY_INVALID",
     "ImportPolicy does not match the supported versioned schema."
   );
 }
 
-function scopeMismatch() {
+function scopeMismatch(): ImportPolicyError {
   return new ImportPolicyError(
     "SNAPSHOT_SCOPE_MISMATCH",
     "The snapshot target is not covered by ImportPolicy."
@@ -362,9 +467,32 @@ function scopeMismatch() {
 }
 
 export class ImportPolicyError extends Error {
-  constructor(code, message) {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
     super(message);
     this.name = "ImportPolicyError";
     this.code = code;
   }
+}
+
+function normalizeProvider(value: unknown): ImportProvider {
+  if (!isProvider(value)) {
+    throw invalidPolicy();
+  }
+  return value;
+}
+
+function isProvider(value: unknown): value is ImportProvider {
+  return value === "github" || value === "linear";
+}
+
+function isProviderObjectType(
+  value: unknown
+): value is ProviderObjectType {
+  return (
+    value === "check" ||
+    value === "issue" ||
+    value === "pull_request"
+  );
 }

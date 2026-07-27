@@ -1,6 +1,6 @@
 import {
   FileEventJournal
-} from "../src/storage/event-journal.js";
+} from "../src/storage/event-journal.ts";
 
 const [filePath] = process.argv.slice(2);
 const journal = new FileEventJournal({ filePath });

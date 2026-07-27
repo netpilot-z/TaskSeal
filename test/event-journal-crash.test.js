@@ -13,10 +13,10 @@ import test from "node:test";
 
 import {
   createImportBatchRecord
-} from "../src/application/import-batch.js";
+} from "../src/application/import-batch.ts";
 import {
   FileEventJournal
-} from "../src/storage/event-journal.js";
+} from "../src/storage/event-journal.ts";
 import {
   createActor,
   createPreviewPlan

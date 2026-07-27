@@ -11,7 +11,7 @@ import {
 import {
   computeImportPlanDigest,
   deriveImportEventId
-} from "../src/application/import-plan.js";
+} from "../src/application/import-plan.ts";
 import {
   parseProviderSnapshotJson,
   previewSnapshotImport

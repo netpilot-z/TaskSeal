@@ -1,32 +1,118 @@
 import { projectDashboard } from "../dashboard/projection.ts";
 import { applyEvent, createWorkflow } from "../domain/workflow.ts";
+import type { DashboardProjection } from "../dashboard/projection.ts";
+import type {
+  AttemptStartedEvent,
+  CanonicalEvent,
+  Workflow,
+  WorkItem
+} from "../domain/workflow.ts";
 import {
   createImportBatchRecord,
   validateImportBatchRecord,
   validateImportPlanForApply
-} from "./import-batch.js";
+} from "./import-batch.ts";
+import type {
+  ImportBatchRecord,
+  ImportReceipt
+} from "./import-batch.ts";
 import {
   computeBaseWorkflowDigest
-} from "./import-plan.js";
+} from "./import-plan.ts";
 import {
   buildPolicyBinding,
   normalizeImportPolicy
-} from "./import-policy.js";
+} from "./import-policy.ts";
+import type {
+  BoundImportPolicy,
+  PolicyBinding
+} from "./import-policy.ts";
+
+export interface EventJournal {
+  readAll(): Promise<unknown[]>;
+  append(event: CanonicalEvent): Promise<void>;
+  commitBatch?(record: ImportBatchRecord): Promise<void>;
+}
+
+export interface TaskSealServiceOpenOptions {
+  journal: EventJournal;
+  importPolicyProvider?: () => unknown | Promise<unknown>;
+  clock?: () => unknown;
+}
+
+interface TaskSealServiceState {
+  workflow: Workflow;
+  receiptsByPlanDigest: Map<string, ImportReceipt>;
+  batchesById: Map<string, string>;
+}
+
+interface TaskSealServiceConstructorOptions {
+  journal: EventJournal;
+  workflow: Workflow;
+  receiptsByPlanDigest?:
+    | Map<string, ImportReceipt>
+    | undefined;
+  batchesById?: Map<string, string> | undefined;
+  importPolicyProvider?:
+    | (() => unknown | Promise<unknown>)
+    | undefined;
+  clock?: (() => unknown) | undefined;
+}
+
+export interface SnapshotImportApplyOptions {
+  plan: unknown;
+  expectedPlanDigest: unknown;
+  actor: unknown;
+}
+
+export interface SnapshotImportApplyResult {
+  receipt: ImportReceipt;
+  resolution: "committed" | "idempotent";
+}
+
+export type TaskSealServiceHealth =
+  | {
+      status: "ready";
+    }
+  | {
+      status: "fenced";
+      code:
+        | "IMPORT_COMMIT_OUTCOME_UNKNOWN"
+        | "JOURNAL_COMMIT_OUTCOME_UNKNOWN";
+      planDigest: string | null;
+    };
+
+type FencedServiceHealth = Extract<
+  TaskSealServiceHealth,
+  { status: "fenced" }
+>;
+
+interface ImportReceiptQuery {
+  planDigest: string;
+}
+
+interface RecoverRunningAttemptsOptions {
+  occurredAt?: string;
+}
 
 export class TaskSealService {
   static async open({
     journal,
     importPolicyProvider,
     clock = () => new Date()
-  }) {
+  }: TaskSealServiceOpenOptions): Promise<TaskSealService> {
     const records = await journal.readAll();
     let workflow = createWorkflow();
-    const receiptsByPlanDigest = new Map();
-    const batchesById = new Map();
+    const receiptsByPlanDigest =
+      new Map<string, ImportReceipt>();
+    const batchesById = new Map<string, string>();
 
     for (const [index, record] of records.entries()) {
       try {
-        if (record?.recordType === "import.batch") {
+        if (
+          isRecord(record) &&
+          record.recordType === "import.batch"
+        ) {
           const validated =
             validateImportBatchRecord(record);
           const seenDigest = batchesById.get(
@@ -75,7 +161,7 @@ export class TaskSealService {
       } catch (error) {
         throw new TaskSealServiceError(
           "JOURNAL_CORRUPT",
-          `TaskSeal could not replay event journal line ${index + 1}: ${error.message}`,
+          `TaskSeal could not replay event journal line ${index + 1}: ${readErrorMessage(error)}`,
           { cause: error }
         );
       }
@@ -91,12 +177,13 @@ export class TaskSealService {
     });
   }
 
-  #journal;
-  #state;
-  #writeQueue;
-  #importPolicyProvider;
-  #clock;
-  #fence;
+  #journal: EventJournal;
+  #state: TaskSealServiceState;
+  #writeQueue: Promise<void>;
+  #importPolicyProvider:
+    | TaskSealServiceOpenOptions["importPolicyProvider"];
+  #clock: () => unknown;
+  #health: TaskSealServiceHealth;
 
   constructor({
     journal,
@@ -105,7 +192,7 @@ export class TaskSealService {
     batchesById = new Map(),
     importPolicyProvider,
     clock = () => new Date()
-  }) {
+  }: TaskSealServiceConstructorOptions) {
     this.#journal = journal;
     this.#state = {
       workflow,
@@ -115,14 +202,18 @@ export class TaskSealService {
     this.#writeQueue = Promise.resolve();
     this.#importPolicyProvider = importPolicyProvider;
     this.#clock = clock;
-    this.#fence = null;
+    this.#health = {
+      status: "ready"
+    };
   }
 
-  append(event) {
+  append(event: CanonicalEvent): Promise<Workflow> {
     return this.enqueueWrite(() => this.appendNow(event));
   }
 
-  startAttemptIfIdle(event) {
+  startAttemptIfIdle(
+    event: AttemptStartedEvent
+  ): Promise<Workflow> {
     return this.enqueueWrite(() => {
       const workItem =
         this.#state.workflow.workItems[event.workItemId];
@@ -143,7 +234,9 @@ export class TaskSealService {
     });
   }
 
-  async appendNow(event) {
+  async appendNow(
+    event: CanonicalEvent
+  ): Promise<Workflow> {
     this.assertAvailable();
     const candidate = applyEvent(
       this.#state.workflow,
@@ -158,7 +251,10 @@ export class TaskSealService {
       await this.#journal.append(event);
     } catch (error) {
       if (
-        error.code === "JOURNAL_COMMIT_OUTCOME_UNKNOWN"
+        hasErrorCode(
+          error,
+          "JOURNAL_COMMIT_OUTCOME_UNKNOWN"
+        )
       ) {
         this.fence({
           code: "JOURNAL_COMMIT_OUTCOME_UNKNOWN",
@@ -172,9 +268,11 @@ export class TaskSealService {
       }
 
       if (
-        error.code === "JOURNAL_WRITE_FAILED" ||
-        error.code ===
+        hasErrorCode(error, "JOURNAL_WRITE_FAILED") ||
+        hasErrorCode(
+          error,
           "JOURNAL_ATOMIC_COMMIT_UNSUPPORTED"
+        )
       ) {
         throw error;
       }
@@ -197,7 +295,7 @@ export class TaskSealService {
     plan,
     expectedPlanDigest,
     actor
-  }) {
+  }: SnapshotImportApplyOptions): Promise<SnapshotImportApplyResult> {
     return this.enqueueWrite(() =>
       this.applySnapshotImportNow({
         plan,
@@ -211,7 +309,7 @@ export class TaskSealService {
     plan,
     expectedPlanDigest,
     actor
-  }) {
+  }: SnapshotImportApplyOptions): Promise<SnapshotImportApplyResult> {
     this.assertAvailable();
     const normalizedPlan = validateImportPlanForApply(
       plan,
@@ -317,7 +415,10 @@ export class TaskSealService {
       await this.#journal.commitBatch(validated.record);
     } catch (error) {
       if (
-        error.code === "JOURNAL_COMMIT_OUTCOME_UNKNOWN"
+        hasErrorCode(
+          error,
+          "JOURNAL_COMMIT_OUTCOME_UNKNOWN"
+        )
       ) {
         this.fence({
           code: "IMPORT_COMMIT_OUTCOME_UNKNOWN",
@@ -331,9 +432,11 @@ export class TaskSealService {
       }
 
       if (
-        error.code === "JOURNAL_WRITE_FAILED" ||
-        error.code ===
+        hasErrorCode(error, "JOURNAL_WRITE_FAILED") ||
+        hasErrorCode(
+          error,
           "JOURNAL_ATOMIC_COMMIT_UNSUPPORTED"
+        )
       ) {
         throw error;
       }
@@ -357,7 +460,9 @@ export class TaskSealService {
     };
   }
 
-  async readCurrentPolicyBinding(plannedBinding) {
+  async readCurrentPolicyBinding(
+    plannedBinding: PolicyBinding
+  ): Promise<BoundImportPolicy> {
     if (
       typeof this.#importPolicyProvider !== "function"
     ) {
@@ -367,7 +472,7 @@ export class TaskSealService {
       );
     }
 
-    let importPolicy;
+    let importPolicy: unknown;
 
     try {
       importPolicy = await this.#importPolicyProvider();
@@ -379,7 +484,9 @@ export class TaskSealService {
       );
     }
 
-    let normalizedPolicy;
+    let normalizedPolicy: ReturnType<
+      typeof normalizeImportPolicy
+    >;
 
     try {
       normalizedPolicy =
@@ -420,31 +527,33 @@ export class TaskSealService {
     }
   }
 
-  getWorkflow() {
+  getWorkflow(): Workflow {
     this.assertAvailable();
     return structuredClone(this.#state.workflow);
   }
 
-  getWorkItem(workItemId) {
+  getWorkItem(workItemId: string): WorkItem | null {
     this.assertAvailable();
     const workItem =
       this.#state.workflow.workItems[workItemId];
     return workItem ? structuredClone(workItem) : null;
   }
 
-  getImportReceipt({ planDigest }) {
+  getImportReceipt({
+    planDigest
+  }: ImportReceiptQuery): ImportReceipt | null {
     this.assertAvailable();
     const receipt =
       this.#state.receiptsByPlanDigest.get(planDigest);
     return receipt ? structuredClone(receipt) : null;
   }
 
-  getHealth() {
-    return this.#fence
+  getHealth(): TaskSealServiceHealth {
+    return this.#health.status === "fenced"
       ? {
           status: "fenced",
-          code: this.#fence.code,
-          planDigest: this.#fence.planDigest
+          code: this.#health.code,
+          planDigest: this.#health.planDigest
         }
       : {
           status: "ready"
@@ -453,7 +562,7 @@ export class TaskSealService {
 
   recoverRunningAttempts({
     occurredAt = new Date().toISOString()
-  } = {}) {
+  }: RecoverRunningAttemptsOptions = {}): Promise<number> {
     return this.enqueueWrite(async () => {
       const runningAttempts = Object.values(
         this.#state.workflow.workItems
@@ -490,23 +599,28 @@ export class TaskSealService {
     });
   }
 
-  snapshot() {
+  snapshot(): DashboardProjection {
     this.assertAvailable();
     return structuredClone(
       projectDashboard(this.#state.workflow)
     );
   }
 
-  enqueueWrite(operation) {
+  enqueueWrite<T>(
+    operation: () => T | Promise<T>
+  ): Promise<T> {
     const queued = this.#writeQueue.then(() => {
       this.assertAvailable();
       return operation();
     });
-    this.#writeQueue = queued.catch(() => undefined);
+    this.#writeQueue = queued.then(
+      () => undefined,
+      () => undefined
+    );
     return queued;
   }
 
-  currentTimestamp() {
+  currentTimestamp(): string {
     const value = this.#clock();
     const timestamp =
       value instanceof Date
@@ -526,15 +640,19 @@ export class TaskSealService {
     return timestamp;
   }
 
-  fence({ code, planDigest }) {
-    this.#fence = {
+  fence({
+    code,
+    planDigest
+  }: Omit<FencedServiceHealth, "status">): void {
+    this.#health = {
+      status: "fenced",
       code,
       planDigest
     };
   }
 
-  assertAvailable() {
-    if (this.#fence) {
+  assertAvailable(): void {
+    if (this.#health.status === "fenced") {
       throw new TaskSealServiceError(
         "SERVICE_REOPEN_REQUIRED",
         "TaskSeal must reopen and replay the journal before serving further reads or writes."
@@ -544,9 +662,41 @@ export class TaskSealService {
 }
 
 export class TaskSealServiceError extends Error {
-  constructor(code, message, options) {
+  readonly code: string;
+
+  constructor(
+    code: string,
+    message: string,
+    options?: ErrorOptions
+  ) {
     super(message, options);
     this.name = "TaskSealServiceError";
     this.code = code;
   }
+}
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : String(error);
+}
+
+function hasErrorCode(
+  error: unknown,
+  expectedCode: string
+): boolean {
+  return (
+    isRecord(error) &&
+    error.code === expectedCode
+  );
+}
+
+function isRecord(
+  value: unknown
+): value is Record<string, unknown> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+  );
 }

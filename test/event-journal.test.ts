@@ -11,9 +11,9 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 
-import { FileEventJournal } from "../src/storage/event-journal.js";
+import { FileEventJournal } from "../src/storage/event-journal.ts";
 
 const READ_CHILD_PATH = fileURLToPath(
   new URL(
@@ -45,9 +45,7 @@ test("file journal reports the corrupt line instead of ignoring it", async (t) =
 
   await assert.rejects(
     journal.readAll(),
-    (error) =>
-      error.code === "JOURNAL_CORRUPT" &&
-      error.message.includes("line 2")
+    hasCodeAndMessage("JOURNAL_CORRUPT", "line 2")
   );
 });
 
@@ -67,9 +65,7 @@ test("file journal rejects oversized import batches before JSON parsing", async 
 
   await assert.rejects(
     journal.readAll(),
-    (error) =>
-      error.code === "JOURNAL_CORRUPT" &&
-      error.message.includes("byte limit")
+    hasCodeAndMessage("JOURNAL_CORRUPT", "byte limit")
   );
 });
 
@@ -112,9 +108,7 @@ test("import batch byte limits treat CRLF as a line terminator", async (t) => {
     new FileEventJournal({
       filePath: oversizedPath
     }).readAll(),
-    (error) =>
-      error.code === "JOURNAL_CORRUPT" &&
-      error.message.includes("byte limit")
+    hasCodeAndMessage("JOURNAL_CORRUPT", "byte limit")
   );
 });
 
@@ -135,8 +129,12 @@ test("file journal keeps oversized legacy bare events replayable", async (t) => 
   const records = await journal.readAll();
 
   assert.equal(records.length, 1);
+  const replayedPayload = readRecordProperty(
+    requireRecord(records[0]),
+    "payload"
+  );
   assert.equal(
-    records[0].payload.title.length,
+    readStringProperty(replayedPayload, "title").length,
     event.payload.title.length
   );
 
@@ -148,9 +146,13 @@ test("file journal keeps oversized legacy bare events replayable", async (t) => 
     filePath: appendPath
   });
   await appendJournal.append(event);
+  const appendedRecords = await appendJournal.readAll();
+  const appendedPayload = readRecordProperty(
+    requireRecord(appendedRecords[0]),
+    "payload"
+  );
   assert.equal(
-    (await appendJournal.readAll())[0].payload.title
-      .length,
+    readStringProperty(appendedPayload, "title").length,
     event.payload.title.length
   );
 });
@@ -209,20 +211,22 @@ test("legacy bare event lines have an explicit compatibility limit", async (t) =
     new FileEventJournal({
       filePath: oversizedPath
     }).readAll(),
-    (error) =>
-      error.code === "JOURNAL_CORRUPT" &&
-      error.message.includes(
-        "journal record byte limit"
-      )
+    hasCodeAndMessage(
+      "JOURNAL_CORRUPT",
+      "journal record byte limit"
+    )
   );
 
   const appendJournal = new FileEventJournal({
     filePath: appendPath
   });
   await appendJournal.append(event);
+  const appendedRecords = await appendJournal.readAll();
   assert.equal(
-    (await appendJournal.readAll())[0]
-      .legacyPadding.length,
+    readStringProperty(
+      requireRecord(appendedRecords[0]),
+      "legacyPadding"
+    ).length,
     event.legacyPadding.length
   );
 
@@ -234,12 +238,11 @@ test("legacy bare event lines have an explicit compatibility limit", async (t) =
       ...event,
       legacyPadding: `${event.legacyPadding}x`
     }),
-    (error) =>
-      error.code === "JOURNAL_WRITE_FAILED"
+    hasCode("JOURNAL_WRITE_FAILED")
   );
   await assert.rejects(
     stat(rejectedPath),
-    (error) => error.code === "ENOENT"
+    hasCode("ENOENT")
   );
 
   const reservedJournal = new FileEventJournal({
@@ -250,25 +253,28 @@ test("legacy bare event lines have an explicit compatibility limit", async (t) =
       ...createWorkItemEvent(),
       recordType: "import.batch"
     }),
-    (error) =>
-      error.code === "JOURNAL_WRITE_FAILED"
+    hasCode("JOURNAL_WRITE_FAILED")
   );
   await assert.rejects(
     stat(reservedPath),
-    (error) => error.code === "ENOENT"
+    hasCode("ENOENT")
   );
 });
 
 test("oversized unrecognized records fail under a heap smaller than the journal line", async (t) => {
   const directory = await createTemporaryDirectory(t);
 
-  for (const [name, prefix] of [
+  const oversizedPrefixes: ReadonlyArray<
+    readonly [string, string]
+  > = [
     [
       "batch",
       '{"recordType":"import.batch","padding":"'
     ],
     ["unclassified", '{"padding":"']
-  ]) {
+  ];
+
+  for (const [name, prefix] of oversizedPrefixes) {
     const filePath = join(
       directory,
       `${name}.jsonl`
@@ -351,7 +357,9 @@ test("oversized unrecognized records fail under a heap smaller than the journal 
   }
 });
 
-async function createTemporaryDirectory(t) {
+async function createTemporaryDirectory(
+  t: TestContext
+): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "taskseal-journal-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   return directory;
@@ -389,10 +397,10 @@ function createAttemptEvent() {
 }
 
 async function writeOversizedRecord(
-  filePath,
-  prefix,
-  suffix
-) {
+  filePath: string,
+  prefix: string,
+  suffix: string
+): Promise<void> {
   const handle = await open(filePath, "w");
 
   try {
@@ -409,7 +417,16 @@ async function writeOversizedRecord(
   }
 }
 
-function runReadChild(filePath) {
+interface ReadChildResult {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+}
+
+function runReadChild(
+  filePath: string
+): Promise<ReadChildResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
@@ -444,4 +461,59 @@ function runReadChild(filePath) {
       });
     });
   });
+}
+
+function hasCode(
+  code: string
+): (error: unknown) => boolean {
+  return (error) =>
+    isRecord(error) && error.code === code;
+}
+
+function hasCodeAndMessage(
+  code: string,
+  messagePart: string
+): (error: unknown) => boolean {
+  return (error) =>
+    isRecord(error) &&
+    error.code === code &&
+    typeof error.message === "string" &&
+    error.message.includes(messagePart);
+}
+
+function requireRecord(
+  value: unknown
+): Record<string, unknown> {
+  assert.ok(isRecord(value));
+  return value;
+}
+
+function readRecordProperty(
+  value: Record<string, unknown>,
+  property: string
+): Record<string, unknown> {
+  return requireRecord(value[property]);
+}
+
+function readStringProperty(
+  value: Record<string, unknown>,
+  property: string
+): string {
+  const propertyValue = value[property];
+
+  if (typeof propertyValue !== "string") {
+    assert.fail(`${property} must be a string.`);
+  }
+
+  return propertyValue;
+}
+
+function isRecord(
+  value: unknown
+): value is Record<string, unknown> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+  );
 }

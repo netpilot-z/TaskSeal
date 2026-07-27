@@ -24,13 +24,13 @@
 
 ## T12.3 — 迁移 application 与 storage
 
-- 状态：GitHub Issue `#14`，依赖 `#13`。
+- 状态：已完成；GitHub Issue `#14`，application service、import contract 与 file journal 已进入 strict TypeScript 门禁。
 - 目的：类型化 journal、application service、reservation 与恢复边界。
 - 范围：application service、file journal、依赖注入接口和测试。
 - 不包含：数据库、队列、多进程锁或 schema 变化。
 - 依赖：T12.2。
 - 验收标准：append/replay/rollback 契约无 `any`；journal 损坏和写失败行为不变。
-- 验证：journal、service、runner 集成和全量测试。
+- 验证：类型检查通过；7 个直接 TypeScript 测试文件 42/42、snapshot/runner/crash 回归 57/57、全量测试 212/212 通过；两轮独立代码审查无剩余 P0–P3 问题。
 
 ## T12.4 — 迁移 provider adapters
 

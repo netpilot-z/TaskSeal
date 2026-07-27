@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { TaskSealService } from "../src/application/taskseal-service.js";
+import { TaskSealService } from "../src/application/taskseal-service.ts";
 import { CodexRunner } from "../src/runners/codex-runner.js";
-import { FileEventJournal } from "../src/storage/event-journal.js";
+import { FileEventJournal } from "../src/storage/event-journal.ts";
 
 test("runner persists a completed Codex attempt through the service", async (t) => {
   const context = await createContext(t);

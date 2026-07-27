@@ -5,13 +5,13 @@ import {
 import {
   canonicalizeJson,
   digestCanonicalJson
-} from "../lib/canonical-json.js";
+} from "../lib/canonical-json.ts";
 import {
   digestProviderFactContent
 } from "../lib/provider-snapshot.js";
 import {
   buildPolicyBinding
-} from "./import-policy.js";
+} from "./import-policy.ts";
 import {
   compareImportActions,
   compareImportCodeProjections,
@@ -20,7 +20,7 @@ import {
   computeImportPlanDigest,
   deriveImportActionId,
   deriveImportEventId
-} from "./import-plan.js";
+} from "./import-plan.ts";
 
 const SNAPSHOT_BYTE_LIMIT = 1024 * 1024;
 const SNAPSHOT_DEPTH_LIMIT = 16;

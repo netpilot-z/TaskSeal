@@ -7,6 +7,7 @@ import {
   stat,
   unlink
 } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import {
   basename,
   dirname,
@@ -23,17 +24,45 @@ const CAPTURED_RECORD_TYPE_FIELDS = new Set([
   "recordType"
 ]);
 
+export type JournalOperation = "event" | "batch";
+
+export type JournalFailureStage =
+  | "beforeWrite"
+  | "afterWrite"
+  | "beforeSync"
+  | "afterSync"
+  | "beforeClose"
+  | "beforeReplace"
+  | "afterReplace";
+
+export interface FileEventJournalOptions {
+  filePath: string;
+  failureInjector?: (
+    stage: JournalFailureStage,
+    operation: JournalOperation
+  ) => void | Promise<void>;
+  atomicReplaceProbe?: () => boolean | Promise<boolean>;
+}
+
+interface JournalLine {
+  line: string;
+  byteLength: number;
+  recordType: string | undefined;
+}
+
 export class FileEventJournal {
-  #filePath;
-  #failureInjector;
-  #atomicReplaceProbe;
-  #atomicSupportPromise;
+  #filePath: string;
+  #failureInjector:
+    | FileEventJournalOptions["failureInjector"];
+  #atomicReplaceProbe:
+    | FileEventJournalOptions["atomicReplaceProbe"];
+  #atomicSupportPromise: Promise<void> | null;
 
   constructor({
     filePath,
     failureInjector,
     atomicReplaceProbe
-  }) {
+  }: FileEventJournalOptions) {
     if (typeof filePath !== "string" || filePath.trim().length === 0) {
       throw new TypeError("Event journal filePath must be a non-empty string.");
     }
@@ -62,16 +91,16 @@ export class FileEventJournal {
     this.#atomicSupportPromise = null;
   }
 
-  async readAll() {
+  async readAll(): Promise<unknown[]> {
     const filePath = this.#filePath;
-    const records = [];
+    const records: unknown[] = [];
     let lineNumber = 0;
-    let sourceHandle;
+    let sourceHandle: FileHandle | undefined;
 
     try {
       sourceHandle = await open(filePath, "r");
     } catch (error) {
-      if (error?.code === "ENOENT") {
+      if (hasErrorCode(error, "ENOENT")) {
         return [];
       }
 
@@ -106,7 +135,7 @@ export class FileEventJournal {
           );
         }
 
-        let record;
+        let record: unknown;
 
         try {
           record = JSON.parse(line);
@@ -119,7 +148,8 @@ export class FileEventJournal {
         }
 
         if (
-          record?.recordType === "import.batch" &&
+          isRecord(record) &&
+          record.recordType === "import.batch" &&
           byteLength >
             IMPORT_BATCH_RECORD_BYTE_LIMIT
         ) {
@@ -148,9 +178,9 @@ export class FileEventJournal {
     return records;
   }
 
-  async append(event) {
+  async append(event: unknown): Promise<void> {
     const filePath = this.#filePath;
-    let handle;
+    let handle: FileHandle | null | undefined;
     let writeStarted = false;
 
     try {
@@ -220,7 +250,7 @@ export class FileEventJournal {
     }
   }
 
-  async commitBatch(record) {
+  async commitBatch(record: unknown): Promise<void> {
     const filePath = this.#filePath;
     await this.ensureAtomicBatchCommitSupported(filePath);
     await this.replaceWithAppendedRecord(
@@ -230,7 +260,9 @@ export class FileEventJournal {
     );
   }
 
-  async ensureAtomicBatchCommitSupported(filePath) {
+  async ensureAtomicBatchCommitSupported(
+    filePath: string
+  ): Promise<void> {
     if (!this.#atomicSupportPromise) {
       this.#atomicSupportPromise =
         this.probeAtomicReplaceSupport(filePath);
@@ -239,7 +271,9 @@ export class FileEventJournal {
     return this.#atomicSupportPromise;
   }
 
-  async probeAtomicReplaceSupport(filePath) {
+  async probeAtomicReplaceSupport(
+    filePath: string
+  ): Promise<void> {
     let supported = false;
 
     try {
@@ -265,16 +299,16 @@ export class FileEventJournal {
   }
 
   async replaceWithAppendedRecord(
-    record,
-    operation,
-    filePath
-  ) {
+    record: unknown,
+    operation: JournalOperation,
+    filePath: string
+  ): Promise<void> {
     const directory = dirname(filePath);
     const temporaryPath = join(
       directory,
       `.${basename(filePath)}.${randomUUID()}.tmp`
     );
-    let handle;
+    let handle: FileHandle | null | undefined;
     let commitPointReached = false;
 
     try {
@@ -336,8 +370,10 @@ export class FileEventJournal {
       }
 
       if (
-        error?.code ===
-        "JOURNAL_ATOMIC_COMMIT_UNSUPPORTED"
+        hasErrorCode(
+          error,
+          "JOURNAL_ATOMIC_COMMIT_UNSUPPORTED"
+        )
       ) {
         throw error;
       }
@@ -360,7 +396,7 @@ export class FileEventJournal {
         try {
           await unlink(temporaryPath);
         } catch (error) {
-          if (error.code !== "ENOENT") {
+          if (!hasErrorCode(error, "ENOENT")) {
             // A leftover temp file is never part of journal replay.
           }
         }
@@ -368,12 +404,17 @@ export class FileEventJournal {
     }
   }
 
-  async injectFailure(stage, operation) {
+  async injectFailure(
+    stage: JournalFailureStage,
+    operation: JournalOperation
+  ): Promise<void> {
     await this.#failureInjector?.(stage, operation);
   }
 }
 
-async function* readJournalLines(sourceHandle) {
+async function* readJournalLines(
+  sourceHandle: FileHandle
+): AsyncGenerator<JournalLine> {
   const stream = sourceHandle.createReadStream({
     encoding: "utf8",
     autoClose: false
@@ -383,9 +424,13 @@ async function* readJournalLines(sourceHandle) {
     new JournalLineAccumulator(lineNumber);
 
   try {
-    for await (const chunk of stream) {
+    for await (const streamChunk of stream) {
+      const chunk =
+        typeof streamChunk === "string"
+          ? streamChunk
+          : streamChunk.toString("utf8");
       let start = 0;
-      let newlineIndex;
+      let newlineIndex: number;
 
       while (
         (newlineIndex = chunk.indexOf("\n", start)) !==
@@ -417,15 +462,15 @@ async function* readJournalLines(sourceHandle) {
 }
 
 class JournalLineAccumulator {
-  #lineNumber;
-  #parts;
-  #byteLength;
-  #scanner;
-  #spoolHandle;
-  #spoolPath;
-  #pendingCarriageReturn;
+  #lineNumber: number;
+  #parts: string[];
+  #byteLength: number;
+  #scanner: TopLevelRecordTypeScanner;
+  #spoolHandle: FileHandle | null;
+  #spoolPath: string | null;
+  #pendingCarriageReturn: boolean;
 
-  constructor(lineNumber) {
+  constructor(lineNumber: number) {
     this.#lineNumber = lineNumber;
     this.#parts = [];
     this.#byteLength = 0;
@@ -435,7 +480,7 @@ class JournalLineAccumulator {
     this.#pendingCarriageReturn = false;
   }
 
-  get hasContent() {
+  get hasContent(): boolean {
     return (
       this.#byteLength > 0 ||
       this.#parts.length > 0 ||
@@ -443,9 +488,14 @@ class JournalLineAccumulator {
     );
   }
 
-  async append(segment, {
-    lineEnd = false
-  } = {}) {
+  async append(
+    segment: string,
+    {
+      lineEnd = false
+    }: {
+      lineEnd?: boolean;
+    } = {}
+  ): Promise<void> {
     if (this.#pendingCarriageReturn) {
       if (lineEnd && segment.length === 0) {
         this.#pendingCarriageReturn = false;
@@ -470,7 +520,7 @@ class JournalLineAccumulator {
     await this.#appendContent(content);
   }
 
-  async #appendContent(segment) {
+  async #appendContent(segment: string): Promise<void> {
     if (segment.length === 0) {
       return;
     }
@@ -518,21 +568,30 @@ class JournalLineAccumulator {
     this.#byteLength = nextByteLength;
   }
 
-  async finish() {
+  async finish(): Promise<JournalLine> {
     if (this.#pendingCarriageReturn) {
       this.#pendingCarriageReturn = false;
       await this.#appendContent("\r");
     }
 
-    let line;
+    let line: string;
 
     if (this.#spoolHandle) {
+      const spoolPath = this.#spoolPath;
+
+      if (!spoolPath) {
+        throw new JournalError(
+          "JOURNAL_READ_FAILED",
+          "TaskSeal could not read the local event journal."
+        );
+      }
+
       line = await readSpoolHandle(
         this.#spoolHandle
       );
       await this.#spoolHandle.close();
       this.#spoolHandle = null;
-      await unlinkIgnoringMissing(this.#spoolPath);
+      await unlinkIgnoringMissing(spoolPath);
       this.#spoolPath = null;
     } else {
       line = this.#parts.join("");
@@ -545,7 +604,7 @@ class JournalLineAccumulator {
     };
   }
 
-  async dispose() {
+  async dispose(): Promise<void> {
     await closeIgnoringErrors(this.#spoolHandle);
     this.#spoolHandle = null;
 
@@ -555,7 +614,7 @@ class JournalLineAccumulator {
     }
   }
 
-  async #startSpool() {
+  async #startSpool(): Promise<void> {
     this.#spoolPath = join(
       tmpdir(),
       `taskseal-journal-line-${randomUUID()}.tmp`
@@ -578,16 +637,16 @@ class JournalLineAccumulator {
 }
 
 class TopLevelRecordTypeScanner {
-  #depth;
-  #inString;
-  #escaped;
-  #stringContext;
-  #lastSignificant;
-  #pendingProperty;
-  #capture;
-  #captureOverflow;
-  #token;
-  #stringValues;
+  #depth: number;
+  #inString: boolean;
+  #escaped: boolean;
+  #stringContext: string | null;
+  #lastSignificant: string | null;
+  #pendingProperty: string | null;
+  #capture: boolean;
+  #captureOverflow: boolean;
+  #token: string;
+  #stringValues: Map<string, string>;
 
   constructor() {
     this.#depth = 0;
@@ -602,11 +661,11 @@ class TopLevelRecordTypeScanner {
     this.#stringValues = new Map();
   }
 
-  get recordType() {
+  get recordType(): string | undefined {
     return this.#stringValues.get("recordType");
   }
 
-  write(segment) {
+  write(segment: string): void {
     for (const character of segment) {
       if (this.#inString) {
         this.#captureCharacter(character);
@@ -666,7 +725,7 @@ class TopLevelRecordTypeScanner {
     }
   }
 
-  #beginString() {
+  #beginString(): void {
     this.#inString = true;
     this.#escaped = false;
     this.#stringContext = this.#lastSignificant;
@@ -676,13 +735,13 @@ class TopLevelRecordTypeScanner {
         this.#stringContext === "," ||
         (this.#stringContext === ":" &&
           CAPTURED_RECORD_TYPE_FIELDS.has(
-            this.#pendingProperty
+            this.#pendingProperty ?? ""
           )));
     this.#captureOverflow = false;
     this.#token = this.#capture ? "\"" : "";
   }
 
-  #captureCharacter(character) {
+  #captureCharacter(character: string): void {
     if (!this.#capture) {
       return;
     }
@@ -703,7 +762,7 @@ class TopLevelRecordTypeScanner {
     this.#token += character;
   }
 
-  #finishString() {
+  #finishString(): void {
     if (
       this.#depth !== 1 ||
       !this.#capture
@@ -727,7 +786,7 @@ class TopLevelRecordTypeScanner {
       return;
     }
 
-    let value;
+    let value: unknown;
 
     try {
       value = JSON.parse(this.#token);
@@ -739,17 +798,20 @@ class TopLevelRecordTypeScanner {
       this.#stringContext === "{" ||
       this.#stringContext === ","
     ) {
-      this.#pendingProperty = value;
+      this.#pendingProperty =
+        typeof value === "string" ? value : null;
     } else if (
       this.#stringContext === ":" &&
       this.#pendingProperty === "recordType"
     ) {
-      this.#stringValues.set("recordType", value);
+      if (typeof value === "string") {
+        this.#stringValues.set("recordType", value);
+      }
     }
   }
 }
 
-function isJsonWhitespace(character) {
+function isJsonWhitespace(character: string): boolean {
   return (
     character === " " ||
     character === "\t" ||
@@ -758,31 +820,41 @@ function isJsonWhitespace(character) {
   );
 }
 
-function importBatchLineTooLarge(lineNumber) {
+function importBatchLineTooLarge(
+  lineNumber: number
+): JournalError {
   return new JournalError(
     "JOURNAL_CORRUPT",
     `TaskSeal event journal line ${lineNumber} exceeds the import batch byte limit.`
   );
 }
 
-function journalRecordLineTooLarge(lineNumber) {
+function journalRecordLineTooLarge(
+  lineNumber: number
+): JournalError {
   return new JournalError(
     "JOURNAL_CORRUPT",
     `TaskSeal event journal line ${lineNumber} exceeds the journal record byte limit.`
   );
 }
 
-async function readSpoolHandle(handle) {
+async function readSpoolHandle(
+  handle: FileHandle
+): Promise<string> {
   const stream = handle.createReadStream({
     encoding: "utf8",
     start: 0,
     autoClose: false
   });
-  const parts = [];
+  const parts: string[] = [];
 
   try {
-    for await (const chunk of stream) {
-      parts.push(chunk);
+    for await (const streamChunk of stream) {
+      parts.push(
+        typeof streamChunk === "string"
+          ? streamChunk
+          : streamChunk.toString("utf8")
+      );
     }
   } finally {
     stream.destroy();
@@ -791,11 +863,13 @@ async function readSpoolHandle(handle) {
   return parts.join("");
 }
 
-async function readJournalBytes(filePath) {
+async function readJournalBytes(
+  filePath: string
+): Promise<string> {
   try {
     return await readFile(filePath, "utf8");
   } catch (error) {
-    if (error.code === "ENOENT") {
+    if (hasErrorCode(error, "ENOENT")) {
       return "";
     }
 
@@ -803,12 +877,14 @@ async function readJournalBytes(filePath) {
   }
 }
 
-async function readJournalMode(filePath) {
+async function readJournalMode(
+  filePath: string
+): Promise<number> {
   try {
     const fileStat = await stat(filePath);
     return fileStat.mode & 0o777;
   } catch (error) {
-    if (error.code === "ENOENT") {
+    if (hasErrorCode(error, "ENOENT")) {
       return 0o600;
     }
 
@@ -816,7 +892,9 @@ async function readJournalMode(filePath) {
   }
 }
 
-async function runAtomicReplaceProbe(directory) {
+async function runAtomicReplaceProbe(
+  directory: string
+): Promise<boolean> {
   await mkdir(directory, { recursive: true });
   const probeId = randomUUID();
   const targetPath = join(
@@ -824,8 +902,8 @@ async function runAtomicReplaceProbe(directory) {
     `.taskseal-atomic-probe-${probeId}`
   );
   const replacementPath = `${targetPath}.tmp`;
-  let targetHandle;
-  let replacementHandle;
+  let targetHandle: FileHandle | null | undefined;
+  let replacementHandle: FileHandle | null | undefined;
 
   try {
     targetHandle = await open(
@@ -860,16 +938,21 @@ async function runAtomicReplaceProbe(directory) {
   }
 }
 
-async function syncDirectoryIfSupported(directory) {
-  let handle;
+async function syncDirectoryIfSupported(
+  directory: string
+): Promise<void> {
+  let handle: FileHandle | undefined;
 
   try {
     handle = await open(directory, "r");
     await handle.sync();
   } catch (error) {
+    const errorCode = readErrorCode(error);
+
     if (
+      errorCode !== undefined &&
       ["EISDIR", "EINVAL", "ENOTSUP", "EPERM"].includes(
-        error.code
+        errorCode
       )
     ) {
       return;
@@ -881,7 +964,9 @@ async function syncDirectoryIfSupported(directory) {
   }
 }
 
-async function closeIgnoringErrors(handle) {
+async function closeIgnoringErrors(
+  handle: FileHandle | null | undefined
+): Promise<void> {
   if (!handle) {
     return;
   }
@@ -893,20 +978,52 @@ async function closeIgnoringErrors(handle) {
   }
 }
 
-async function unlinkIgnoringMissing(filePath) {
+async function unlinkIgnoringMissing(
+  filePath: string
+): Promise<void> {
   try {
     await unlink(filePath);
   } catch (error) {
-    if (error.code !== "ENOENT") {
+    if (!hasErrorCode(error, "ENOENT")) {
       throw error;
     }
   }
 }
 
 export class JournalError extends Error {
-  constructor(code, message, options) {
+  readonly code: string;
+
+  constructor(
+    code: string,
+    message: string,
+    options?: ErrorOptions
+  ) {
     super(message, options);
     this.name = "JournalError";
     this.code = code;
   }
+}
+
+function isRecord(
+  value: unknown
+): value is Record<string, unknown> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+  );
+}
+
+function readErrorCode(
+  error: unknown
+): string | undefined {
+  const code = isRecord(error) ? error.code : undefined;
+  return typeof code === "string" ? code : undefined;
+}
+
+function hasErrorCode(
+  error: unknown,
+  expectedCode: string
+): boolean {
+  return readErrorCode(error) === expectedCode;
 }

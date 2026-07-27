@@ -1,6 +1,6 @@
 import {
   FileEventJournal
-} from "../src/storage/event-journal.js";
+} from "../src/storage/event-journal.ts";
 
 const [filePath, crashStage, encodedRecord] =
   process.argv.slice(2);

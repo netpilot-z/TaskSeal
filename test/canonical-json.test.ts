@@ -5,7 +5,7 @@ import test from "node:test";
 import {
   canonicalizeJson,
   digestCanonicalJson
-} from "../src/lib/canonical-json.js";
+} from "../src/lib/canonical-json.ts";
 
 test("canonical JSON sorts object keys recursively and preserves array order", () => {
   const value = {
@@ -65,7 +65,7 @@ test("canonical JSON rejects values that cannot be represented losslessly", () =
 });
 
 test("canonical JSON rejects cycles, accessors, and excessive depth safely", () => {
-  const cyclic = {};
+  const cyclic: Record<string, unknown> = {};
   cyclic.self = cyclic;
   const accessor = {};
   Object.defineProperty(accessor, "secret", {
@@ -74,7 +74,7 @@ test("canonical JSON rejects cycles, accessors, and excessive depth safely", () 
       throw new Error("must not execute");
     }
   });
-  let tooDeep = "leaf";
+  let tooDeep: unknown = "leaf";
 
   for (let index = 0; index < 17; index += 1) {
     tooDeep = { child: tooDeep };
@@ -94,6 +94,9 @@ test("canonical JSON rejects cycles, accessors, and excessive depth safely", () 
   );
 });
 
-function hasCode(code) {
-  return (error) => error?.code === code;
+function hasCode(code: string) {
+  return (error: unknown) =>
+    error instanceof Error &&
+    "code" in error &&
+    error.code === code;
 }

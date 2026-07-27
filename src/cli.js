@@ -11,12 +11,12 @@ import {
   inspectLinearProvider
 } from "./application/provider-inspection.js";
 import { createLinearTicketDryRun } from "./application/linear-ticket-dry-run.js";
-import { TaskSealService } from "./application/taskseal-service.js";
+import { TaskSealService } from "./application/taskseal-service.ts";
 import { isLinearIssueReference } from "./connectors/linear.js";
 import { CodexAppServerClient } from "./runners/codex-app-server-client.js";
 import { CodexRunner } from "./runners/codex-runner.js";
 import { createTaskSealServer } from "./server.js";
-import { FileEventJournal } from "./storage/event-journal.js";
+import { FileEventJournal } from "./storage/event-journal.ts";
 
 const MINIMUM_NODE_VERSION = [24, 12, 0];
 const MINIMUM_NODE_VERSION_LABEL = "24.12.0";

@@ -4,7 +4,7 @@ import test from "node:test";
 import {
   buildPolicyBinding,
   normalizeImportPolicy
-} from "../src/application/import-policy.js";
+} from "../src/application/import-policy.ts";
 
 test("import policies normalize scopes and object types deterministically", () => {
   const first = createPolicy({
@@ -240,6 +240,9 @@ function createPolicy({
     createGitHubScope(),
     createLinearScope()
   ]
+}: {
+  applyAllowed?: boolean;
+  allowedScopes?: unknown[];
 } = {}) {
   return {
     schemaVersion: 1,
@@ -253,6 +256,9 @@ function createPolicy({
 function createGitHubScope({
   key = "github:repository:netpilot-z/taskseal",
   objectTypes = ["check", "issue", "pull_request"]
+}: {
+  key?: string;
+  objectTypes?: unknown[];
 } = {}) {
   return {
     provider: "github",
@@ -270,6 +276,10 @@ function createLinearScope({
   parentKey =
     "linear:organization:33333333-3333-4333-8333-333333333333",
   objectTypes = ["issue"]
+}: {
+  key?: string;
+  parentKey?: string;
+  objectTypes?: unknown[];
 } = {}) {
   return {
     provider: "linear",
@@ -282,6 +292,9 @@ function createLinearScope({
   };
 }
 
-function hasCode(code) {
-  return (error) => error?.code === code;
+function hasCode(code: string) {
+  return (error: unknown) =>
+    error instanceof Error &&
+    "code" in error &&
+    error.code === code;
 }
