@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 
-import { normalizeCodexRun } from "../connectors/codex.js";
+import { normalizeCodexRun } from "../connectors/codex.ts";
 import {
   normalizeGitHubCheck,
   normalizeGitHubPullRequest
