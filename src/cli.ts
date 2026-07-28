@@ -35,6 +35,9 @@ import {
 import {
   DEFAULT_PROVIDER_INGRESS_REGISTRY
 } from "./application/provider-ingress-registry.ts";
+import {
+  ManagedAttemptRunner
+} from "./application/managed-attempt-runner.ts";
 import { TaskSealService } from "./application/taskseal-service.ts";
 import {
   readProjectConfiguration
@@ -47,7 +50,9 @@ import {
 } from "./connectors/gitee-read-client.ts";
 import { isLinearIssueReference } from "./connectors/linear.ts";
 import { CodexAppServerClient } from "./runners/codex-app-server-client.ts";
-import { CodexRunner } from "./runners/codex-runner.ts";
+import {
+  CodexAppServerRunnerAdapter
+} from "./runners/codex-runner.ts";
 import { createTaskSealServer } from "./server.ts";
 import { FileEventJournal } from "./storage/event-journal.ts";
 import {
@@ -62,13 +67,12 @@ import type {
   WorkItemCreatedEvent
 } from "./domain/workflow.ts";
 import type {
-  CodexAppServerInvocation,
-  CodexSandbox
+  CodexAppServerInvocation
 } from "./runners/codex-app-server-client.ts";
 import type {
-  CodexRunnerResult,
-  CodexRunnerRunOptions
-} from "./runners/codex-runner.ts";
+  ManagedRunnerResult,
+  ManagedRunnerRunOptions
+} from "./application/managed-attempt-runner.ts";
 import type {
   PersistentAcceptancePort,
   PersistentServicePort,
@@ -146,8 +150,8 @@ interface RunCliWorkItemOptions {
 interface CliRunResult {
   attemptId: string;
   outcome: "completed" | "failed" | "interrupted";
-  threadId?: string | undefined;
-  turnId?: string | undefined;
+  sessionId?: string | undefined;
+  executionId?: string | undefined;
   summary?: string | undefined;
 }
 
@@ -304,7 +308,10 @@ interface RunLocalCodexWorkItemOptions {
   cwd: string;
   workItemId: string;
   prompt?: string | undefined;
-  sandbox?: CodexSandbox | undefined;
+  sandbox?:
+    | "read-only"
+    | "workspace-write"
+    | undefined;
   commandRunner?: CommandRunner | undefined;
 }
 
@@ -375,7 +382,7 @@ interface ParsedVersionedArguments {
 
 interface ControlRoomRunnerPort {
   run(
-    options: CodexRunnerRunOptions
+    options: ManagedRunnerRunOptions
   ): unknown | Promise<unknown>;
 }
 
@@ -932,7 +939,7 @@ export async function runLocalCodexWorkItem({
   prompt,
   sandbox = "workspace-write",
   commandRunner = runCommand
-}: RunLocalCodexWorkItemOptions): Promise<CodexRunnerResult> {
+}: RunLocalCodexWorkItemOptions): Promise<ManagedRunnerResult> {
   const { service, runner } = await createLocalCodexRuntime({
     cwd,
     commandRunner
@@ -951,9 +958,9 @@ export async function runLocalCodexWorkItem({
   return runner.run({
     workItemId,
     cwd,
-    prompt: prompt ?? createDefaultPrompt(workItem),
-    sandbox,
-    approvalPolicy: "never"
+    instruction:
+      prompt ?? createDefaultPrompt(workItem),
+    workspaceAccess: sandbox
   });
 }
 
@@ -963,7 +970,7 @@ export async function createLocalCodexRuntime({
   environment = process.env
 }: CreateLocalCodexRuntimeOptions): Promise<{
   service: TaskSealService;
-  runner: CodexRunner;
+  runner: ManagedAttemptRunner;
 }> {
   const journal = new FileEventJournal({
     filePath: join(cwd, ".taskseal", "events.jsonl")
@@ -985,13 +992,20 @@ export async function createLocalCodexRuntime({
     );
   }
 
-  const runner = new CodexRunner({
+  const runner = new ManagedAttemptRunner({
     service,
     projectRoot: cwd,
-    clientFactory: () =>
-      new CodexAppServerClient({
-        invocation,
-        environment
+    allowedWorkspaceAccess: [
+      "read-only",
+      "workspace-write"
+    ],
+    adapter:
+      new CodexAppServerRunnerAdapter({
+        clientFactory: () =>
+          new CodexAppServerClient({
+            invocation,
+            environment
+          })
       })
   });
 
@@ -1651,14 +1665,35 @@ function readCliRunResult(value: unknown): CliRunResult {
     );
   }
 
-  const threadId = readOptionalResultString(
-    value,
-    "threadId"
-  );
-  const turnId = readOptionalResultString(
-    value,
-    "turnId"
-  );
+  const runtimeRefs = value.runtimeRefs;
+  if (
+    runtimeRefs !== undefined &&
+    !isRecord(runtimeRefs)
+  ) {
+    throw new TypeError(
+      "TaskSeal runner returned an invalid result."
+    );
+  }
+  const sessionId =
+    runtimeRefs === undefined
+      ? readOptionalResultString(
+          value,
+          "threadId"
+        )
+      : readOptionalResultString(
+          runtimeRefs,
+          "sessionId"
+        );
+  const executionId =
+    runtimeRefs === undefined
+      ? readOptionalResultString(
+          value,
+          "turnId"
+        )
+      : readOptionalResultString(
+          runtimeRefs,
+          "executionId"
+        );
   const summary = readOptionalResultString(
     value,
     "summary",
@@ -1679,8 +1714,12 @@ function readCliRunResult(value: unknown): CliRunResult {
   return {
     attemptId: value.attemptId,
     outcome,
-    ...(threadId === undefined ? {} : { threadId }),
-    ...(turnId === undefined ? {} : { turnId }),
+    ...(sessionId === undefined
+      ? {}
+      : { sessionId }),
+    ...(executionId === undefined
+      ? {}
+      : { executionId }),
     ...(summary === undefined ? {} : { summary })
   };
 }
@@ -1711,8 +1750,16 @@ function readOptionalResultString(
 function renderRunResult(result: CliRunResult): string {
   const lines = [
     `Attempt ${result.attemptId}: ${result.outcome}`,
-    ...(result.threadId ? [`Codex thread: ${result.threadId}`] : []),
-    ...(result.turnId ? [`Codex turn: ${result.turnId}`] : []),
+    ...(result.sessionId
+      ? [
+          `Runner session: ${result.sessionId}`
+        ]
+      : []),
+    ...(result.executionId
+      ? [
+          `Runner execution: ${result.executionId}`
+        ]
+      : []),
     ...(result.summary ? [`Summary: ${result.summary}`] : [])
   ];
   return `${lines.join("\n")}\n`;
@@ -2358,9 +2405,15 @@ export async function startPersistentControlRoom({
     maxConcurrentRuns,
     runWorkItem: (options) =>
       runner.run({
-        ...options,
+        workItemId:
+          options.workItemId,
         cwd,
-        approvalPolicy: "never"
+        instruction: options.prompt,
+        workspaceAccess:
+          options.sandbox,
+        signal: options.signal,
+        terminalization:
+          options.terminalization
       })
   });
 

@@ -9,7 +9,7 @@ TaskSeal 让人类和 AI Agent 的“已完成”变成有证据、可验收、�
 当前最快验证路线覆盖两条软件交付链路：
 
 - fixture：`Linear WorkItem → Codex Attempt → GitHub Artifact/Evidence → AcceptanceDecision`
-- persistent：`Local WorkItem → Codex App Server Attempt → Control Room`
+- persistent：`Local WorkItem → Managed Runner Host → Codex App Server Adapter → Attempt → Control Room`
 - provider import：`GitHub/Linear/Gitee read-only fact → trusted ingress registry → per-scope ImportPolicy v2 → deterministic ImportPlan → GitHub/Linear apply-time provenance re-read → atomic local batch → ImportReceipt`
 - provider extension：已以 Gitee 提取内置 Adapter Contract v1，并验证 Provider-neutral rich link 与受控本地 import；下一步用飞书多维表格做异构压力测试
 - provider observation：`inspection/preview/import → redacted latest-state model → GET /api/providers`，独立于 canonical journal
@@ -17,8 +17,23 @@ TaskSeal 让人类和 AI Agent 的“已完成”变成有证据、可验收、�
 - Linear ready work：`exact Project/Todo query → native/declared blocker union → live Done gate → explicit UUID selection → ImportPlan review → atomic local create/link`
 - GitHub delivery reconciliation：`repository-owned DeliveryMapping → exact PR head → bounded Check/Review reads → head fence → Artifact/Evidence ImportPlan → apply-time provenance → atomic local batch`
 - human acceptance transition：`current successful Attempt + current Artifact/Evidence → server-owned human decision → Transition Operation v3 → exact Linear UUID state update/readback`
+- runner contract：`validated capability manifest → frozen v1 input → replaceable Adapter → exact v1 output decode → host-owned Attempt terminal fact`；Runner handoff 只是不可信 claim，不能直接成为 Artifact/Evidence
 
 本阶段不构建通用 Agent 市场、多租户权限、计费或生产数据库。Snapshot apply 默认仍只提供 application API；Linear ready-work 额外开放显式 UUID 的本地 CLI preview/apply，但只写 canonical journal、固定零 Linear mutation。没有可信 ImportPolicy provider 时不能提交。Registry 证明 Provider/scope 授权和离线可验证的 locator 结构；GitHub/Linear 新 apply 还必须通过显式注入的只读 verifier，以短生命周期 `ProviderFactProvenanceClaim v1` 从精确 plan event 对账远端 stable ID、locator、scope、revision、source/event time、content binding 与 digest。公开 plan digest 不被当作来源证明；未注入 verifier、远端不可用或 Plan v1 remote no-event 时失败关闭。单次最多 8 个 claim、4 路并发、单请求最多 15 秒并受 30 秒总 deadline 约束；已提交 receipt 与历史 journal replay 保持离线。Linear workspace `netpilot-z`、team `netpilot`、project `TaskSeal`、backlog `Backlog`、ready `Todo` 与 completed `Done` 已通过真实只读 resolver 精确验证。
+
+Runner v1 已把 Codex App Server 从唯一实现降为首个
+`CodexAppServerRunnerAdapter`。application-owned `ManagedAttemptRunner` 统一拥有
+WorkItem/cwd/capability 校验、Attempt reservation、deadline、cancel fence、
+`unknown` output decode 和唯一终态写入；第二个 deterministic fake Runner 复用同一
+contract kit 且不修改 Domain。manifest 只声明能力、不授予权限；通用合同只公开
+read-only/workspace-write，Host policy 默认只读，本地 Codex composition 对写权限
+显式授权，Codex approval 固定 `never`。Host input 不含 Provider、
+journal、Acceptance 或环境 port；Codex 子进程使用显式环境 allowlist，控制面凭证
+和未知 key 在读取 value 前被排除。Runner 返回的 Artifact/Evidence 坐标只能作为
+bounded untrusted handoff claim，仍须进入显式 mapping 与 Provider provenance
+reconciliation 才能成为 canonical 事实。deadline/cancel 会在 Host settle 前等待
+bounded Adapter cleanup；清理未确认会形成稳定错误、fence 当前 Host，并要求重建
+runtime 后才能继续派发。
 
 自 2026-07-28 起，Linear 是内部产品研发任务的权威来源；GitHub Issue 只承载外部 Bug、公开反馈和仓库级问题，GitHub PR/Review/CI 继续承载代码交付。仓库 `docs/tickets/` 是可审查的规格拆分与 bootstrap 输入，不是第二套在线状态；`NP-2`～`NP-12` 已按预存 UUID 创建并回读核验，映射见 `0007-linear-bootstrap-map.json`，默认 `0006` manifest 当前为空。GitHub 规划 Issue `#7`、`#25`、`#32` 已留下 Linear 链接并迁移关闭。Issue 创建、更新和评论权限已验证；权限扩展后重试 `issueRelationCreate` 仍返回 `FORBIDDEN`，因此原生依赖关系尚未建立。Issue Create Operation v2 仍只在 fake transport 验证；人工 Acceptance 专用 Transition Operation v3 已通过默认关闭的 `linear.acceptance` 开关接入 Control Room 与真实 HTTP exchange，其他外部 mutation 不能旁路各自的审批合同。
 
@@ -44,6 +59,10 @@ Provider status v2 已由 application façade 并行读取 Provider Observation 
 | --- | --- |
 | `WorkItem` | 需要交付并验收的最小工作单元，可关联外部 Issue。 |
 | `Attempt` | 某个 Agent 对一个 WorkItem 的一次执行。失败重试会产生新 Attempt。 |
+| `Runner Host` | application-owned 的 Attempt 生命周期所有者；生成冻结 input、调用 Adapter、解码未知输出并提交唯一终态。 |
+| `DigitalEmployeeAdapter` | 可替换执行端的 v1 窄 port；只获得 instruction、受限 workspace、deadline 与 AbortSignal，不获得控制面能力。 |
+| `RunnerCapabilityManifest` | Runner 对 workspace/cancel/timeout/handoff 的版本化能力声明；声明本身不授权。 |
+| `HandoffClaim` | Runner 返回的 bounded 不可信 Artifact/Evidence 坐标；不是 canonical Artifact/Evidence，也不能直接用于 Acceptance。 |
 | `Artifact` | 执行产生的交付物，例如 Pull Request、文档、视频或报告。 |
 | `Evidence` | 支持验收判断的可复核事实，例如测试结果、截图、审查结论。 |
 | `AcceptanceDecision` | 对 WorkItem 作出的接受或拒绝决定。 |

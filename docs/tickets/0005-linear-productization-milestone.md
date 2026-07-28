@@ -82,14 +82,19 @@
 
 ## T20 — 稳定 Runner / 数字员工合同
 
-- 状态：待执行。
+- 状态：已完成；由 Linear `NP-8` 跟踪。
 - 目的：把 Codex App Server 从唯一实现提升为第一个可替换 Runner。
 - 范围：capability manifest、input/output envelope、Attempt lifecycle、Artifact/Evidence handoff、timeout/cancel、credential isolation 和 contract test kit。
 - 不包含：任意第三方代码无沙箱动态执行、Agent 市场或计费。
 - 依赖：T17、T18。
 - 验收标准：第二个 fake runner 不修改领域即可接入；runner 不能获得 Linear/GitHub 控制面凭证；相同生命周期产生一致 Attempt 事实。
-- 验证：contract suite、malformed/adversarial output、cancel/timeout 和 secret isolation。
+- 验证：contract suite、malformed/adversarial output、cancel/timeout、cleanup fence、
+  late-cancel race 和 secret isolation；全量 `816/816`。
 - 风险与回退：内置 allowlist；第三方 Runner 默认只读和隔离进程。
+- 规格与决策：`docs/specs/0022-stable-runner-contract.md`、
+  `docs/adr/0013-application-owned-runner-host.md`、
+  `docs/experiments/0030-stable-runner-contract.md`、
+  `docs/reviews/0024-stable-runner-contract.md`。
 
 ## T21 — 任务拆解、依赖调度与真实可观测性
 
