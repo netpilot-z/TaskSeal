@@ -8,6 +8,7 @@ import {
   getGiteeCoordinates,
   getGitHubDeliveryCoordinates,
   getGitHubCoordinates,
+  getLinearAcceptanceCoordinates,
   getLinearBootstrapCoordinates,
   getLinearCoordinates,
   getLinearReadyWorkCoordinates,
@@ -38,6 +39,11 @@ test("project configuration exposes validated non-secret provider coordinates", 
         completedState: "Done",
         dependencyIndex:
           "docs/tickets/0007-linear-bootstrap-map.json"
+      },
+      acceptance: {
+        enabled: true,
+        expectedState: "In Progress",
+        targetState: "Done"
       }
     },
     mode: "persistent"
@@ -85,6 +91,37 @@ test("project configuration exposes validated non-secret provider coordinates", 
       dependencyIndex:
         "docs/tickets/0007-linear-bootstrap-map.json",
       enabled: true
+    }
+  );
+  assert.deepEqual(
+    getLinearAcceptanceCoordinates(
+      configuration
+    ),
+    {
+      workspace: "TaskSeal",
+      team: "netpilot",
+      project: "TaskSeal Delivery",
+      enabled: true,
+      expectedState: "In Progress",
+      targetState: "Done"
+    }
+  );
+  assert.deepEqual(
+    getLinearAcceptanceCoordinates({
+      project: "TaskSeal",
+      linear: {
+        workspace: "TaskSeal",
+        team: "netpilot",
+        project: "TaskSeal Delivery"
+      }
+    }),
+    {
+      workspace: "TaskSeal",
+      team: "netpilot",
+      project: "TaskSeal Delivery",
+      enabled: false,
+      expectedState: null,
+      targetState: null
     }
   );
   assert.doesNotMatch(JSON.stringify(configuration), new RegExp(escapeRegExp(cwd)));
@@ -195,6 +232,46 @@ test("project configuration reports invalid JSON and provider coordinates safely
             team: "netpilot",
             project: "TaskSeal",
             readyWork
+          }
+        }),
+      hasCode("LINEAR_CONFIG_INVALID")
+    );
+  }
+
+  for (const acceptance of [
+    {
+      enabled: false,
+      expectedState: "In Progress",
+      targetState: "Done"
+    },
+    {
+      enabled: true
+    },
+    {
+      enabled: "yes",
+      expectedState: "In Progress",
+      targetState: "Done"
+    },
+    {
+      enabled: true,
+      expectedState: "Done",
+      targetState: "Done"
+    },
+    {
+      enabled: true,
+      expectedState: " In Progress",
+      targetState: "Done"
+    }
+  ]) {
+    assert.throws(
+      () =>
+        getLinearAcceptanceCoordinates({
+          project: "TaskSeal",
+          linear: {
+            workspace: "TaskSeal",
+            team: "netpilot",
+            project: "TaskSeal",
+            acceptance
           }
         }),
       hasCode("LINEAR_CONFIG_INVALID")

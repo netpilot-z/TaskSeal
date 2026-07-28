@@ -11,7 +11,8 @@ const BLOCKED_ENVIRONMENT_KEYS = [
   /^LINEAR_/i,
   /^GITEE_/i,
   /^FEISHU_/i,
-  /^LARK_/i
+  /^LARK_/i,
+  /^TASKSEAL_HUMAN_ACTOR$/i
 ];
 
 export type CodexSandbox =
@@ -788,10 +789,18 @@ export function buildRunnerEnvironment(
   source: NodeJS.ProcessEnv
 ): NodeJS.ProcessEnv {
   return Object.fromEntries(
-    Object.entries(source).filter(
-      ([key]) =>
-        !BLOCKED_ENVIRONMENT_KEYS.some((pattern) => pattern.test(key))
-    )
+    Object.keys(source)
+      .filter(
+        (key) =>
+          !BLOCKED_ENVIRONMENT_KEYS.some(
+            (pattern) =>
+              pattern.test(key)
+          )
+      )
+      .map((key) => [
+        key,
+        source[key]
+      ])
   );
 }
 

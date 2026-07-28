@@ -2,13 +2,21 @@ import {
   digestCanonicalJson
 } from "../lib/canonical-json.ts";
 import {
-  parseControlledWriteOperation
-} from "./controlled-write-operation.ts";
+  parseProviderOperation
+} from "./provider-operation.ts";
 import type {
   ControlledWriteDiagnosticCode,
   ControlledWriteOperation,
   ControlledWriteOperationStatus
 } from "./controlled-write-operation.ts";
+import type {
+  ControlledTransitionDiagnosticCode,
+  ControlledTransitionOperation,
+  ControlledTransitionOperationStatus
+} from "./controlled-transition-operation.ts";
+import type {
+  ProviderOperation
+} from "./provider-operation.ts";
 import {
   normalizeProviderObservationFile
 } from "./provider-observation.ts";
@@ -26,6 +34,7 @@ export type ProviderOperationProjectionStatus =
   | "rejected"
   | "submitting"
   | "created"
+  | "transitioned"
   | "outcome_unknown"
   | "reconciling"
   | "reconciliation_absent"
@@ -43,14 +52,9 @@ export interface ProviderOperationApprovalProjection {
   decidedAt: string;
 }
 
-export interface ProviderOperationProjection {
-  schemaVersion: 1;
+interface ProviderOperationProjectionBase {
   provider: "linear";
   operationKey: string;
-  configuredTarget: {
-    kind: "team" | "project_state";
-    key: string;
-  };
   version: number;
   status: ProviderOperationProjectionStatus;
   approval:
@@ -62,6 +66,31 @@ export interface ProviderOperationProjection {
   createdAt: string;
   updatedAt: string;
 }
+
+export interface ProviderCreateOperationProjection
+  extends ProviderOperationProjectionBase {
+  schemaVersion: 1;
+  configuredTarget: {
+    kind: "team" | "project_state";
+    key: string;
+  };
+}
+
+export interface ProviderTransitionOperationProjection
+  extends ProviderOperationProjectionBase {
+  schemaVersion: 2;
+  action: "work-item.transition";
+  workItemId: string;
+  acceptanceDecisionId: string;
+  configuredTarget: {
+    kind: "issue_state";
+    key: string;
+  };
+}
+
+export type ProviderOperationProjection =
+  | ProviderCreateOperationProjection
+  | ProviderTransitionOperationProjection;
 
 export interface ProviderOperationProjectionSet {
   schemaVersion: 1;
@@ -169,7 +198,7 @@ export function projectProviderOperations(
     const seen = new Set<string>();
     const operations = values.map((candidate) => {
       const operation =
-        parseControlledWriteOperation(candidate);
+        parseProviderOperation(candidate);
       if (
         seen.has(operation.plan.operationKey)
       ) {
@@ -241,8 +270,19 @@ function normalizeObservationProjection(
 }
 
 function projectOperation(
-  operation: ControlledWriteOperation
+  operation: ProviderOperation
 ): ProviderOperationProjection {
+  if (operation.schemaVersion === 3) {
+    return projectTransitionOperation(
+      operation
+    );
+  }
+  return projectCreateOperation(operation);
+}
+
+function projectCreateOperation(
+  operation: ControlledWriteOperation
+): ProviderCreateOperationProjection {
   return {
     schemaVersion: 1,
     provider: "linear",
@@ -275,8 +315,53 @@ function projectOperation(
   };
 }
 
+function projectTransitionOperation(
+  operation: ControlledTransitionOperation
+): ProviderTransitionOperationProjection {
+  return {
+    schemaVersion: 2,
+    provider: "linear",
+    action: "work-item.transition",
+    workItemId:
+      operation.plan.sourceIntent
+        .workItemId,
+    acceptanceDecisionId:
+      operation.plan.sourceIntent
+        .decisionId,
+    operationKey:
+      operation.plan.operationKey,
+    configuredTarget: {
+      kind: "issue_state",
+      key:
+        operation.plan.configuredTarget
+          .key
+    },
+    version: operation.version,
+    status: projectOperationStatus(
+      operation.status
+    ),
+    approval:
+      operation.approval === null
+        ? null
+        : {
+            decision:
+              operation.approval.decision,
+            decidedAt:
+              operation.approval.decidedAt
+          },
+    diagnosticCode:
+      projectOperationDiagnosticCode(
+        operation.diagnosticCode
+      ),
+    createdAt: operation.createdAt,
+    updatedAt: operation.updatedAt
+  };
+}
+
 function projectOperationStatus(
-  status: ControlledWriteOperationStatus
+  status:
+    | ControlledWriteOperationStatus
+    | ControlledTransitionOperationStatus
 ): ProviderOperationProjectionStatus {
   switch (status) {
     case "approval_required":
@@ -284,6 +369,7 @@ function projectOperationStatus(
     case "rejected":
     case "submitting":
     case "created":
+    case "transitioned":
     case "outcome_unknown":
     case "reconciling":
     case "reconciliation_absent":
@@ -296,7 +382,10 @@ function projectOperationStatus(
 }
 
 function projectOperationDiagnosticCode(
-  code: ControlledWriteDiagnosticCode | null
+  code:
+    | ControlledWriteDiagnosticCode
+    | ControlledTransitionDiagnosticCode
+    | null
 ): ProviderOperationProjectionDiagnosticCode | null {
   if (code === null) {
     return null;

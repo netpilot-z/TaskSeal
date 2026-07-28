@@ -8,6 +8,9 @@ import type {
   WorkItem,
   WorkItemStatus
 } from "../domain/workflow.ts";
+import {
+  computeAcceptanceReviewRevision
+} from "../domain/workflow.ts";
 
 export interface DashboardSummary {
   total: number;
@@ -32,6 +35,8 @@ export interface DashboardWorkItem {
   artifacts: Artifact[];
   evidence: Evidence[];
   acceptanceDecision: AcceptanceDecision | null;
+  acceptanceReviewRevision: string;
+  acceptanceHistory: AcceptanceDecision[];
   externalLinks: ExternalLink[];
 }
 
@@ -124,6 +129,12 @@ function projectWorkItem(
     artifacts: workItem.artifacts,
     evidence: workItem.evidence,
     acceptanceDecision: workItem.acceptanceDecision,
+    acceptanceReviewRevision:
+      computeAcceptanceReviewRevision(
+        workItem
+      ),
+    acceptanceHistory:
+      workItem.acceptanceHistory,
     externalLinks: workItem.externalLinks
   };
 }

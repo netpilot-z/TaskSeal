@@ -13,6 +13,10 @@ import {
 import { projectDashboard } from "./dashboard/projection.ts";
 import { replayDemoSteps } from "./demo/scenario.ts";
 import type {
+  AcceptanceDeliveryLinearSync,
+  AcceptanceDeliveryResult
+} from "./application/acceptance-delivery-coordinator.ts";
+import type {
   AttemptRunCoordinatorSnapshot,
   AttemptRunTerminalization,
   AttemptRunView
@@ -40,6 +44,15 @@ export interface PersistentServicePort {
   getHealth?(): unknown;
 }
 
+export interface PersistentAcceptancePort {
+  decide(
+    input: unknown
+  ): Promise<AcceptanceDeliveryResult>;
+  reconcile(
+    input: unknown
+  ): Promise<AcceptanceDeliveryLinearSync>;
+}
+
 export interface RunWorkItemOptions {
   workItemId: string;
   prompt: string;
@@ -64,6 +77,19 @@ export interface DemoTaskSealServerOptions {
 export interface PersistentTaskSealServerOptions {
   service: PersistentServicePort;
   providerStatus: ProviderSyncQueryPort;
+  acceptance?:
+    | PersistentAcceptancePort
+    | null
+    | undefined;
+  acceptanceCapabilities?: {
+    readonly decideAcceptance: boolean;
+    readonly linearTransition: boolean;
+    readonly reconcileLinearTransition: boolean;
+  } | undefined;
+  operatorId?:
+    | string
+    | null
+    | undefined;
   runWorkItem: RunWorkItem;
   maxConcurrentRuns?: number | undefined;
   steps?: never;
@@ -89,6 +115,15 @@ interface PersistentRuntime {
   mode: "persistent";
   service: PersistentServicePort;
   providerStatus: ProviderSyncQueryPort;
+  acceptance:
+    | PersistentAcceptancePort
+    | null;
+  acceptanceCapabilities: {
+    readonly decideAcceptance: boolean;
+    readonly linearTransition: boolean;
+    readonly reconcileLinearTransition: boolean;
+  };
+  operatorId: string | null;
   runWorkItem: RunWorkItem;
   maxConcurrentRuns: number;
   csrfToken: string;
@@ -146,6 +181,9 @@ interface PersistentSnapshot extends DashboardProjection {
     demo: false;
     runAttempt: true;
     cancelAttempt: true;
+    decideAcceptance: boolean;
+    linearTransition: boolean;
+    reconcileLinearTransition: boolean;
   };
   runtime: {
     activeWorkItemIds: string[];
@@ -162,6 +200,7 @@ interface PersistentSnapshot extends DashboardProjection {
   };
   security: {
     csrfToken: string;
+    operatorId: string | null;
   };
 }
 
@@ -242,7 +281,9 @@ export function createTaskSealServer(
                 runtime.service,
                 requireAttemptRuns(attemptRuns),
                 lastErrors,
-                runtime.csrfToken
+                runtime.csrfToken,
+                runtime.acceptanceCapabilities,
+                runtime.operatorId
               )
             : buildDemoSnapshot(
                 runtime.steps,
@@ -260,6 +301,103 @@ export function createTaskSealServer(
           response,
           200,
           await runtime.providerStatus.list()
+        );
+      }
+
+      const acceptanceMatch =
+        runtime.mode === "persistent" &&
+        request.method === "POST" &&
+        /^\/api\/work-items\/([^/]+)\/acceptance$/.exec(
+          pathname
+        );
+
+      if (
+        acceptanceMatch &&
+        runtime.mode === "persistent"
+      ) {
+        validatePersistentWriteRequest(
+          request,
+          runtime.csrfToken
+        );
+        if (
+          !runtime.acceptanceCapabilities
+            .decideAcceptance ||
+          runtime.acceptance === null
+        ) {
+          throw new HttpError(
+            403,
+            "ACCEPTANCE_DISABLED",
+            "TaskSeal local acceptance is disabled."
+          );
+        }
+        const workItemId =
+          decodePathSegment(
+            acceptanceMatch[1]
+          );
+        if (
+          !runtime.service.getWorkItem(
+            workItemId
+          )
+        ) {
+          throw new HttpError(
+            404,
+            "WORK_ITEM_NOT_FOUND",
+            `TaskSeal work item ${workItemId} does not exist.`
+          );
+        }
+        const body =
+          validateAcceptanceBody(
+            await readJsonBody(request)
+          );
+        return writeJson(
+          response,
+          200,
+          await runtime.acceptance.decide({
+            workItemId,
+            ...body
+          })
+        );
+      }
+
+      const reconciliationMatch =
+        runtime.mode === "persistent" &&
+        request.method === "POST" &&
+        /^\/api\/provider-operations\/([^/]+)\/reconcile$/.exec(
+          pathname
+        );
+
+      if (
+        reconciliationMatch &&
+        runtime.mode === "persistent"
+      ) {
+        validatePersistentWriteRequest(
+          request,
+          runtime.csrfToken
+        );
+        if (
+          !runtime.acceptanceCapabilities
+            .reconcileLinearTransition ||
+          runtime.acceptance === null
+        ) {
+          throw new HttpError(
+            403,
+            "LINEAR_RECONCILIATION_DISABLED",
+            "TaskSeal Linear reconciliation is disabled."
+          );
+        }
+        const operationKey =
+          decodePathSegment(
+            reconciliationMatch[1]
+          );
+        validateReconciliationBody(
+          await readJsonBody(request)
+        );
+        return writeJson(
+          response,
+          200,
+          await runtime.acceptance.reconcile({
+            operationKey
+          })
         );
       }
 
@@ -327,7 +465,9 @@ export function createTaskSealServer(
             runtime.service,
             requireAttemptRuns(attemptRuns),
             lastErrors,
-            runtime.csrfToken
+            runtime.csrfToken,
+            runtime.acceptanceCapabilities,
+            runtime.operatorId
           )
         );
       }
@@ -372,7 +512,9 @@ export function createTaskSealServer(
             runtime.service,
             requireAttemptRuns(attemptRuns),
             lastErrors,
-            runtime.csrfToken
+            runtime.csrfToken,
+            runtime.acceptanceCapabilities,
+            runtime.operatorId
           )
         );
       }
@@ -483,12 +625,27 @@ function createServerRuntime(
   }
 
   if (service !== undefined) {
+    const acceptance =
+      options.acceptance ?? null;
+    const acceptanceCapabilities =
+      options.acceptanceCapabilities ?? {
+        decideAcceptance: false,
+        linearTransition: false,
+        reconcileLinearTransition: false
+      };
+    const operatorId =
+      options.operatorId ?? null;
     if (
       typeof service.snapshot !== "function" ||
       typeof service.getWorkItem !== "function" ||
       !isRecord(options.providerStatus) ||
       typeof options.providerStatus.list !== "function" ||
-      typeof options.runWorkItem !== "function"
+      typeof options.runWorkItem !== "function" ||
+      !isValidAcceptanceRuntime(
+        acceptance,
+        acceptanceCapabilities,
+        operatorId
+      )
     ) {
       throw new TypeError(
         "Persistent TaskSeal server requires a service and runWorkItem."
@@ -499,6 +656,9 @@ function createServerRuntime(
       mode: "persistent",
       service,
       providerStatus: options.providerStatus,
+      acceptance,
+      acceptanceCapabilities,
+      operatorId,
       runWorkItem: options.runWorkItem,
       maxConcurrentRuns:
         options.maxConcurrentRuns ?? 1,
@@ -518,6 +678,71 @@ function createServerRuntime(
       steps.length
     )
   };
+}
+
+interface AcceptanceRequestBody {
+  decisionId: string;
+  decision: "accepted" | "rejected";
+  reason: string;
+  expectedReviewRevision: string;
+}
+
+function isValidAcceptanceRuntime(
+  acceptance:
+    | PersistentAcceptancePort
+    | null,
+  capabilities: unknown,
+  operatorId: unknown
+): capabilities is
+  PersistentRuntime["acceptanceCapabilities"] {
+  if (
+    !isRecord(capabilities) ||
+    Object.keys(capabilities).length !==
+      3 ||
+    typeof capabilities
+      .decideAcceptance !== "boolean" ||
+    typeof capabilities
+      .linearTransition !== "boolean" ||
+    typeof capabilities
+      .reconcileLinearTransition !==
+      "boolean" ||
+    (
+      capabilities
+        .linearTransition &&
+      !capabilities.decideAcceptance
+    ) ||
+    (
+      capabilities
+        .reconcileLinearTransition &&
+      !capabilities.linearTransition
+    ) ||
+    (
+      operatorId !== null &&
+      (
+        typeof operatorId !== "string" ||
+        !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(
+          operatorId
+        )
+      )
+    )
+  ) {
+    return false;
+  }
+  if (!capabilities.decideAcceptance) {
+    return (
+      acceptance === null &&
+      operatorId === null
+    );
+  }
+  return (
+    acceptance !== null &&
+    typeof acceptance === "object" &&
+    typeof acceptance.decide ===
+      "function" &&
+    typeof acceptance.reconcile ===
+      "function" &&
+    typeof operatorId === "string"
+  );
 }
 
 function readRequestPathname(value: unknown): string {
@@ -599,7 +824,10 @@ function buildPersistentSnapshot(
   service: PersistentServicePort,
   attemptRuns: AttemptRunCoordinator,
   lastErrors: ReadonlyMap<string, RuntimeError>,
-  csrfToken: string
+  csrfToken: string,
+  acceptanceCapabilities:
+    PersistentRuntime["acceptanceCapabilities"],
+  operatorId: string | null
 ): PersistentSnapshot {
   const dashboard = service.snapshot();
   const coordination = attemptRuns.snapshot();
@@ -618,7 +846,16 @@ function buildPersistentSnapshot(
     capabilities: {
       demo: false,
       runAttempt: true,
-      cancelAttempt: true
+      cancelAttempt: true,
+      decideAcceptance:
+        acceptanceCapabilities
+          .decideAcceptance,
+      linearTransition:
+        acceptanceCapabilities
+          .linearTransition,
+      reconcileLinearTransition:
+        acceptanceCapabilities
+          .reconcileLinearTransition
     },
     runtime: {
       activeWorkItemIds: coordination.runs.map(
@@ -639,7 +876,8 @@ function buildPersistentSnapshot(
       errors: Object.fromEntries(lastErrors)
     },
     security: {
-      csrfToken
+      csrfToken,
+      operatorId
     }
   };
 }
@@ -875,6 +1113,74 @@ function validateCancelBody(body: unknown): void {
   }
 }
 
+function validateAcceptanceBody(
+  body: unknown
+): AcceptanceRequestBody {
+  if (
+    !isRecord(body) ||
+    !hasExactKeys(body, [
+      "decisionId",
+      "decision",
+      "reason",
+      "expectedReviewRevision"
+    ]) ||
+    typeof body.decisionId !==
+      "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+      body.decisionId
+    ) ||
+    (
+      body.decision !== "accepted" &&
+      body.decision !== "rejected"
+    ) ||
+    typeof body.reason !== "string" ||
+    body.reason !== body.reason.trim() ||
+    body.reason.length === 0 ||
+    !body.reason.isWellFormed() ||
+    [...body.reason].length > 2_048 ||
+    Buffer.byteLength(
+      body.reason,
+      "utf8"
+    ) > 8_192 ||
+    /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029]/.test(
+      body.reason
+    ) ||
+    typeof body.expectedReviewRevision !==
+      "string" ||
+    !/^sha256:[0-9a-f]{64}$/.test(
+      body.expectedReviewRevision
+    )
+  ) {
+    throw new HttpError(
+      400,
+      "INVALID_ACCEPTANCE_REQUEST",
+      "TaskSeal acceptance request is invalid."
+    );
+  }
+  return {
+    decisionId: body.decisionId,
+    decision: body.decision,
+    reason: body.reason,
+    expectedReviewRevision:
+      body.expectedReviewRevision
+  };
+}
+
+function validateReconciliationBody(
+  body: unknown
+): void {
+  if (
+    !isRecord(body) ||
+    !hasExactKeys(body, [])
+  ) {
+    throw new HttpError(
+      400,
+      "INVALID_RECONCILIATION_REQUEST",
+      "TaskSeal reconciliation request is invalid."
+    );
+  }
+}
+
 function decodePathSegment(value: unknown): string {
   if (typeof value !== "string") {
     throw new HttpError(
@@ -930,12 +1236,52 @@ function normalizeResponseError(
 
     return {
       statusCode:
-        code === "SERVICE_REOPEN_REQUIRED" ? 503 : 500,
+        code === "WORK_ITEM_NOT_FOUND"
+          ? 404
+          : code ===
+                "ACCEPTANCE_REVIEW_STALE" ||
+              code ===
+                "ACCEPTANCE_DECISION_CONFLICT"
+            ? 409
+            : code ===
+                  "SERVICE_REOPEN_REQUIRED" ||
+                code ===
+                  "ACCEPTANCE_COMMIT_INVALID"
+              ? 503
+              : 500,
       code,
       message:
-        code === "SERVICE_REOPEN_REQUIRED"
+        code === "WORK_ITEM_NOT_FOUND"
+          ? "The TaskSeal work item does not exist."
+          : code ===
+                "ACCEPTANCE_REVIEW_STALE" ||
+              code ===
+                "ACCEPTANCE_DECISION_CONFLICT"
+            ? "TaskSeal acceptance review is stale or conflicts with an existing decision."
+            : code ===
+                "SERVICE_REOPEN_REQUIRED"
           ? "TaskSeal service must be reopened before requests can continue."
           : "TaskSeal service request failed."
+    };
+  }
+
+  if (
+    isRecord(error) &&
+    (
+      error.name ===
+        "AcceptanceDeliveryCoordinatorError" ||
+      error.name ===
+        "WorkItemAcceptanceError"
+    )
+  ) {
+    return {
+      statusCode: 400,
+      code: readSafeErrorCode(
+        error,
+        "INVALID_ACCEPTANCE_REQUEST"
+      ),
+      message:
+        "TaskSeal acceptance request is invalid."
     };
   }
 
@@ -971,10 +1317,27 @@ function normalizeResponseError(
   }
 
   if (isRecord(error) && error.name === "DomainError") {
+    const code =
+      readSafeErrorCode(
+        error,
+        "DOMAIN_ERROR"
+      );
     return {
-      statusCode: 422,
-      code: readSafeErrorCode(error, "DOMAIN_ERROR"),
-      message: "TaskSeal rejected the requested state transition."
+      statusCode:
+        code ===
+          "ACCEPTANCE_REVIEW_STALE" ||
+        code ===
+          "ACCEPTANCE_ALREADY_DECIDED"
+          ? 409
+          : 422,
+      code,
+      message:
+        code ===
+            "ACCEPTANCE_REVIEW_STALE" ||
+          code ===
+            "ACCEPTANCE_ALREADY_DECIDED"
+          ? "TaskSeal acceptance review is stale."
+          : "TaskSeal rejected the requested state transition."
     };
   }
 
@@ -1064,5 +1427,21 @@ function isRecord(
     value !== null &&
     typeof value === "object" &&
     !Array.isArray(value)
+  );
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  expectedKeys: readonly string[]
+): boolean {
+  const actual = Object.keys(value).sort();
+  const expected =
+    [...expectedKeys].sort();
+  return (
+    actual.length === expected.length &&
+    actual.every(
+      (key, index) =>
+        key === expected[index]
+    )
   );
 }

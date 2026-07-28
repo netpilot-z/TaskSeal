@@ -33,6 +33,9 @@ import type {
   ProviderOperationJournalStoragePort
 } from "../src/application/provider-operation-journal.ts";
 import type {
+  ProviderOperation
+} from "../src/application/provider-operation.ts";
+import type {
   LinearWriteTransportPort
 } from "../src/application/linear-write-transport.ts";
 import {
@@ -1818,18 +1821,18 @@ class FailOnceJournal
 
   get(
     operationKey: string
-  ): Promise<ControlledWriteOperation | null> {
+  ): Promise<ProviderOperation | null> {
     return this.#delegate.get(operationKey);
   }
 
   history(
     operationKey: string
-  ): Promise<readonly ControlledWriteOperation[]> {
+  ): Promise<readonly ProviderOperation[]> {
     return this.#delegate.history(operationKey);
   }
 
   listLatest(): Promise<
-    readonly ControlledWriteOperation[]
+    readonly ProviderOperation[]
   > {
     return this.#delegate.listLatest();
   }
@@ -1877,18 +1880,18 @@ class FailNthRecoveryJournal
 
   get(
     operationKey: string
-  ): Promise<ControlledWriteOperation | null> {
+  ): Promise<ProviderOperation | null> {
     return this.#delegate.get(operationKey);
   }
 
   history(
     operationKey: string
-  ): Promise<readonly ControlledWriteOperation[]> {
+  ): Promise<readonly ProviderOperation[]> {
     return this.#delegate.history(operationKey);
   }
 
   listLatest(): Promise<
-    readonly ControlledWriteOperation[]
+    readonly ProviderOperation[]
   > {
     return this.#delegate.listLatest();
   }

@@ -70,14 +70,15 @@
 
 ## T19 — 人工验收并受控迁移 Linear Done
 
-- 状态：待执行。
+- 状态：已完成；由 Linear `NP-7` 跟踪。
 - 目的：跑通 Artifact/Evidence → AcceptanceDecision → Linear transition 的最后一公里。
-- 范围：Control Room accept/reject、accountable human actor、expected state/revision、Operation v2 transition、写后重读。
+- 范围：Control Room accept/reject、accountable human actor、expected state/revision、Transition Operation v3、写后重读。
 - 不包含：Agent 自己批准、自动关闭失败任务或直接删除 Issue。
 - 依赖：T15.2、T18。
 - 验收标准：只有当前成功 Attempt、Artifact 和全部 Evidence 通过时可 accept；只有 accepted 才能把同一 Linear UUID 迁移 Done；拒绝保留原因并生成后续 Attempt。
-- 验证：领域不变量、并发/stale transition、response-lost reconcile、浏览器权限边界测试。
+- 验证：领域不变量、started/unstarted source、并发/stale transition、response-lost reconcile、WorkItem/source-scoped truth fence、浏览器权限与响应式边界；全量 `790/790`。
 - 风险与回退：Linear transition 默认关闭；本地 Acceptance 不因远端失败而伪装已同步。
+- 规格与决策：`docs/specs/0021-human-acceptance-linear-transition.md`、`docs/adr/0012-linear-acceptance-transition-operation.md`、`docs/research/0004-linear-issue-transition-cas.md`、`docs/experiments/0029-human-acceptance-linear-transition.md`、`docs/reviews/0023-human-acceptance-linear-transition.md`。
 
 ## T20 — 稳定 Runner / 数字员工合同
 

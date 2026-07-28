@@ -32,6 +32,24 @@ export interface LinearReadyWorkCoordinates {
   readonly enabled: boolean;
 }
 
+export type LinearAcceptanceCoordinates =
+  | {
+      readonly workspace: string;
+      readonly team: string;
+      readonly project: string;
+      readonly enabled: false;
+      readonly expectedState: null;
+      readonly targetState: null;
+    }
+  | {
+      readonly workspace: string;
+      readonly team: string;
+      readonly project: string;
+      readonly enabled: true;
+      readonly expectedState: string;
+      readonly targetState: string;
+    };
+
 type ProjectConfigErrorCode =
   | "PROJECT_CONFIG_INVALID"
   | "GITHUB_CONFIG_INVALID"
@@ -236,6 +254,94 @@ export function getLinearReadyWorkCoordinates(
     dependencyIndex:
       readyWork.dependencyIndex,
     enabled: readyWork.enabled
+  };
+}
+
+export function getLinearAcceptanceCoordinates(
+  configuration: ProjectConfiguration | null | undefined
+): LinearAcceptanceCoordinates {
+  const { workspace, team } =
+    getLinearCoordinates(configuration);
+  const project =
+    configuration?.linear?.project;
+  const acceptance =
+    configuration?.linear?.acceptance;
+
+  if (
+    !isNonEmptyTrimmedString(workspace) ||
+    !isNonEmptyTrimmedString(team) ||
+    !isNonEmptyTrimmedString(project)
+  ) {
+    throw configError(
+      "LINEAR_CONFIG_INVALID",
+      "Linear acceptance configuration requires a project reference."
+    );
+  }
+
+  if (acceptance === undefined) {
+    return {
+      workspace,
+      team,
+      project,
+      enabled: false,
+      expectedState: null,
+      targetState: null
+    };
+  }
+
+  if (
+    isRecord(acceptance) &&
+    hasExactKeys(acceptance, [
+      "enabled"
+    ]) &&
+    acceptance.enabled === false
+  ) {
+    return {
+      workspace,
+      team,
+      project,
+      enabled: false,
+      expectedState: null,
+      targetState: null
+    };
+  }
+
+  if (
+    !isRecord(acceptance) ||
+    !hasExactKeys(acceptance, [
+      "enabled",
+      "expectedState",
+      "targetState"
+    ]) ||
+    acceptance.enabled !== true ||
+    !isNonEmptyTrimmedString(
+      acceptance.expectedState
+    ) ||
+    !isNonEmptyTrimmedString(
+      acceptance.targetState
+    ) ||
+    normalizeReference(
+      acceptance.expectedState
+    ) ===
+      normalizeReference(
+        acceptance.targetState
+      )
+  ) {
+    throw configError(
+      "LINEAR_CONFIG_INVALID",
+      "Linear acceptance configuration must be disabled explicitly or provide distinct expected and target states."
+    );
+  }
+
+  return {
+    workspace,
+    team,
+    project,
+    enabled: true,
+    expectedState:
+      acceptance.expectedState,
+    targetState:
+      acceptance.targetState
   };
 }
 

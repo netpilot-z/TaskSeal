@@ -50,6 +50,15 @@ import {
 import type {
   ProviderFactProvenanceVerifier
 } from "./provider-fact-provenance.ts";
+import {
+  acceptanceEventId,
+  digestAcceptanceDecision,
+  matchesAcceptanceCommand,
+  normalizeWorkItemAcceptanceCommand
+} from "./work-item-acceptance.ts";
+import type {
+  WorkItemAcceptanceResult
+} from "./work-item-acceptance.ts";
 
 export interface EventJournal {
   readAll(): Promise<unknown[]>;
@@ -278,6 +287,118 @@ export class TaskSealService {
 
   append(event: CanonicalEvent): Promise<Workflow> {
     return this.enqueueWrite(() => this.appendNow(event));
+  }
+
+  decideAcceptance(
+    inputValue: unknown
+  ): Promise<WorkItemAcceptanceResult> {
+    return this.enqueueWrite(async () => {
+      const input =
+        normalizeWorkItemAcceptanceCommand(
+          inputValue
+        );
+      const prior = Object.values(
+        this.#state.workflow.workItems
+      ).flatMap((workItem) =>
+        workItem.acceptanceHistory.map(
+          (decision) => ({
+            workItemId: workItem.id,
+            decision
+          })
+        )
+      ).find(
+        ({ decision }) =>
+          decision.basis?.decisionId ===
+          input.decisionId
+      );
+
+      if (prior !== undefined) {
+        if (
+          !matchesAcceptanceCommand(
+            prior,
+            input
+          )
+        ) {
+          throw new TaskSealServiceError(
+            "ACCEPTANCE_DECISION_CONFLICT",
+            "The acceptance decision ID is already bound to different content."
+          );
+        }
+        const eventId = acceptanceEventId(
+          input.decisionId
+        );
+        return {
+          resolution: "idempotent",
+          workItemId: prior.workItemId,
+          eventId,
+          decision:
+            structuredClone(prior.decision),
+          acceptanceDigest:
+            digestAcceptanceDecision({
+              workItemId:
+                prior.workItemId,
+              eventId,
+              decision: prior.decision
+            })
+        };
+      }
+
+      if (
+        this.#state.workflow.workItems[
+          input.workItemId
+        ] === undefined
+      ) {
+        throw new TaskSealServiceError(
+          "WORK_ITEM_NOT_FOUND",
+          "The work item does not exist."
+        );
+      }
+
+      const eventId = acceptanceEventId(
+        input.decisionId
+      );
+      const workflow = await this.appendNow({
+        eventId,
+        workItemId: input.workItemId,
+        type: "acceptance.decided",
+        occurredAt: this.currentTimestamp(),
+        payload: {
+          decision: input.decision,
+          actor: input.actor,
+          reason: input.reason,
+          decisionId: input.decisionId,
+          expectedReviewRevision:
+            input.expectedReviewRevision
+        }
+      });
+      const decision =
+        workflow.workItems[input.workItemId]
+          ?.acceptanceDecision;
+      if (
+        decision === null ||
+        decision === undefined ||
+        decision.basis?.decisionId !==
+          input.decisionId
+      ) {
+        throw new TaskSealServiceError(
+          "ACCEPTANCE_COMMIT_INVALID",
+          "The persisted acceptance decision could not be confirmed."
+        );
+      }
+
+      return {
+        resolution: "committed",
+        workItemId: input.workItemId,
+        eventId,
+        decision: structuredClone(decision),
+        acceptanceDigest:
+          digestAcceptanceDecision({
+            workItemId: input.workItemId,
+            eventId,
+            decision
+          })
+      };
+    });
   }
 
   startAttemptIfIdle(

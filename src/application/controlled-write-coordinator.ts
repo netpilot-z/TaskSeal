@@ -12,10 +12,12 @@ import {
   ProviderOperationJournalError
 } from "./provider-operation-journal.ts";
 import type {
-  ProviderOperationAppendResult,
   ProviderOperationJournalCommandPort,
   ProviderOperationJournalQueryPort
 } from "./provider-operation-journal.ts";
+import type {
+  ProviderOperation
+} from "./provider-operation.ts";
 import type {
   LinearWriteCreateResult,
   LinearWriteCreateResultV2,
@@ -65,6 +67,11 @@ export interface ControlledWriteCoordinatorApprovalInput
 interface NormalizedApprovalInput
   extends ControlledWriteCoordinatorOperationInput {
   actor: ControlledWriteActor;
+}
+
+interface ControlledWriteAppendResult {
+  resolution: "committed" | "idempotent";
+  operation: ControlledWriteOperation;
 }
 
 const DIGEST_PATTERN =
@@ -536,8 +543,12 @@ export class ControlledWriteCoordinator {
     await this.waitForOperation(operationKey);
     this.assertOpen();
     try {
-      return await this.#journal.history(
+      const history =
+        await this.#journal.history(
         operationKey
+      );
+      return history.map(
+        requireControlledWriteOperation
       );
     } catch (error) {
       throw normalizeJournalError(error);
@@ -607,7 +618,7 @@ export class ControlledWriteCoordinator {
   }
 
   private async recoverInterruptedOperations(): Promise<void> {
-    let latest: readonly ControlledWriteOperation[];
+    let latest: readonly ProviderOperation[];
     try {
       latest = await this.#journal.listLatest();
     } catch (error) {
@@ -615,6 +626,9 @@ export class ControlledWriteCoordinator {
     }
 
     for (const observed of latest) {
+      if (observed.schemaVersion === 3) {
+        continue;
+      }
       if (
         observed.status !== "submitting" &&
         observed.status !== "reconciling"
@@ -689,7 +703,13 @@ export class ControlledWriteCoordinator {
     operationKey: string
   ): Promise<ControlledWriteOperation | null> {
     try {
-      return await this.#journal.get(operationKey);
+      const operation =
+        await this.#journal.get(operationKey);
+      return operation === null
+        ? null
+        : requireControlledWriteOperation(
+            operation
+          );
     } catch (error) {
       throw normalizeJournalError(error);
     }
@@ -698,14 +718,24 @@ export class ControlledWriteCoordinator {
   private async append(
     expectedVersion: number,
     next: ControlledWriteOperation
-  ): Promise<ProviderOperationAppendResult> {
+  ): Promise<ControlledWriteAppendResult> {
     try {
-      return await this.#journal.compareAndAppend({
-        expectedVersion,
-        operationKey: next.plan.operationKey,
-        planDigest: next.plan.planDigest,
-        next
-      });
+      const result =
+        await this.#journal.compareAndAppend({
+          expectedVersion,
+          operationKey:
+            next.plan.operationKey,
+          planDigest:
+            next.plan.planDigest,
+          next
+        });
+      return {
+        resolution: result.resolution,
+        operation:
+          requireControlledWriteOperation(
+            result.operation
+          )
+      };
     } catch (error) {
       const normalized =
         normalizeJournalError(error);
@@ -1606,9 +1636,24 @@ function requireExactKeys(
   }
 }
 
+function requireControlledWriteOperation(
+  operation: ProviderOperation
+): ControlledWriteOperation {
+  if (operation.schemaVersion === 3) {
+    throw planConflict();
+  }
+  return operation;
+}
+
 function normalizeJournalError(
   error: unknown
 ): ProviderOperationJournalError | ControlledWriteCoordinatorError {
+  if (
+    error instanceof
+    ControlledWriteCoordinatorError
+  ) {
+    return error;
+  }
   if (
     error instanceof ProviderOperationJournalError
   ) {

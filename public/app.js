@@ -1,10 +1,13 @@
 import {
+  AcceptanceTruthFence,
   createAccessibleSnapshotState,
+  createAcceptanceControlState,
   createRunControlState,
   DashboardRequestGate,
   PromptDraftStore,
   reconcileSelectedWorkItemId,
   semanticSnapshotKey,
+  shouldResetAcceptanceReasonError,
   shouldPollDashboard
 } from "/dashboard-state.js";
 import {
@@ -12,6 +15,7 @@ import {
   createProviderContentRenderKey,
   createProviderPanelModel,
   createProviderPanelState,
+  didAdoptProviderPanelModel,
   reduceProviderPanelState,
   shouldPollProviders
 } from "/provider-state.js";
@@ -68,6 +72,42 @@ const elements = {
   codexCancelButton: document.querySelector(
     "#codex-cancel-button"
   ),
+  acceptanceOperator:
+    document.querySelector(
+      "#acceptance-operator"
+    ),
+  acceptanceLocalStatus:
+    document.querySelector(
+      "#acceptance-local-status"
+    ),
+  acceptanceLinearStatus:
+    document.querySelector(
+      "#acceptance-linear-status"
+    ),
+  acceptanceReason:
+    document.querySelector(
+      "#acceptance-reason"
+    ),
+  acceptanceReasonHelp:
+    document.querySelector(
+      "#acceptance-reason-help"
+    ),
+  acceptanceAudit:
+    document.querySelector(
+      "#acceptance-audit"
+    ),
+  acceptanceAcceptButton:
+    document.querySelector(
+      "#acceptance-accept-button"
+    ),
+  acceptanceRejectButton:
+    document.querySelector(
+      "#acceptance-reject-button"
+    ),
+  acceptanceReconcileButton:
+    document.querySelector(
+      "#acceptance-reconcile-button"
+    ),
   liveStatus: document.querySelector("#live-status"),
   toast: document.querySelector("#toast")
 };
@@ -83,6 +123,8 @@ let demoComplete = false;
 let mode = null;
 let selectedWorkItemId = null;
 const promptDrafts = new PromptDraftStore();
+const acceptanceDrafts = new Map();
+let acceptanceDraftWorkItemId = null;
 let busy = false;
 let polling = false;
 let lastRuntimeErrorKey = null;
@@ -99,6 +141,8 @@ let renderedProviderKey = null;
 let announcedProviderKey = null;
 const requestGate = new DashboardRequestGate();
 const providerRequestGate = new DashboardRequestGate();
+const acceptanceTruthFence =
+  new AcceptanceTruthFence();
 
 elements.resetButton.addEventListener("click", () =>
   mutateDemo("/api/demo/reset")
@@ -113,6 +157,25 @@ elements.codexRunButton.addEventListener("click", runCodex);
 elements.codexCancelButton.addEventListener(
   "click",
   cancelCodex
+);
+elements.acceptanceAcceptButton.addEventListener(
+  "click",
+  () => submitAcceptance("accepted")
+);
+elements.acceptanceRejectButton.addEventListener(
+  "click",
+  () => submitAcceptance("rejected")
+);
+elements.acceptanceReconcileButton.addEventListener(
+  "click",
+  reconcileAcceptance
+);
+elements.acceptanceReason.addEventListener(
+  "input",
+  () => {
+    saveAcceptanceDraft();
+    clearAcceptanceReasonError();
+  }
 );
 elements.workItemSelect.addEventListener(
   "change",
@@ -235,6 +298,222 @@ async function cancelCodex() {
   }
 }
 
+async function submitAcceptance(
+  decision
+) {
+  const control =
+    readAcceptanceControl();
+  const allowed =
+    decision === "accepted"
+      ? control.canAccept
+      : control.canReject;
+  const reason =
+    elements.acceptanceReason
+      .value.trim();
+  if (!allowed || !selectedWorkItemId) {
+    showToast(
+      "The selected delivery is not ready for that decision."
+    );
+    return;
+  }
+  if (!reason) {
+    setAcceptanceReasonError();
+    showToast(
+      "Record an acceptance reason first."
+    );
+    elements.acceptanceReason.focus();
+    return;
+  }
+  if (
+    !control.reviewRevision ||
+    !csrfToken
+  ) {
+    showToast(
+      "The acceptance review is not ready. Refresh the dashboard."
+    );
+    return;
+  }
+  clearAcceptanceReasonError();
+  const draft =
+    requireAcceptanceDraft(
+      selectedWorkItemId,
+      control.reviewRevision
+    );
+  draft.reason = reason;
+  draft.decisionId ??=
+    crypto.randomUUID();
+  const workItemId =
+    selectedWorkItemId;
+  let providerTruthRequired =
+    decision === "accepted" &&
+    latestSnapshot?.capabilities
+      ?.linearTransition === true;
+
+  setBusy(true);
+  try {
+    const response = await fetch(
+      `/api/work-items/${encodeURIComponent(
+        selectedWorkItemId
+      )}/acceptance`,
+      {
+        method: "POST",
+        headers: {
+          "content-type":
+            "application/json",
+          "x-taskseal-csrf-token":
+            csrfToken
+        },
+        body: JSON.stringify({
+          decisionId:
+            draft.decisionId,
+          decision,
+          reason,
+          expectedReviewRevision:
+            control.reviewRevision
+        })
+      }
+    );
+    const payload = await response.json();
+    if (!response.ok) {
+      providerTruthRequired = false;
+      throw new Error(
+        payload.message ??
+          "TaskSeal acceptance failed."
+      );
+    }
+    providerTruthRequired =
+      typeof payload.linearSync
+        ?.operationKey === "string";
+    showToast(
+      payload.linearSync?.status ===
+        "sync_failed"
+        ? "Local decision saved; Linear is not synchronized."
+        : decision === "accepted"
+          ? "Delivery accepted."
+          : "Delivery rejected."
+    );
+  } catch (error) {
+    showToast(
+      error instanceof Error
+        ? error.message
+        : "TaskSeal acceptance failed."
+    );
+  } finally {
+    beginAcceptanceTruthRefresh({
+      workItemId,
+      dashboard: true,
+      provider:
+        providerTruthRequired
+    });
+    await refreshAcceptanceTruth();
+    setBusy(false);
+  }
+}
+
+async function reconcileAcceptance() {
+  const control =
+    readAcceptanceControl();
+  if (
+    !control.canReconcile ||
+    !control.operationKey ||
+    !csrfToken
+  ) {
+    showToast(
+      "No uncertain Linear transition is available to reconcile."
+    );
+    return;
+  }
+  const workItemId =
+    selectedWorkItemId;
+  let providerTruthRequired = true;
+  setBusy(true);
+  try {
+    const response = await fetch(
+      `/api/provider-operations/${encodeURIComponent(
+        control.operationKey
+      )}/reconcile`,
+      {
+        method: "POST",
+        headers: {
+          "content-type":
+            "application/json",
+          "x-taskseal-csrf-token":
+            csrfToken
+        },
+        body: "{}"
+      }
+    );
+    const payload = await response.json();
+    if (!response.ok) {
+      providerTruthRequired = false;
+      throw new Error(
+        payload.message ??
+          "Linear reconciliation failed."
+      );
+    }
+    providerTruthRequired =
+      typeof payload.operationKey ===
+      "string";
+    showToast(
+      payload.status === "reconciled"
+        ? "Linear Done state reconciled."
+        : "Linear reconciliation still needs attention."
+    );
+  } catch (error) {
+    showToast(
+      error instanceof Error
+        ? error.message
+        : "Linear reconciliation failed."
+    );
+  } finally {
+    if (
+      workItemId &&
+      providerTruthRequired
+    ) {
+      beginAcceptanceTruthRefresh({
+        workItemId,
+        dashboard: false,
+        provider: true
+      });
+    }
+    await refreshAcceptanceTruth();
+    setBusy(false);
+  }
+}
+
+async function refreshAcceptanceTruth() {
+  await Promise.all([
+    requestSnapshot(
+      "/api/dashboard",
+      { method: "GET" },
+      { silent: true }
+    ),
+    requestProviderSnapshot({
+      silent: true
+    })
+  ]);
+}
+
+function beginAcceptanceTruthRefresh({
+  workItemId,
+  dashboard,
+  provider
+}) {
+  acceptanceTruthFence.begin({
+    workItemId,
+    dashboardAfter:
+      dashboard
+        ? requestGate.latestIssued + 1
+        : null,
+    providerAfter:
+      provider
+        ? providerRequestGate
+            .latestIssued + 1
+        : null
+  });
+  applyAcceptanceControls();
+}
+
 function selectWorkItem(workItemId) {
   const workItems = latestSnapshot?.workItems ?? [];
   const selected =
@@ -254,8 +533,15 @@ function selectWorkItem(workItemId) {
       (workItem) => workItem.id === selected
     )
   );
+  initializeAcceptanceDraft(
+    workItems.find(
+      (workItem) =>
+        workItem.id === selected
+    )
+  );
   renderWorkItems(workItems);
   applyRunControls();
+  applyAcceptanceControls();
 }
 
 async function pollPersistentDashboard() {
@@ -320,13 +606,27 @@ async function requestProviderSnapshot({
       return null;
     }
 
-    providerPanelState = reduceProviderPanelState(
+    const nextProviderPanelState =
+      reduceProviderPanelState(
       providerPanelState,
       {
         type: "success",
         model
       }
     );
+    providerPanelState =
+      nextProviderPanelState;
+    if (
+      didAdoptProviderPanelModel(
+        nextProviderPanelState,
+        model
+      )
+    ) {
+      acceptanceTruthFence.confirm(
+        "provider",
+        sequence
+      );
+    }
     renderProviderPanel();
     return model;
   } catch {
@@ -361,6 +661,10 @@ async function requestSnapshot(path, options, { silent = false } = {}) {
       return null;
     }
 
+    acceptanceTruthFence.confirm(
+      "dashboard",
+      sequence
+    );
     render(payload);
     return payload;
   } catch (error) {
@@ -427,7 +731,15 @@ function render(snapshot) {
           workItem.id === selectedWorkItemId
       )
     );
+    initializeAcceptanceDraft(
+      snapshot.workItems.find(
+        (workItem) =>
+          workItem.id ===
+          selectedWorkItemId
+      )
+    );
     applyRunControls();
+    applyAcceptanceControls();
     renderTimeline(createAttemptTimeline(snapshot.workItems));
     revealRuntimeError(snapshot.runtime?.errors);
   }
@@ -463,6 +775,7 @@ function renderProviderPanel() {
   if (contentKey === renderedProviderKey) {
     updateProviderObservationTimes();
     announceProviderPanel();
+    applyAcceptanceControls();
     return;
   }
   renderedProviderKey = contentKey;
@@ -539,6 +852,7 @@ function renderProviderPanel() {
   }
 
   announceProviderPanel();
+  applyAcceptanceControls();
 }
 
 function updateProviderObservationTimes() {
@@ -857,6 +1171,186 @@ function applyRunControls() {
     busy;
 }
 
+function readAcceptanceControl() {
+  return createAcceptanceControlState(
+    latestSnapshot ?? {
+      mode: null,
+      capabilities: {},
+      security: {},
+      workItems: []
+    },
+    selectedWorkItemId,
+    providerPanelState,
+    busy,
+    {
+      dashboard:
+        acceptanceTruthFence.pendingFor(
+          selectedWorkItemId,
+          "dashboard"
+        ),
+      provider:
+        acceptanceTruthFence.pendingFor(
+          selectedWorkItemId,
+          "provider"
+        )
+    }
+  );
+}
+
+function applyAcceptanceControls() {
+  if (!latestSnapshot || mode !== "persistent") {
+    return;
+  }
+  const control =
+    readAcceptanceControl();
+  elements.acceptanceAcceptButton.disabled =
+    !control.canAccept;
+  elements.acceptanceRejectButton.disabled =
+    !control.canReject;
+  elements.acceptanceReconcileButton.hidden =
+    !control.operationKey;
+  elements.acceptanceReconcileButton.disabled =
+    !control.canReconcile;
+  elements.acceptanceLocalStatus.textContent =
+    `${control.localLabel}${
+      control.dashboardTruthPending
+        ? " · awaiting refresh"
+        : ""
+    }`;
+  elements.acceptanceLinearStatus.textContent =
+    `${control.linearLabel}${
+      control.linearStale
+        ? " · stale view"
+        : ""
+    }`;
+  elements.acceptanceLinearStatus.dataset.tone =
+    control.linearTone;
+  elements.acceptanceOperator.textContent =
+    control.operatorId
+      ? `Current operator · ${control.operatorId}`
+      : "Current operator unavailable";
+  renderAcceptanceAudit(control);
+  elements.acceptanceReason.disabled =
+    !latestSnapshot.capabilities
+      ?.decideAcceptance ||
+    busy ||
+    control.dashboardTruthPending ||
+    !control.reviewRevision ||
+    control.localLabel !==
+      "Awaiting human decision";
+}
+
+function renderAcceptanceAudit(control) {
+  const renderKey = semanticSnapshotKey({
+    currentDecision:
+      control.currentDecision,
+    acceptanceHistory:
+      control.acceptanceHistory
+  });
+  if (
+    elements.acceptanceAudit.dataset
+      .renderKey === renderKey
+  ) {
+    return;
+  }
+
+  const current =
+    control.currentDecision;
+  const history =
+    control.acceptanceHistory ?? [];
+  const currentMarkup = current
+    ? `
+        <div class="acceptance-current-decision">
+          <span class="detail-label">CURRENT DECISION</span>
+          <strong>
+            ${escapeHtml(formatAcceptanceDecision(current))} by
+            ${escapeHtml(current.actor)}
+          </strong>
+          <time datetime="${escapeAttribute(current.decidedAt)}">
+            ${escapeHtml(formatObservationTime(current.decidedAt))}
+          </time>
+          <p>${escapeHtml(current.reason)}</p>
+          <code>${escapeHtml(
+            current.basis?.decisionId ??
+              "Legacy decision"
+          )}</code>
+        </div>
+      `
+    : `<p>No current acceptance decision.</p>`;
+  const historyMarkup =
+    history.length > 0
+      ? `
+          <details class="acceptance-history">
+            <summary>
+              Decision history · ${history.length}
+            </summary>
+            <ol>
+              ${history
+                .toReversed()
+                .map(renderAcceptanceHistoryEntry)
+                .join("")}
+            </ol>
+          </details>
+        `
+      : "";
+
+  elements.acceptanceAudit.innerHTML =
+    currentMarkup + historyMarkup;
+  elements.acceptanceAudit.dataset
+    .renderKey = renderKey;
+}
+
+function renderAcceptanceHistoryEntry(
+  decision
+) {
+  return `
+    <li>
+      <strong>
+        ${escapeHtml(formatAcceptanceDecision(decision))} by
+        ${escapeHtml(decision.actor)}
+      </strong>
+      <time datetime="${escapeAttribute(decision.decidedAt)}">
+        ${escapeHtml(formatObservationTime(decision.decidedAt))}
+      </time>
+      <p>${escapeHtml(decision.reason)}</p>
+      <code>${escapeHtml(
+        decision.basis?.decisionId ??
+          "Legacy decision"
+      )}</code>
+    </li>
+  `;
+}
+
+function formatAcceptanceDecision(
+  decision
+) {
+  return decision.decision ===
+    "accepted"
+    ? "Accepted"
+    : "Rejected";
+}
+
+function setAcceptanceReasonError() {
+  elements.acceptanceReason.setAttribute(
+    "aria-invalid",
+    "true"
+  );
+  elements.acceptanceReasonHelp.dataset.tone =
+    "danger";
+  elements.acceptanceReasonHelp.textContent =
+    "Enter a review reason before accepting or rejecting.";
+}
+
+function clearAcceptanceReasonError() {
+  elements.acceptanceReason.removeAttribute(
+    "aria-invalid"
+  );
+  delete elements.acceptanceReasonHelp.dataset
+    .tone;
+  elements.acceptanceReasonHelp.textContent =
+    "Required for both accepting and rejecting a delivery.";
+}
+
 function initializePrompt(workItem) {
   if (
     promptDrafts.currentWorkItemId ===
@@ -870,6 +1364,104 @@ function initializePrompt(workItem) {
       workItem,
       elements.promptInput.value
     );
+}
+
+function initializeAcceptanceDraft(
+  workItem
+) {
+  const previousWorkItemId =
+    acceptanceDraftWorkItemId;
+  if (
+    previousWorkItemId &&
+    previousWorkItemId !==
+      workItem?.id
+  ) {
+    saveAcceptanceDraft();
+  }
+  if (!workItem) {
+    if (previousWorkItemId) {
+      clearAcceptanceReasonError();
+    }
+    acceptanceDraftWorkItemId = null;
+    elements.acceptanceReason.value =
+      "";
+    return;
+  }
+  const reviewRevision =
+    workItem.acceptanceReviewRevision ??
+    null;
+  const existing =
+    acceptanceDrafts.get(workItem.id);
+  const reviewChanged =
+    shouldResetAcceptanceReasonError({
+      previousWorkItemId,
+      nextWorkItemId: workItem.id,
+      previousReviewRevision:
+        existing?.reviewRevision ??
+        null,
+      nextReviewRevision:
+        reviewRevision
+    });
+  if (reviewChanged) {
+    clearAcceptanceReasonError();
+  }
+  const draft =
+    existing?.reviewRevision ===
+    reviewRevision
+      ? existing
+      : {
+          reviewRevision,
+          reason:
+            existing?.reason ?? "",
+          decisionId: null
+        };
+  acceptanceDrafts.set(
+    workItem.id,
+    draft
+  );
+  acceptanceDraftWorkItemId =
+    workItem.id;
+  elements.acceptanceReason.value =
+    draft.reason;
+}
+
+function saveAcceptanceDraft() {
+  if (!acceptanceDraftWorkItemId) {
+    return;
+  }
+  const current =
+    acceptanceDrafts.get(
+      acceptanceDraftWorkItemId
+    );
+  if (current) {
+    current.reason =
+      elements.acceptanceReason.value;
+  }
+}
+
+function requireAcceptanceDraft(
+  workItemId,
+  reviewRevision
+) {
+  const existing =
+    acceptanceDrafts.get(workItemId);
+  if (
+    existing?.reviewRevision ===
+    reviewRevision
+  ) {
+    return existing;
+  }
+  const draft = {
+    reviewRevision,
+    reason:
+      elements.acceptanceReason.value,
+    decisionId: null
+  };
+  acceptanceDrafts.set(
+    workItemId,
+    draft
+  );
+  return draft;
 }
 
 function createAttemptTimeline(workItems) {
@@ -1276,6 +1868,7 @@ function setBusy(isBusy) {
     renderWorkItems(latestSnapshot.workItems);
   }
   applyRunControls();
+  applyAcceptanceControls();
 }
 
 function showToast(message) {

@@ -72,6 +72,12 @@ const OPERATION_STATUSES = {
     tone: "ready",
     priority: 7
   },
+  transitioned: {
+    label: "Transitioned",
+    icon: "✓",
+    tone: "ready",
+    priority: 7
+  },
   outcome_unknown: {
     label: "Outcome unknown",
     icon: "!",
@@ -141,8 +147,25 @@ const CONTROLLED_OPERATION_KEYS = [
   "createdAt",
   "updatedAt"
 ];
+const TRANSITION_OPERATION_KEYS = [
+  "schemaVersion",
+  "provider",
+  "action",
+  "workItemId",
+  "acceptanceDecisionId",
+  "operationKey",
+  "configuredTarget",
+  "version",
+  "status",
+  "approval",
+  "diagnosticCode",
+  "createdAt",
+  "updatedAt"
+];
 
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
+const UUID_V4_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MAX_KEY_LENGTH = 512;
 const MAX_ID_LENGTH = 256;
 const MAX_TIME_LENGTH = 64;
@@ -252,6 +275,32 @@ const CONTROLLED_DIAGNOSTIC_CODES = new Set([
   "LINEAR_RECONCILIATION_FAILED",
   "LINEAR_RECONCILIATION_AMBIGUOUS"
 ]);
+const CREATE_OPERATION_STATUSES =
+  new Set([
+    "approval_required",
+    "approved",
+    "rejected",
+    "submitting",
+    "created",
+    "outcome_unknown",
+    "reconciling",
+    "reconciliation_absent",
+    "reconciled",
+    "sync_failed"
+  ]);
+const TRANSITION_OPERATION_STATUSES =
+  new Set([
+    "approval_required",
+    "approved",
+    "rejected",
+    "submitting",
+    "transitioned",
+    "outcome_unknown",
+    "reconciling",
+    "reconciliation_absent",
+    "reconciled",
+    "sync_failed"
+  ]);
 
 export function createProviderPanelModel(projection) {
   if (!isPlainRecord(projection)) {
@@ -314,6 +363,7 @@ export function createProviderPanelModel(projection) {
   }
 
   const operationIdentities = new Set();
+  const acceptanceIdentities = new Set();
   const operations = operationValues.map(
     (operation) => {
       const projected =
@@ -328,6 +378,24 @@ export function createProviderPanelModel(projection) {
       operationIdentities.add(
         projected.operationKey
       );
+      if (
+        projected.action ===
+        "work-item.transition"
+      ) {
+        const acceptanceIdentity =
+          `${projected.workItemId}\u0000` +
+          projected.acceptanceDecisionId;
+        if (
+          acceptanceIdentities.has(
+            acceptanceIdentity
+          )
+        ) {
+          throw invalidProjection();
+        }
+        acceptanceIdentities.add(
+          acceptanceIdentity
+        );
+      }
       return projected;
     }
   );
@@ -346,6 +414,8 @@ export function createProviderPanelModel(projection) {
     const controlledOperations =
       operations.filter(
         (operation) =>
+          operation.action !==
+            "work-item.transition" &&
           providerTargetIdentity(operation) ===
           identity
       );
@@ -525,6 +595,19 @@ export function reduceProviderPanelState(state, action) {
   );
 }
 
+export function didAdoptProviderPanelModel(
+  state,
+  candidate
+) {
+  return (
+    (
+      state?.phase === "ready" ||
+      state?.phase === "empty"
+    ) &&
+    state.model === candidate
+  );
+}
+
 export function createProviderAccessibleSummary(state) {
   if (state.phase === "idle" || state.phase === "loading") {
     return "Loading Provider status.";
@@ -661,23 +744,51 @@ function projectProviderCard(observation) {
 }
 
 function projectControlledOperation(operation) {
+  const isCreate =
+    isPlainRecord(operation) &&
+    operation.schemaVersion === 1;
+  const isTransition =
+    isPlainRecord(operation) &&
+    operation.schemaVersion === 2;
   if (
     !isPlainRecord(operation) ||
     !hasExactKeys(
       operation,
-      CONTROLLED_OPERATION_KEYS
+      isCreate
+        ? CONTROLLED_OPERATION_KEYS
+        : isTransition
+          ? TRANSITION_OPERATION_KEYS
+          : []
     ) ||
-    operation.schemaVersion !== 1 ||
     operation.provider !== "linear" ||
+    (isTransition &&
+      (operation.action !==
+        "work-item.transition" ||
+        !isTrimmedString(
+          operation.workItemId,
+          MAX_ID_LENGTH
+        ) ||
+        /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(
+          operation.workItemId
+        ) ||
+        !UUID_V4_PATTERN.test(
+          operation.acceptanceDecisionId
+        ))) ||
     !isDigest(operation.operationKey) ||
     !isControlledOperationTarget(
-      operation.configuredTarget
+      operation.configuredTarget,
+      isTransition
     ) ||
     !Number.isSafeInteger(operation.version) ||
     operation.version < 1 ||
-    !Object.hasOwn(
-      OPERATION_STATUSES,
-      operation.status
+    !(
+      isCreate
+        ? CREATE_OPERATION_STATUSES.has(
+            operation.status
+          )
+        : TRANSITION_OPERATION_STATUSES.has(
+            operation.status
+          )
     ) ||
     !isCanonicalTimestamp(operation.createdAt) ||
     !isCanonicalTimestamp(operation.updatedAt) ||
@@ -713,6 +824,15 @@ function projectControlledOperation(operation) {
   const statusView =
     OPERATION_STATUSES[operation.status];
   const projected = {
+    ...(isTransition
+      ? {
+          action: operation.action,
+          workItemId:
+            operation.workItemId,
+          acceptanceDecisionId:
+            operation.acceptanceDecisionId
+        }
+      : {}),
     operationKey: operation.operationKey,
     provider: operation.provider,
     providerLabel: PROVIDERS.linear.label,
@@ -1005,7 +1125,10 @@ function createObservationFingerprint(
   });
 }
 
-function isControlledOperationTarget(value) {
+function isControlledOperationTarget(
+  value,
+  transition
+) {
   if (
     !isPlainRecord(value) ||
     !hasExactKeys(value, ["kind", "key"]) ||
@@ -1014,12 +1137,21 @@ function isControlledOperationTarget(value) {
     return false;
   }
 
-  if (value.kind === "team") {
+  if (!transition && value.kind === "team") {
     return /^linear:team-ref:[^\s/]+\/[^\s/]+$/.test(
       value.key
     );
   }
+  if (
+    transition &&
+    value.kind === "issue_state"
+  ) {
+    return /^linear:issue-state-ref:[^\s/]+\/[^\s/]+\/[^\s/]+\/[^\s/]+\/[^\s/]+$/.test(
+      value.key
+    );
+  }
   return (
+    !transition &&
     value.kind === "project_state" &&
     /^linear:project-state-ref:[^\s/]+\/[^\s/]+\/[^\s/]+\/[^\s/]+$/.test(
       value.key

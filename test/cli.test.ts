@@ -411,6 +411,18 @@ test("persistent start wires one service and runner into the Control Room", asyn
       return [];
     }
   };
+  const acceptance = {
+    async decide() {
+      throw new Error("not called");
+    },
+    async reconcile() {
+      return {
+        status: "disabled" as const
+      };
+    }
+  };
+  let acceptanceService:
+    PersistentServicePort | null = null;
   let initialized = false;
   let shutDown = false;
   let serverOptions:
@@ -451,6 +463,32 @@ test("persistent start wires one service and runner into the Control Room", asyn
     }),
     providerOperationQueryFactory: async () =>
       providerOperations,
+    acceptanceRuntimeFactory:
+      async ({
+        service:
+          acceptanceRuntimeService,
+        providerOperations:
+          acceptanceProviderOperations
+      }) => {
+        acceptanceService =
+          acceptanceRuntimeService;
+        assert.equal(
+          acceptanceProviderOperations,
+          providerOperations
+        );
+        return {
+          acceptance,
+          providerOperations,
+          capabilities: {
+            decideAcceptance: true,
+            linearTransition: false,
+            reconcileLinearTransition:
+              false
+          },
+          operatorId:
+            "operator.jeffrey"
+        };
+      },
     serverFactory: (options) => {
       serverOptions = options;
       return new FakeServer();
@@ -461,6 +499,23 @@ test("persistent start wires one service and runner into the Control Room", asyn
   assert.equal(server instanceof FakeServer, true);
   assert.ok(serverOptions);
   assert.equal(serverOptions.service, service);
+  assert.equal(acceptanceService, service);
+  assert.equal(
+    serverOptions.acceptance,
+    acceptance
+  );
+  assert.deepEqual(
+    serverOptions.acceptanceCapabilities,
+    {
+      decideAcceptance: true,
+      linearTransition: false,
+      reconcileLinearTransition: false
+    }
+  );
+  assert.equal(
+    serverOptions.operatorId,
+    "operator.jeffrey"
+  );
   assert.equal(serverOptions.maxConcurrentRuns, 2);
   const providerProjection =
     await serverOptions.providerStatus.list();

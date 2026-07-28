@@ -313,6 +313,155 @@ h1 {
   accent-color: var(--accent);
 }
 
+.acceptance-controls {
+  display: grid;
+  gap: 11px;
+  margin-top: 3px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.acceptance-heading-row,
+.acceptance-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.acceptance-heading-row h3 {
+  margin: 3px 0 0;
+  font-size: 14px;
+}
+
+.acceptance-heading-row > span {
+  color: var(--muted);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.acceptance-truth-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.acceptance-truth-grid > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #0d1111;
+}
+
+.acceptance-truth-grid strong {
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+#acceptance-linear-status[data-tone="ready"] {
+  color: var(--accent);
+}
+
+#acceptance-linear-status[data-tone="danger"] {
+  color: var(--danger);
+}
+
+#acceptance-linear-status[data-tone="active"] {
+  color: var(--warning);
+}
+
+.acceptance-reason-field textarea {
+  min-height: 58px;
+}
+
+.acceptance-reason-field small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.acceptance-reason-field small[data-tone="danger"],
+.acceptance-reason-field textarea[aria-invalid="true"] {
+  color: var(--danger);
+}
+
+.acceptance-reason-field textarea[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.acceptance-audit {
+  min-width: 0;
+}
+
+.acceptance-audit > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.acceptance-current-decision {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #0d1111;
+}
+
+.acceptance-current-decision strong,
+.acceptance-history strong {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.acceptance-current-decision p,
+.acceptance-history p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.acceptance-current-decision time,
+.acceptance-current-decision code,
+.acceptance-history time,
+.acceptance-history code {
+  color: var(--muted);
+  font-size: 9px;
+  overflow-wrap: anywhere;
+}
+
+.acceptance-history {
+  margin-top: 7px;
+}
+
+.acceptance-history summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.acceptance-history ol {
+  display: grid;
+  gap: 7px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.acceptance-history li {
+  display: grid;
+  gap: 3px;
+  padding-left: 9px;
+  border-left: 2px solid var(--line-strong);
+}
+
 .button {
   min-height: 44px;
   padding: 0 17px;
@@ -1456,6 +1605,16 @@ h1 {
   .runner-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .acceptance-heading-row,
+  .acceptance-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .acceptance-truth-grid {
+    grid-template-columns: 1fr;
   }
 
   .runner-command-buttons {
