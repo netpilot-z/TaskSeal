@@ -1,5 +1,6 @@
 .env
 .taskseal/
 coverage/
+dist/
 node_modules/
 tmp/

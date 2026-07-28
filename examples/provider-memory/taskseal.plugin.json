@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "apiVersion": "taskseal.plugin/v1",
+  "pluginId": "example.memory-provider",
+  "pluginVersion": "1.0.0",
+  "pluginType": "provider",
+  "contractVersion": "taskseal.provider/v1",
+  "minimumNodeVersion": "24.12.0",
+  "entrypoint": "./index.js"
+}

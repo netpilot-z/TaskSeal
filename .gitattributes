@@ -1,1 +1,2 @@
 src/cli.ts text eol=lf
+src/bin/taskseal.ts text eol=lf

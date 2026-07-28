@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://taskseal.dev/schemas/plugin-manifest-v1.json",
+  "title": "TaskSeal Plugin Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "apiVersion",
+    "pluginId",
+    "pluginVersion",
+    "pluginType",
+    "contractVersion",
+    "minimumNodeVersion",
+    "entrypoint"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "apiVersion": {
+      "const": "taskseal.plugin/v1"
+    },
+    "pluginId": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9.-]{0,62}[a-z0-9])?$"
+    },
+    "pluginVersion": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "pluginType": {
+      "enum": [
+        "runner",
+        "provider"
+      ]
+    },
+    "contractVersion": {
+      "enum": [
+        "taskseal.runner/v1",
+        "taskseal.provider/v1"
+      ]
+    },
+    "minimumNodeVersion": {
+      "type": "string",
+      "pattern": "^24\\.(?:1[2-9]|[2-9][0-9]|[1-9][0-9]{2,})\\.(?:0|[1-9][0-9]*)$"
+    },
+    "entrypoint": {
+      "type": "string",
+      "maxLength": 256,
+      "pattern": "^\\./(?:[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.(?:c|m)?js$",
+      "not": {
+        "pattern": "(?:^|/)(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.|/|$)"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "pluginType": {
+            "const": "runner"
+          }
+        },
+        "required": [
+          "pluginType"
+        ]
+      },
+      "then": {
+        "properties": {
+          "contractVersion": {
+            "const": "taskseal.runner/v1"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "contractVersion": {
+            "const": "taskseal.provider/v1"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -18,6 +18,7 @@
   "include": [
     "src/**/*.ts",
     "test/**/*.ts",
-    "test-support/**/*.ts"
+    "test-support/**/*.ts",
+    "verification/**/*.ts"
   ]
 }

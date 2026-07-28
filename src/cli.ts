@@ -121,10 +121,25 @@ import type {
 import {
   createLocalLinearAcceptanceRuntime
 } from "./linear-acceptance-runtime.ts";
+import {
+  checkTaskSealPluginManifestFile
+} from "./application/plugin-manifest-check.ts";
+import {
+  PluginManifestError
+} from "./sdk/plugin-manifest.ts";
+import {
+  TASKSEAL_PACKAGE_VERSION
+} from "./sdk/version.ts";
 import type {
   LocalLinearAcceptanceRuntime,
   LocalLinearAcceptanceServicePort
 } from "./linear-acceptance-runtime.ts";
+import type {
+  CheckTaskSealPluginManifestFileOptions
+} from "./application/plugin-manifest-check.ts";
+import type {
+  TaskSealPluginManifestV1
+} from "./sdk/plugin-manifest.ts";
 
 export type CliExitCode = 0 | 1 | 2;
 
@@ -282,6 +297,13 @@ type StartControlRoom = (
   options: StartControlRoomOptions
 ) => unknown | Promise<unknown>;
 
+type CheckPluginManifest = (
+  options:
+    CheckTaskSealPluginManifestFileOptions
+) =>
+  | TaskSealPluginManifestV1
+  | Promise<TaskSealPluginManifestV1>;
+
 export interface RunCliOptions {
   args?: string[] | undefined;
   cwd?: string | undefined;
@@ -305,6 +327,9 @@ export interface RunCliOptions {
     | undefined;
   providerObservationCoordinatorFactory?:
     | ProviderObservationCoordinatorFactory
+    | undefined;
+  checkPluginManifest?:
+    | CheckPluginManifest
     | undefined;
 }
 
@@ -558,6 +583,7 @@ const USAGE = `Usage:
   taskseal init
   taskseal doctor
   taskseal start
+  taskseal plugin check <manifest.json>
   taskseal run <work-item-id> [--prompt <text>] [--read-only]
   taskseal inspect github-issue --issue <number> --work-item <id> --criterion <key> [--snapshot-version 2 --title-management provider|none]
   taskseal inspect github --issue <number> --pr <number> --check <name> --work-item <id> --attempt <id> --criterion <key> [--snapshot-version 2 --title-management provider|none]
@@ -589,9 +615,62 @@ export async function runCli({
   createLinearDryRun,
   executeLinearReadyWork,
   executeGitHubReconciliation,
-  providerObservationCoordinatorFactory
+  providerObservationCoordinatorFactory,
+  checkPluginManifest
 }: RunCliOptions = {}): Promise<CliExitCode> {
   const command = args[0] ?? "start";
+
+  if (
+    command === "help" ||
+    command === "--help"
+  ) {
+    output.write(USAGE);
+    return 0;
+  }
+
+  if (command === "--version") {
+    output.write(
+      `${TASKSEAL_PACKAGE_VERSION}\n`
+    );
+    return 0;
+  }
+
+  if (command === "plugin") {
+    if (
+      args.length !== 3 ||
+      args[1] !== "check"
+    ) {
+      output.write(USAGE);
+      return 2;
+    }
+
+    try {
+      const execute =
+        checkPluginManifest ??
+        checkTaskSealPluginManifestFile;
+      const manifest =
+        await execute({
+          cwd,
+          path: args[2]!,
+          nodeVersion:
+            typeof nodeVersion ===
+            "string"
+              ? nodeVersion
+              : ""
+        });
+      output.write(
+        `${JSON.stringify(manifest, null, 2)}\n`
+      );
+      return 0;
+    } catch (error) {
+      output.write(
+        renderPluginManifestError(
+          error
+        )
+      );
+      return 1;
+    }
+  }
 
   if (command === "init") {
     const result = await initializeProject({ cwd, now });
@@ -917,6 +996,18 @@ export async function runCli({
 
   output.write(USAGE);
   return 2;
+}
+
+function renderPluginManifestError(
+  error: unknown
+): string {
+  if (
+    error instanceof
+    PluginManifestError
+  ) {
+    return `${error.code}: ${error.message}\n`;
+  }
+  return "PLUGIN_MANIFEST_INVALID: The TaskSeal plugin manifest is invalid.\n";
 }
 
 async function executeObservedProviderInspection<T>({
@@ -2703,8 +2794,8 @@ const isMain =
   typeof invokedPath === "string" &&
   import.meta.url === pathToFileURL(invokedPath).href;
 
-if (isMain) {
-  process.exitCode = await runCli({
+export async function runTaskSealCli(): Promise<CliExitCode> {
+  return runCli({
     providerObservationCoordinatorFactory: async ({
       cwd,
       clock
@@ -2716,4 +2807,9 @@ if (isMain) {
         })
       ).coordinator
   });
+}
+
+if (isMain) {
+  process.exitCode =
+    await runTaskSealCli();
 }
