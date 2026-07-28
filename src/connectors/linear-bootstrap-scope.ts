@@ -1,5 +1,6 @@
 import type {
-  LinearBootstrapCoordinates
+  LinearBootstrapCoordinates,
+  LinearReadyWorkCoordinates
 } from "../config/project-config.ts";
 import {
   LINEAR_GRAPHQL_REQUEST_BYTE_LIMIT,
@@ -103,6 +104,15 @@ export interface ResolvedLinearBootstrapScope {
   readonly stateId: string;
 }
 
+export interface ResolvedLinearReadyWorkScope {
+  readonly organizationId: string;
+  readonly teamId: string;
+  readonly teamKey: string;
+  readonly projectId: string;
+  readonly readyStateId: string;
+  readonly completedStateId: string;
+}
+
 interface Organization {
   readonly id: string;
   readonly name: string;
@@ -140,11 +150,159 @@ interface ResolveLinearBootstrapScopeOptions {
   readonly exchange: LinearBootstrapGraphqlExchange;
 }
 
+interface ResolveLinearReadyWorkScopeOptions {
+  readonly configuredTarget: Pick<
+    LinearReadyWorkCoordinates,
+    | "workspace"
+    | "team"
+    | "project"
+    | "readyState"
+    | "completedState"
+  >;
+  readonly exchange: LinearBootstrapGraphqlExchange;
+}
+
+interface ResolvedLinearProjectScope {
+  readonly organization: Organization;
+  readonly team: Team;
+  readonly project: Project;
+  readonly states: readonly WorkflowState[];
+}
+
 export async function resolveLinearBootstrapScope(
   optionsValue: unknown
 ): Promise<ResolvedLinearBootstrapScope> {
   const { configuredTarget, exchange } =
     normalizeOptions(optionsValue);
+  const {
+    organization,
+    team,
+    project,
+    states
+  } = await resolveLinearProjectScope({
+    configuredTarget,
+    exchange
+  });
+  const state = selectUnique(
+    uniqueById(states).filter((candidate) =>
+      matchesReference(
+        candidate.name,
+        configuredTarget.backlogState
+      )
+    ),
+    {
+      notFoundCode:
+        "LINEAR_BOOTSTRAP_STATE_NOT_FOUND",
+      ambiguousCode:
+        "LINEAR_BOOTSTRAP_STATE_AMBIGUOUS",
+      label: "Linear bootstrap state"
+    }
+  );
+
+  if (state.type !== "backlog") {
+    throw bootstrapError(
+      "LINEAR_BOOTSTRAP_STATE_TYPE_INVALID",
+      "Configured Linear bootstrap state is not a backlog workflow state."
+    );
+  }
+
+  return Object.freeze({
+    organizationId: organization.id,
+    teamId: team.id,
+    teamKey: team.key,
+    projectId: project.id,
+    stateId: state.id
+  });
+}
+
+export async function resolveLinearReadyWorkScope(
+  optionsValue: unknown
+): Promise<ResolvedLinearReadyWorkScope> {
+  const { configuredTarget, exchange } =
+    normalizeReadyOptions(optionsValue);
+  const {
+    organization,
+    team,
+    project,
+    states
+  } = await resolveLinearProjectScope({
+    configuredTarget,
+    exchange
+  });
+  const uniqueStates = uniqueById(states);
+  const readyState = selectUnique(
+    uniqueStates.filter((candidate) =>
+      matchesReference(
+        candidate.name,
+        configuredTarget.readyState
+      )
+    ),
+    {
+      notFoundCode:
+        "LINEAR_READY_STATE_NOT_FOUND",
+      ambiguousCode:
+        "LINEAR_READY_STATE_AMBIGUOUS",
+      label: "Linear ready state"
+    }
+  );
+  const completedState = selectUnique(
+    uniqueStates.filter((candidate) =>
+      matchesReference(
+        candidate.name,
+        configuredTarget.completedState
+      )
+    ),
+    {
+      notFoundCode:
+        "LINEAR_READY_COMPLETED_STATE_NOT_FOUND",
+      ambiguousCode:
+        "LINEAR_READY_COMPLETED_STATE_AMBIGUOUS",
+      label: "Linear completed state"
+    }
+  );
+
+  if (readyState.type !== "unstarted") {
+    throw bootstrapError(
+      "LINEAR_READY_STATE_TYPE_INVALID",
+      "Configured Linear ready state is not an unstarted workflow state."
+    );
+  }
+
+  if (completedState.type !== "completed") {
+    throw bootstrapError(
+      "LINEAR_READY_COMPLETED_STATE_TYPE_INVALID",
+      "Configured Linear completed state is not a completed workflow state."
+    );
+  }
+
+  if (readyState.id === completedState.id) {
+    throw bootstrapError(
+      "LINEAR_READY_STATE_IDENTITY_CONFLICT",
+      "Linear ready and completed states must be distinct."
+    );
+  }
+
+  return Object.freeze({
+    organizationId: organization.id,
+    teamId: team.id,
+    teamKey: team.key,
+    projectId: project.id,
+    readyStateId: readyState.id,
+    completedStateId: completedState.id
+  });
+}
+
+async function resolveLinearProjectScope({
+  configuredTarget,
+  exchange
+}: {
+  readonly configuredTarget: {
+    readonly workspace: string;
+    readonly team: string;
+    readonly project: string;
+  };
+  readonly exchange: LinearBootstrapGraphqlExchange;
+}): Promise<ResolvedLinearProjectScope> {
   const { organization, teams } =
     await resolveOrganizationAndTeams(exchange);
   validateWorkspace(
@@ -204,36 +362,13 @@ export async function resolveLinearBootstrapScope(
     exchange,
     team.id
   );
-  const state = selectUnique(
-    uniqueById(states).filter((candidate) =>
-      matchesReference(
-        candidate.name,
-        configuredTarget.backlogState
-      )
-    ),
-    {
-      notFoundCode:
-        "LINEAR_BOOTSTRAP_STATE_NOT_FOUND",
-      ambiguousCode:
-        "LINEAR_BOOTSTRAP_STATE_AMBIGUOUS",
-      label: "Linear bootstrap state"
-    }
-  );
 
-  if (state.type !== "backlog") {
-    throw bootstrapError(
-      "LINEAR_BOOTSTRAP_STATE_TYPE_INVALID",
-      "Configured Linear bootstrap state is not a backlog workflow state."
-    );
-  }
-
-  return Object.freeze({
-    organizationId: organization.id,
-    teamId: team.id,
-    teamKey: team.key,
-    projectId: project.id,
-    stateId: state.id
-  });
+  return {
+    organization,
+    team,
+    project,
+    states
+  };
 }
 
 async function resolveOrganizationAndTeams(
@@ -625,6 +760,87 @@ function normalizeOptionsUnsafe(
     exchange:
       options.exchange as LinearBootstrapGraphqlExchange
   };
+}
+
+function normalizeReadyOptions(
+  value: unknown
+): ResolveLinearReadyWorkScopeOptions {
+  try {
+    const options = readExactRecord(value, [
+      "configuredTarget",
+      "exchange"
+    ]);
+    const target = readExactRecord(
+      options.configuredTarget,
+      [
+        "workspace",
+        "team",
+        "project",
+        "readyState",
+        "completedState"
+      ]
+    );
+
+    if (typeof options.exchange !== "function") {
+      throw bootstrapError(
+        "LINEAR_BOOTSTRAP_INPUT_INVALID",
+        "Linear ready-work scope requires an exchange."
+      );
+    }
+
+    const readyState = parseReference(
+      target.readyState
+    );
+    const completedState = parseReference(
+      target.completedState
+    );
+
+    if (
+      matchesReference(
+        readyState,
+        completedState
+      )
+    ) {
+      throw bootstrapError(
+        "LINEAR_READY_STATE_IDENTITY_CONFLICT",
+        "Linear ready and completed state references must be distinct."
+      );
+    }
+
+    return {
+      configuredTarget: {
+        workspace: parseReference(
+          target.workspace
+        ),
+        team: parseReference(target.team),
+        project: parseReference(
+          target.project
+        ),
+        readyState,
+        completedState
+      },
+      exchange:
+        options.exchange as LinearBootstrapGraphqlExchange
+    };
+  } catch (error) {
+    if (
+      error instanceof
+        LinearBootstrapScopeError &&
+      (
+        error.code ===
+          "LINEAR_READY_STATE_IDENTITY_CONFLICT" ||
+        error.code ===
+          "LINEAR_BOOTSTRAP_INPUT_INVALID"
+      )
+    ) {
+      throw error;
+    }
+
+    throw bootstrapError(
+      "LINEAR_BOOTSTRAP_INPUT_INVALID",
+      "Linear ready-work input is invalid."
+    );
+  }
 }
 
 function parseOrganization(

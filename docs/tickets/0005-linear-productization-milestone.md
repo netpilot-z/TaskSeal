@@ -37,14 +37,14 @@
 
 ## T16 — 从 Linear 领取 ready work
 
-- 状态：Todo；由 Linear `NP-4` 跟踪。
+- 状态：已完成；由 Linear `NP-4` 跟踪。
 - 目的：让 TaskSeal 从 Linear Project 读取可执行任务，而不是依赖本地第一条 WorkItem。
 - 范围：精确 Project + Todo scope、分页、stable UUID mapping、依赖/阻塞信息、选择一张 ready Issue 创建或关联本地 WorkItem。
 - 不包含：自动修改 Linear、模糊标题匹配或无限队列抓取。
 - 依赖：T15.1；真实远端 bootstrap/迁移启用另受 T15.3 门禁，不阻塞只读实现。
 - 验收标准：只导入目标 Project/Team 的 Todo；重复读取幂等；依赖未满足时不派发。
 - 验证：GraphQL contract、scope drift、pagination、重复读取、依赖门禁和本地 replay 测试。
-- 风险与回退：保持显式单票选择入口；关闭轮询即可回退到本地 WorkItem。
+- 风险与回退：保持显式 UUID 单票入口；关闭 `linear.readyWork.enabled` 即零网络回退到本地 WorkItem。原生 relation 未建立期间由严格 UUID dependency index 提供拓扑、Linear 实时状态提供完成事实。
 
 ## T17 — 补齐 Control Room 执行控制
 

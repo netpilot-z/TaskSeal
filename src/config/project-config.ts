@@ -16,6 +16,16 @@ export interface LinearBootstrapCoordinates {
   readonly backlogState: string;
 }
 
+export interface LinearReadyWorkCoordinates {
+  readonly workspace: string;
+  readonly team: string;
+  readonly project: string;
+  readonly readyState: string;
+  readonly completedState: string;
+  readonly dependencyIndex: string;
+  readonly enabled: boolean;
+}
+
 type ProjectConfigErrorCode =
   | "PROJECT_CONFIG_INVALID"
   | "GITHUB_CONFIG_INVALID"
@@ -138,6 +148,59 @@ export function getLinearBootstrapCoordinates(
   };
 }
 
+export function getLinearReadyWorkCoordinates(
+  configuration: ProjectConfiguration | null | undefined
+): LinearReadyWorkCoordinates {
+  const { workspace, team } =
+    getLinearCoordinates(configuration);
+  const project = configuration?.linear?.project;
+  const readyWork =
+    configuration?.linear?.readyWork;
+
+  if (
+    !isNonEmptyTrimmedString(workspace) ||
+    !isNonEmptyTrimmedString(team) ||
+    !isNonEmptyTrimmedString(project) ||
+    !isRecord(readyWork) ||
+    !hasExactKeys(readyWork, [
+      "enabled",
+      "readyState",
+      "completedState",
+      "dependencyIndex"
+    ]) ||
+    typeof readyWork.enabled !== "boolean" ||
+    !isNonEmptyTrimmedString(
+      readyWork.readyState
+    ) ||
+    !isNonEmptyTrimmedString(
+      readyWork.completedState
+    ) ||
+    normalizeReference(readyWork.readyState) ===
+      normalizeReference(
+        readyWork.completedState
+      ) ||
+    !isRepositoryRelativePath(
+      readyWork.dependencyIndex
+    )
+  ) {
+    throw configError(
+      "LINEAR_CONFIG_INVALID",
+      "Linear ready-work configuration requires explicit states and a repository-relative dependency index."
+    );
+  }
+
+  return {
+    workspace,
+    team,
+    project,
+    readyState: readyWork.readyState,
+    completedState: readyWork.completedState,
+    dependencyIndex:
+      readyWork.dependencyIndex,
+    enabled: readyWork.enabled
+  };
+}
+
 export function getGiteeCoordinates(
   configuration: ProjectConfiguration | null | undefined
 ): { repository: string } {
@@ -191,6 +254,59 @@ function isNonEmptyTrimmedString(
     isNonEmptyString(value) &&
     value === value.trim()
   );
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  expectedKeys: readonly string[]
+): boolean {
+  const actual = Object.keys(value).sort();
+  const expected = [...expectedKeys].sort();
+
+  return (
+    actual.length === expected.length &&
+    actual.every(
+      (key, index) => key === expected[index]
+    )
+  );
+}
+
+function isRepositoryRelativePath(
+  value: unknown
+): value is string {
+  if (
+    !isNonEmptyTrimmedString(value) ||
+    value.length > 512 ||
+    value.includes("\\") ||
+    value.startsWith("/") ||
+    /^[A-Za-z]:/.test(value)
+  ) {
+    return false;
+  }
+
+  const segments = value.split("/");
+
+  return (
+    segments.every(
+      (segment) =>
+        segment.length > 0 &&
+        segment.length <= 100 &&
+        segment !== "." &&
+        segment !== ".." &&
+        /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(
+          segment
+        ) &&
+        !segment.endsWith(".") &&
+        !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(
+          segment
+        )
+    ) &&
+    value.endsWith(".json")
+  );
+}
+
+function normalizeReference(value: string): string {
+  return value.toLowerCase();
 }
 
 class ProjectConfigError extends Error {
