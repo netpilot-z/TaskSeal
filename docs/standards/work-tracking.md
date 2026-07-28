@@ -68,9 +68,9 @@ Pull Request 标题以 `[NP-123]` 开头，正文使用 `Implements NP-123` 或 
 
 ## 当前写入门禁
 
-操作者已为 `LINEAR_API_KEY` 配置 Issue 创建、更新和评论权限；`NP-1` 与 `NP-2`～`NP-12` 已通过精确 UUID mutation 与读后核验确认。Linear 的 `issueRelationCreate` 另需通用 `write` scope，当前失败关闭且没有创建任何原生依赖关系。权限可用不等于 TaskSeal v1 获得自动写授权：
+操作者已为 `LINEAR_API_KEY` 配置 Issue 创建、更新和评论权限；`NP-1` 与 `NP-2`～`NP-12` 已通过精确 UUID mutation 与读后核验确认。Linear 的 `issueRelationCreate` 另需通用 `write` scope，当前失败关闭且没有创建任何原生依赖关系。权限可用不等于 TaskSeal runtime 已获得自动写授权：
 
 - 人工授权的 tracker bootstrap 可以创建和维护本轮 Linear 任务；
-- TaskSeal runtime 在 Operation v2 完成前仍不接入真实 mutation；
+- Operation v2 已完成 Project/State/Parent/source intent 审批和 project-aware fake transport，但仍不接入真实 mutation composition；
 - 不回退到新建 GitHub 规划 Issue；
 - 自动 submit 必须继续遵守 Project/State/source intent digest、人工审批、journal-before-transport 和 UUID reconcile。
