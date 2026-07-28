@@ -194,5 +194,117 @@
       },
       "status": "verified"
     }
+  ],
+  "relations": [
+    {
+      "clientRequestId": "a000371a-7f63-4b1a-a2e1-f2a9952b6779",
+      "type": "blocks",
+      "blockingTicket": "T15.2",
+      "blockedTicket": "T15.3",
+      "issueId": "807cfb48-4b4e-4d9e-9481-a83a1ac764de",
+      "relatedIssueId": "b5c03bd9-a1a8-4b67-ae01-fc12807eac69",
+      "linearRelationId": null,
+      "status": "planned"
+    },
+    {
+      "clientRequestId": "94821a69-afba-4e87-b7fc-46cfd9fb94a8",
+      "type": "blocks",
+      "blockingTicket": "T16",
+      "blockedTicket": "T17",
+      "issueId": "cc57a0f0-ce3b-4e26-98b0-cd01219eac4a",
+      "relatedIssueId": "fb80f73d-3857-445a-843b-da1d13b1999c",
+      "linearRelationId": null,
+      "status": "planned"
+    },
+    {
+      "clientRequestId": "e7eb421f-a88e-4771-9bc5-507823f4645b",
+      "type": "blocks",
+      "blockingTicket": "T16",
+      "blockedTicket": "T18",
+      "issueId": "cc57a0f0-ce3b-4e26-98b0-cd01219eac4a",
+      "relatedIssueId": "4f3ce2c1-5415-403b-9129-698cac96d987",
+      "linearRelationId": null,
+      "status": "planned"
+    },
+    {
+      "clientRequestId": "8aa677b7-f2a6-4ac1-a26f-8684a853bc11",
+      "type": "blocks",
+      "blockingTicket": "T15.2",
+      "blockedTicket": "T19",
+      "issueId": "807cfb48-4b4e-4d9e-9481-a83a1ac764de",
+      "relatedIssueId": "70cbe548-5e6c-4d35-b019-a570058a8cf2",
+      "linearRelationId": null,
+      "status": "planned"
+    },
+    {
+      "clientRequestId": "d18ef977-6fe2-41b9-9a72-4c05f657e9ef",
+      "type": "blocks",
+      "blockingTicket": "T18",
+      "blockedTicket": "T19",
+      "issueId": "4f3ce2c1-5415-403b-9129-698cac96d987",
+      "relatedIssueId": "70cbe548-5e6c-4d35-b019-a570058a8cf2",
+      "linearRelationId": null,
+      "status": "planned"
+    },
+    {
+      "clientRequestId": "2f8b0ccd-eb78-4400-9b4b-56b626fddfe6",
+      "type": "blocks",
+      "blockingTicket": "T17",
+      "blockedTicket": "T20",
+      "issueId": "fb80f73d-3857-445a-843b-da1d13b1999c",
+      "relatedIssueId": "362d3f0e-804f-4687-95e9-13a9561760ec",
+      "linearRelationId": null,
+      "status": "planned"
+    },
+    {
+      "clientRequestId": "3810cba0-91f0-4388-9d95-5aa59054bcb1",
+      "type": "blocks",
+      "blockingTicket": "T18",
+      "blockedTicket": "T20",
+      "issueId": "4f3ce2c1-5415-403b-9129-698cac96d987",
+      "relatedIssueId": "362d3f0e-804f-4687-95e9-13a9561760ec",
+      "linearRelationId": null,
+      "status": "planned"
+    },
+    {
+      "clientRequestId": "42626f01-8b19-43fc-9b0b-9e45026bc972",
+      "type": "blocks",
+      "blockingTicket": "T20",
+      "blockedTicket": "T21",
+      "issueId": "362d3f0e-804f-4687-95e9-13a9561760ec",
+      "relatedIssueId": "8c20a04b-d005-427a-8221-166551a80a1c",
+      "linearRelationId": null,
+      "status": "planned"
+    },
+    {
+      "clientRequestId": "8c22ccb5-6a58-4a36-97ac-8cbd8de9bb84",
+      "type": "blocks",
+      "blockingTicket": "T19",
+      "blockedTicket": "T22",
+      "issueId": "70cbe548-5e6c-4d35-b019-a570058a8cf2",
+      "relatedIssueId": "35aa7526-2d18-4e72-a869-1bbec7af5a98",
+      "linearRelationId": null,
+      "status": "planned"
+    },
+    {
+      "clientRequestId": "0143f15f-ce69-414c-9b03-a973897cec61",
+      "type": "blocks",
+      "blockingTicket": "T20",
+      "blockedTicket": "T22",
+      "issueId": "362d3f0e-804f-4687-95e9-13a9561760ec",
+      "relatedIssueId": "35aa7526-2d18-4e72-a869-1bbec7af5a98",
+      "linearRelationId": null,
+      "status": "planned"
+    },
+    {
+      "clientRequestId": "85777838-f8fe-4c3f-a6fe-0ced4e1c09ab",
+      "type": "blocks",
+      "blockingTicket": "T19",
+      "blockedTicket": "T24",
+      "issueId": "70cbe548-5e6c-4d35-b019-a570058a8cf2",
+      "relatedIssueId": "3fdc7f5a-27aa-40c2-9c26-8a7ab59dba07",
+      "linearRelationId": null,
+      "status": "planned"
+    }
   ]
 }
