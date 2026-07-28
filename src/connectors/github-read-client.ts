@@ -19,6 +19,13 @@ const GITHUB_CHECK_CONCLUSIONS = new Set([
   "stale",
   "timed_out"
 ] as const);
+const GITHUB_REVIEW_STATES = new Set([
+  "APPROVED",
+  "CHANGES_REQUESTED",
+  "COMMENTED",
+  "DISMISSED",
+  "PENDING"
+] as const);
 
 export type GitHubCheckStatus =
   | "queued"
@@ -37,6 +44,13 @@ export type GitHubCheckConclusion =
   | "skipped"
   | "stale"
   | "timed_out";
+
+export type GitHubReviewState =
+  | "APPROVED"
+  | "CHANGES_REQUESTED"
+  | "COMMENTED"
+  | "DISMISSED"
+  | "PENDING";
 
 export interface HeadersLike {
   get(name: string): string | null;
@@ -73,6 +87,10 @@ export interface GitHubPullRequest
   updated_at: string;
   head: {
     sha: string;
+    ref?: string;
+    repo?: {
+      full_name: string;
+    } | null;
   };
 }
 
@@ -85,6 +103,9 @@ export interface GitHubCheckResponse
   head_sha: string;
   details_url: string;
   completed_at: string | null;
+  app?: {
+    id: string | number;
+  } | null;
 }
 
 export interface GitHubCheck
@@ -98,6 +119,29 @@ export interface GitHubDelivery {
   issue: GitHubIssue;
   pullRequest: GitHubPullRequest;
   check: GitHubCheck;
+}
+
+export interface GitHubPullRequestReview
+  extends Record<string, unknown> {
+  id: string | number;
+  html_url: string;
+  state: GitHubReviewState;
+  submitted_at: string | null;
+  commit_id: string | null;
+  user: {
+    id: string | number;
+    login: string;
+  };
+}
+
+export interface GitHubHeadCheckSelector {
+  name: string;
+  appId?: string | undefined;
+}
+
+export interface GitHubHeadCheckMatch {
+  selector: GitHubHeadCheckSelector;
+  check: GitHubCheckResponse | null;
 }
 
 export interface ReadGitHubIssueOptions {
@@ -132,6 +176,35 @@ export interface ReadGitHubCheckRunOptions {
   token?: string | null | undefined;
   fetchImpl?: FetchLike;
   timeoutMs?: number;
+}
+
+export interface ReadGitHubMappedPullRequestOptions
+  extends ReadGitHubPullRequestOptions {
+  headRepository: string;
+  branch: string;
+}
+
+export interface ReadGitHubHeadChecksOptions {
+  repository: string;
+  headSha: string;
+  selectors:
+    readonly GitHubHeadCheckSelector[];
+  token?: string | null | undefined;
+  fetchImpl?: FetchLike;
+  timeoutMs?: number;
+}
+
+export interface ReadGitHubPullRequestReviewsOptions {
+  repository: string;
+  pullRequestNumber: number;
+  token?: string | null | undefined;
+  fetchImpl?: FetchLike;
+  timeoutMs?: number;
+}
+
+export interface ReadGitHubPullRequestReviewOptions
+  extends ReadGitHubPullRequestReviewsOptions {
+  reviewId: string;
 }
 
 interface JsonResponse {
@@ -227,6 +300,76 @@ export async function readGitHubPullRequest({
   return response.body;
 }
 
+export async function readGitHubMappedPullRequest({
+  repository,
+  pullRequestNumber,
+  headRepository,
+  branch,
+  token,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = 15_000
+}: ReadGitHubMappedPullRequestOptions):
+  Promise<GitHubPullRequest & {
+    head: {
+      sha: string;
+      ref: string;
+      repo: {
+        full_name: string;
+      };
+    };
+  }> {
+  const expectedHead =
+    parseRepository(headRepository);
+  requireNonEmptyString(branch, "branch");
+  const pullRequest =
+    await readGitHubPullRequest({
+      repository,
+      pullRequestNumber,
+      token,
+      fetchImpl,
+      timeoutMs
+    });
+  const ref = pullRequest.head.ref;
+  const repositoryName =
+    pullRequest.head.repo?.full_name;
+  let actualHead:
+    | ReturnType<typeof parseRepository>
+    | null = null;
+
+  try {
+    actualHead =
+      typeof repositoryName === "string"
+        ? parseRepository(repositoryName)
+        : null;
+  } catch {
+    actualHead = null;
+  }
+
+  if (
+    ref !== branch ||
+    actualHead === null ||
+    actualHead.owner.toLowerCase() !==
+      expectedHead.owner.toLowerCase() ||
+    actualHead.name.toLowerCase() !==
+      expectedHead.name.toLowerCase()
+  ) {
+    throw githubError(
+      "GITHUB_PULL_REQUEST_MAPPING_MISMATCH",
+      "The GitHub pull request head does not match the configured delivery binding."
+    );
+  }
+
+  return pullRequest as GitHubPullRequest & {
+    head: {
+      sha: string;
+      ref: string;
+      repo: {
+        full_name: string;
+      };
+    };
+  };
+}
+
 export async function readGitHubCheckRun({
   repository,
   checkRunId,
@@ -259,6 +402,215 @@ export async function readGitHubCheckRun({
     throw githubError(
       "GITHUB_RESPONSE_INVALID",
       "GitHub returned an invalid check run response."
+    );
+  }
+
+  return response.body;
+}
+
+export async function readGitHubHeadChecks({
+  repository,
+  headSha,
+  selectors,
+  token,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = 15_000
+}: ReadGitHubHeadChecksOptions):
+  Promise<GitHubHeadCheckMatch[]> {
+  const { owner, name } =
+    parseRepository(repository);
+  requireNonEmptyString(headSha, "headSha");
+  const normalizedSelectors =
+    normalizeHeadCheckSelectors(selectors);
+  requireFetch(fetchImpl);
+  validateToken(token);
+  validateTimeout(timeoutMs);
+
+  const parameters = new URLSearchParams({
+    filter: "latest",
+    per_page: "100"
+  });
+  let nextUrl: string | null =
+    `${GITHUB_API_ORIGIN}/repos/` +
+    `${encodeURIComponent(owner)}/${encodeURIComponent(name)}/commits/` +
+    `${encodeURIComponent(headSha)}/check-runs?${parameters}`;
+  const checks: GitHubCheckResponse[] = [];
+  const visited = new Set<string>();
+  const headers = createHeaders(token);
+
+  for (let page = 0; nextUrl; page += 1) {
+    if (page >= MAX_PAGES) {
+      throw githubError(
+        "GITHUB_PAGINATION_LIMIT",
+        "GitHub check pagination exceeded the safety limit."
+      );
+    }
+
+    validatePaginationUrl(nextUrl);
+    if (visited.has(nextUrl)) {
+      throw githubError(
+        "GITHUB_PAGINATION_LOOP",
+        "GitHub check pagination returned a repeated page."
+      );
+    }
+
+    visited.add(nextUrl);
+    const response = await getJson({
+      url: nextUrl,
+      headers,
+      fetchImpl,
+      timeoutMs
+    });
+    checks.push(
+      ...readCheckRuns(response.body)
+    );
+    nextUrl = findNextLink(
+      response.headers.get("link")
+    );
+  }
+
+  return normalizedSelectors.map(
+    (selector) => {
+      const matching = checks.filter(
+        (check) =>
+          check.name === selector.name &&
+          (
+            selector.appId === undefined ||
+            readCheckAppId(check) ===
+              selector.appId
+          )
+      );
+
+      if (matching.length > 1) {
+        throw githubError(
+          "GITHUB_CHECK_AMBIGUOUS",
+          "Multiple GitHub checks matched a configured delivery selector."
+        );
+      }
+
+      const check = matching[0] ?? null;
+      if (
+        check !== null &&
+        check.head_sha !== headSha
+      ) {
+        throw githubError(
+          "GITHUB_CHECK_REVISION_MISMATCH",
+          "GitHub check evidence does not match the configured pull request head."
+        );
+      }
+
+      return {
+        selector: { ...selector },
+        check
+      };
+    }
+  );
+}
+
+export async function readGitHubPullRequestReviews({
+  repository,
+  pullRequestNumber,
+  token,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = 15_000
+}: ReadGitHubPullRequestReviewsOptions):
+  Promise<GitHubPullRequestReview[]> {
+  const { owner, name } =
+    parseRepository(repository);
+  requirePositiveInteger(
+    pullRequestNumber,
+    "pullRequestNumber"
+  );
+  requireFetch(fetchImpl);
+  validateToken(token);
+  validateTimeout(timeoutMs);
+
+  let nextUrl: string | null =
+    `${GITHUB_API_ORIGIN}/repos/` +
+    `${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/` +
+    `${pullRequestNumber}/reviews?per_page=100`;
+  const reviews:
+    GitHubPullRequestReview[] = [];
+  const visited = new Set<string>();
+  const headers = createHeaders(token);
+
+  for (let page = 0; nextUrl; page += 1) {
+    if (page >= MAX_PAGES) {
+      throw githubError(
+        "GITHUB_PAGINATION_LIMIT",
+        "GitHub review pagination exceeded the safety limit."
+      );
+    }
+
+    validatePaginationUrl(nextUrl);
+    if (visited.has(nextUrl)) {
+      throw githubError(
+        "GITHUB_PAGINATION_LOOP",
+        "GitHub review pagination returned a repeated page."
+      );
+    }
+
+    visited.add(nextUrl);
+    const response = await getJson({
+      url: nextUrl,
+      headers,
+      fetchImpl,
+      timeoutMs
+    });
+    reviews.push(
+      ...readPullRequestReviews(
+        response.body
+      )
+    );
+    nextUrl = findNextLink(
+      response.headers.get("link")
+    );
+  }
+
+  return reviews;
+}
+
+export async function readGitHubPullRequestReview({
+  repository,
+  pullRequestNumber,
+  reviewId,
+  token,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = 15_000
+}: ReadGitHubPullRequestReviewOptions):
+  Promise<GitHubPullRequestReview> {
+  const { owner, name } =
+    parseRepository(repository);
+  requirePositiveInteger(
+    pullRequestNumber,
+    "pullRequestNumber"
+  );
+  requirePositiveDecimalIdentifier(
+    reviewId,
+    "reviewId"
+  );
+  requireFetch(fetchImpl);
+  validateToken(token);
+  validateTimeout(timeoutMs);
+
+  const response = await getJson({
+    url:
+      `${GITHUB_API_ORIGIN}/repos/` +
+      `${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/` +
+      `${pullRequestNumber}/reviews/${reviewId}`,
+    headers: createHeaders(token),
+    fetchImpl,
+    timeoutMs
+  });
+
+  if (
+    !isGitHubPullRequestReview(
+      response.body
+    )
+  ) {
+    throw githubError(
+      "GITHUB_RESPONSE_INVALID",
+      "GitHub returned an invalid pull request review response."
     );
   }
 
@@ -519,6 +871,24 @@ function readCheckRuns(
   return body.check_runs;
 }
 
+function readPullRequestReviews(
+  body: unknown
+): GitHubPullRequestReview[] {
+  if (
+    !Array.isArray(body) ||
+    !body.every(
+      isGitHubPullRequestReview
+    )
+  ) {
+    throw githubError(
+      "GITHUB_RESPONSE_INVALID",
+      "GitHub returned an invalid pull request reviews response."
+    );
+  }
+
+  return body;
+}
+
 function isGitHubIssue(
   value: unknown
 ): value is GitHubIssue {
@@ -567,6 +937,48 @@ function isGitHubCheck(
           )
         : value.conclusion === null &&
           value.completed_at === null
+    ) &&
+    (
+      value.app === undefined ||
+      value.app === null ||
+      (
+        isRecord(value.app) &&
+        isIdentifier(value.app.id)
+      )
+    )
+  );
+}
+
+function isGitHubPullRequestReview(
+  value: unknown
+): value is GitHubPullRequestReview {
+  return (
+    isRecord(value) &&
+    isIdentifier(value.id) &&
+    isNonEmptyString(value.html_url) &&
+    isGitHubReviewState(value.state) &&
+    isRecord(value.user) &&
+    isIdentifier(value.user.id) &&
+    isNonEmptyString(value.user.login) &&
+    (
+      value.state === "PENDING"
+        ? (
+            value.submitted_at === null &&
+            (
+              value.commit_id === null ||
+              isNonEmptyString(
+                value.commit_id
+              )
+            )
+          )
+        : (
+            isNonEmptyString(
+              value.submitted_at
+            ) &&
+            isNonEmptyString(
+              value.commit_id
+            )
+          )
     )
   );
 }
@@ -601,6 +1013,94 @@ function isGitHubCheckConclusion(
       value as GitHubCheckConclusion
     )
   );
+}
+
+function isGitHubReviewState(
+  value: unknown
+): value is GitHubReviewState {
+  return (
+    typeof value === "string" &&
+    GITHUB_REVIEW_STATES.has(
+      value as GitHubReviewState
+    )
+  );
+}
+
+function normalizeHeadCheckSelectors(
+  value: unknown
+): GitHubHeadCheckSelector[] {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > 7
+  ) {
+    throw githubError(
+      "GITHUB_INPUT_INVALID",
+      "GitHub head check selectors must contain between one and seven entries."
+    );
+  }
+
+  const selectors =
+    value.map((candidate) => {
+      if (
+        !isRecord(candidate) ||
+        typeof candidate.name !== "string" ||
+        candidate.name.trim().length === 0 ||
+        candidate.name !==
+          candidate.name.trim() ||
+        candidate.name.length > 256 ||
+        (
+          candidate.appId !== undefined &&
+          (
+            typeof candidate.appId !==
+              "string" ||
+            !/^[1-9]\d*$/.test(
+              candidate.appId
+            ) ||
+            candidate.appId.length > 32
+          )
+        )
+      ) {
+        throw githubError(
+          "GITHUB_INPUT_INVALID",
+          "GitHub head check selector is invalid."
+        );
+      }
+
+      return {
+        name: candidate.name,
+        ...(candidate.appId === undefined
+          ? {}
+          : {
+              appId: candidate.appId
+            })
+      };
+    });
+  const identities = selectors.map(
+    (selector) =>
+      `${selector.name}\u0000${selector.appId ?? ""}`
+  );
+
+  if (
+    new Set(identities).size !==
+      identities.length
+  ) {
+    throw githubError(
+      "GITHUB_INPUT_INVALID",
+      "GitHub head check selectors must be unique."
+    );
+  }
+
+  return selectors;
+}
+
+function readCheckAppId(
+  check: GitHubCheckResponse
+): string | null {
+  return check.app &&
+    isIdentifier(check.app.id)
+    ? String(check.app.id)
+    : null;
 }
 
 function githubHttpError(

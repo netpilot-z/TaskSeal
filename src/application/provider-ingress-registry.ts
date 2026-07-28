@@ -89,7 +89,8 @@ const BUILTIN_REGISTRATIONS = [
         objectTypes: [
           "check",
           "issue",
-          "pull_request"
+          "pull_request",
+          "pull_request_review"
         ]
       }
     ]
@@ -582,16 +583,47 @@ function validateGitHubIngress(
     );
   }
 
-  return (
+  const evidenceId =
+    typeof payload.evidenceId ===
+      "string"
+      ? payload.evidenceId
+      : null;
+  const deliveryCheckMatch =
+    evidenceId === null
+      ? null
+      : /^check-([1-9]\d*):pr-[1-9]\d*$/.exec(
+          evidenceId
+        );
+  const reviewMatch =
+    evidenceId === null
+      ? null
+      : /^review-([1-9]\d*):reviewer-[1-9]\d*:(?:approved|changes_requested|dismissed)$/.exec(
+          evidenceId
+        );
+  const isCheck =
     identity.objectType === "check" &&
     /^\d+$/.test(identity.externalId) &&
-    payload.evidenceId ===
-      `check-${identity.externalId}` &&
+    (
+      evidenceId ===
+        `check-${identity.externalId}` ||
+      deliveryCheckMatch?.[1] ===
+        identity.externalId
+    );
+  const isReview =
+    identity.objectType ===
+      "pull_request_review" &&
+    /^\d+$/.test(identity.externalId) &&
+    reviewMatch?.[1] ===
+      identity.externalId;
+
+  return (
+    (isCheck || isReview) &&
+    /^\d+$/.test(identity.externalId) &&
     typeof payload.url === "string" &&
     validateGitHubUrl({
       value: payload.url,
       scopeRef: request.scopeRef,
-      objectType: "check"
+      objectType: identity.objectType
     })
   );
 }
@@ -731,7 +763,13 @@ function validateGitHubUrl({
     scopeRef,
     "github"
   );
-  const url = parseSafeHttpsUrl(value);
+  const url =
+    objectType ===
+    "pull_request_review"
+      ? parseSafeHttpsUrlWithFragment(
+          value
+        )
+      : parseSafeHttpsUrl(value);
   if (
     !repository ||
     url?.hostname.toLowerCase() !== "github.com"
@@ -760,6 +798,22 @@ function validateGitHubUrl({
     );
   }
 
+  if (
+    objectType ===
+    "pull_request_review"
+  ) {
+    return (
+      parts.length === 5 &&
+      repositoryMatches &&
+      parts[3] === "pull" &&
+      typeof parts[4] === "string" &&
+      /^\d+$/.test(parts[4]) &&
+      /^#pullrequestreview-[1-9]\d*$/.test(
+        url.hash
+      )
+    );
+  }
+
   return (
     objectType === "check" &&
     parts.length >= 5 &&
@@ -784,6 +838,27 @@ function parseSafeHttpsUrl(value: string): URL | null {
     !url.port &&
     !url.search &&
     !url.hash
+  )
+    ? url
+    : null;
+}
+
+function parseSafeHttpsUrlWithFragment(
+  value: string
+): URL | null {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+
+  return (
+    url.protocol === "https:" &&
+    !url.username &&
+    !url.password &&
+    !url.port &&
+    !url.search
   )
     ? url
     : null;

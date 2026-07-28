@@ -1181,10 +1181,28 @@ function authorizeExistingSkippedAction({
     return;
   }
 
-  if (objectType === "check") {
+  if (
+    objectType === "check" ||
+    objectType ===
+      "pull_request_review"
+  ) {
+    const evidencePrefix =
+      objectType === "check"
+        ? `check-${externalId}`
+        : `review-${externalId}:`;
     const evidence = workItem.evidence.find(
       (candidate) =>
-        candidate.id === `check-${externalId}`
+        objectType === "check"
+          ? (
+              candidate.id ===
+                evidencePrefix ||
+              candidate.id.startsWith(
+                `${evidencePrefix}:pr-`
+              )
+            )
+          : candidate.id.startsWith(
+              evidencePrefix
+            )
     );
     if (!evidence) {
       throw importPlanIngressMismatch();

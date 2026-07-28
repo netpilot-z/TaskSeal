@@ -97,6 +97,29 @@ Gitee 首版只支持匿名公开仓库，配置为 `config/project.json` 中的
 
 当前 Linear 真实只读链已用 `NP-1` 验证成功：Workspace `netpilot-z`、Team `netpilot (NP)`、Project `TaskSeal`。GitHub 真实链已用获授权的 Issue `#1`、Draft PR `#2` 和 PR head 上成功完成的 `tests` Check 验证：完整 snapshot 生成 `work_item.created`、`artifact.linked` 与 `evidence.recorded`，真实内存重放进入 `reviewing`，且 journal 未变化。
 
+## GitHub delivery reconciliation
+
+`github.delivery` 把项目 repository 与一个仓库相对 mapping index 绑定。当前 `config/github-delivery-map.json` 是安全的空 bootstrap；明确 PR、head branch、reviewer numeric ID 和 Check selector 后，再按 `docs/specs/0020-github-delivery-evidence.md` 增加条目。空 index 不扫描分支，也不按标题猜测。
+
+对已存在且具有 active Attempt 的 WorkItem，先只读预览：
+
+```bash
+node src/cli.ts reconcile github \
+  --mode preview \
+  --work-item <local-work-item-id>
+```
+
+人工审阅输出的 plan 后，用同一 WorkItem 与 digest 应用：
+
+```bash
+node src/cli.ts reconcile github \
+  --mode apply \
+  --work-item <local-work-item-id> \
+  --expected-plan-digest <sha256>
+```
+
+runtime 会在网络前核对 mapping 中的 Linear UUID 与 WorkItem rich link、required evidence 和 active Attempt；随后精确读取 PR number、fork-aware head repository/branch、当前 head checks 和 reviewer-specific decisive reviews，并在采集后再次读取 PR 防止 revision race。新 head 即使 Evidence 尚未齐全也会先计划 Artifact，使旧 Evidence 不再满足当前验收；重复 facts 返回 `up_to_date`。apply 会重新采集 reviewed plan，把 Check name/app 与 Review reviewer selector 同时绑定到 snapshot，并回读 exact PR/check/review provenance，只写本地 atomic journal。已提交 digest 的重试会先从当前 index/journal 验证 mapping 与 active head：精确匹配时即使功能关闭或无凭证也零网络返回 receipt，旧 head 或 mapping 漂移则 stale。输出始终为 `githubWrites: 0`、`linearWrites: 0`。
+
 ## Linear ready work
 
 以下命令只读列出配置 Project/Team 中精确处于 Todo 的 Issue：
@@ -159,6 +182,7 @@ node src/cli.ts sync linear --dry-run
 19. Linear Tracker Bootstrap 已显式配置 Project/Backlog State，通过分页只读 resolver 验证 Organization/Team/Project/State 关系，并以固定 endpoint、单凭证、15 秒 timeout、128 KiB request 和 64 KiB streaming response 的真实 HTTP exchange 完成只读 smoke；Operation v2 schema introspection 也确认 create/query 所需字段存在，但 exchange 仍未注入真实写链。
 20. Linear Ready Work 已显式配置 Todo/Done、50×20 有界 Issue 分页、客户端 scope 对账、native/declared blocker union 与实时 Done 门禁；bootstrap map target 必须绑定 resolved Organization/Team/Project，正确 scope 中未覆盖的新 Issue 由完整 native relation 判定。CLI 只接受 UUID 单票，提供 list→preview→apply，list 不读取 journal，本地 create/link 复用 Snapshot Import、provenance、atomic batch 和离线 receipt replay；依赖索引拒绝 ADS/路径逃逸并有 512 KiB 上限，真实 smoke 为 0 候选且 journal hash 不变。
 21. Control Room 已由 application-owned coordinator 提供任务选择、单项 cancel、默认 1/最大 8 的有界并发和安全容量投影；选择不会被轮询重置，有可用槽位时无关任务可并行，取消在 Attempt terminal 写完前保持 `cancelling`，人工 retry 生成新 Attempt 并保留旧历史。
+22. GitHub DeliveryMapping 已把 Linear UUID、WorkItem、target PR、fork-aware head branch 与最多七项 Check/Review criteria/selector identity 显式绑定；CLI 提供 read-only preview 与 local atomic apply，head fence、missing Evidence、重复对账、exact provenance、selector tamper、旧/当前 head receipt replay 和 disabled/foreign-target 零网络均有自动化验证，且没有 GitHub/Linear mutation。Review batch 使用 PolicyBinding v3；首条 v3 record 落盘后只能回退到具备 v3 union reader 的版本。
 
 ## 项目结构
 
@@ -182,4 +206,4 @@ test/          领域、连接器、集成和 HTTP 测试
 
 计划内 Node.js 服务端源码已迁移到 TypeScript；浏览器原生脚本 `public/` 暂不进入 TypeScript 构建。当前 `private: true` 包只支持源码 checkout 运行，尚不把 `bin: src/cli.ts` 视为可安装 npm 发布物。TypeScript、NestJS 与 monorepo 的取舍见 `docs/adr/0002-typescript-repository-strategy.md`，迁移规格见 `docs/specs/0005-typescript-migration.md`。
 
-实验结果见 `docs/experiments/`，Runner 设计见 `docs/architecture/codex-runner.md`，连接器演进方向见 `docs/architecture/connectors.md`，工作跟踪规则见 `docs/standards/work-tracking.md`，当前产品化路线见 `docs/tickets/0005-linear-productization-milestone.md`。现有 Provider 契约见 `docs/research/0001-github-linear-read-contracts.md`，第二 Provider 选择证据见 `docs/research/0002-gitee-feishu-provider-probe.md` 与 `docs/adr/0003-select-gitee-as-second-provider.md`。Provider Observation 的边界与持久化决策见 `docs/specs/0007-provider-observation-read-model.md` 和 `docs/adr/0004-provider-observation-read-model.md`；受控写状态、Operation Journal、fake Linear transport、coordinator、安全 UI 投影、持久化边界、Linear correlation、tracker bootstrap、Operation v2 与 ready-work intake 见 `docs/specs/0009-controlled-linear-write-operation.md`、`docs/specs/0010-provider-operation-journal.md`、`docs/specs/0011-fake-linear-write-transport.md`、`docs/specs/0012-controlled-write-coordinator.md`、`docs/specs/0013-provider-operation-projection.md`、`docs/specs/0016-linear-tracker-bootstrap.md`、`docs/specs/0017-controlled-linear-write-operation-v2.md`、`docs/specs/0018-linear-ready-work-intake.md`、`docs/adr/0005-controlled-write-operation-journal.md`、`docs/adr/0008-reader-first-linear-operation-v2.md`、`docs/adr/0009-linear-ready-work-read-boundary.md` 和 `docs/research/0003-linear-controlled-write-correlation.md`。
+实验结果见 `docs/experiments/`，Runner 设计见 `docs/architecture/codex-runner.md`，连接器演进方向见 `docs/architecture/connectors.md`，工作跟踪规则见 `docs/standards/work-tracking.md`，当前产品化路线见 `docs/tickets/0005-linear-productization-milestone.md`。现有 Provider 契约见 `docs/research/0001-github-linear-read-contracts.md`，第二 Provider 选择证据见 `docs/research/0002-gitee-feishu-provider-probe.md` 与 `docs/adr/0003-select-gitee-as-second-provider.md`。Provider Observation 的边界与持久化决策见 `docs/specs/0007-provider-observation-read-model.md` 和 `docs/adr/0004-provider-observation-read-model.md`；受控写状态、Operation Journal、fake Linear transport、coordinator、安全 UI 投影、持久化边界、Linear correlation、tracker bootstrap、Operation v2、ready-work intake 与 GitHub delivery reconciliation 见 `docs/specs/0009-controlled-linear-write-operation.md`、`docs/specs/0010-provider-operation-journal.md`、`docs/specs/0011-fake-linear-write-transport.md`、`docs/specs/0012-controlled-write-coordinator.md`、`docs/specs/0013-provider-operation-projection.md`、`docs/specs/0016-linear-tracker-bootstrap.md`、`docs/specs/0017-controlled-linear-write-operation-v2.md`、`docs/specs/0018-linear-ready-work-intake.md`、`docs/specs/0020-github-delivery-evidence.md`、`docs/adr/0005-controlled-write-operation-journal.md`、`docs/adr/0008-reader-first-linear-operation-v2.md`、`docs/adr/0009-linear-ready-work-read-boundary.md`、`docs/adr/0011-explicit-github-delivery-mapping.md`、`docs/experiments/0028-github-delivery-evidence.md` 和 `docs/research/0003-linear-controlled-write-correlation.md`。

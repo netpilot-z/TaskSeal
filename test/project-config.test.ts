@@ -6,6 +6,7 @@ import test, { type TestContext } from "node:test";
 
 import {
   getGiteeCoordinates,
+  getGitHubDeliveryCoordinates,
   getGitHubCoordinates,
   getLinearBootstrapCoordinates,
   getLinearCoordinates,
@@ -17,7 +18,14 @@ test("project configuration exposes validated non-secret provider coordinates", 
   const cwd = await createTemporaryDirectory(t);
   await writeConfiguration(cwd, {
     project: "TaskSeal",
-    github: { repository: "netpilot-z/TaskSeal" },
+    github: {
+      repository: "netpilot-z/TaskSeal",
+      delivery: {
+        enabled: true,
+        mappingIndex:
+          "config/github-delivery-map.json"
+      }
+    },
     gitee: { repository: "NetPilot-Z/TaskSeal" },
     linear: {
       workspace: "TaskSeal",
@@ -41,6 +49,15 @@ test("project configuration exposes validated non-secret provider coordinates", 
   assert.deepEqual(getGitHubCoordinates(configuration), {
     repository: "netpilot-z/TaskSeal"
   });
+  assert.deepEqual(
+    getGitHubDeliveryCoordinates(configuration),
+    {
+      repository: "netpilot-z/TaskSeal",
+      enabled: true,
+      mappingIndex:
+        "config/github-delivery-map.json"
+    }
+  );
   assert.deepEqual(getGiteeCoordinates(configuration), {
     repository: "NetPilot-Z/TaskSeal"
   });
@@ -181,6 +198,43 @@ test("project configuration reports invalid JSON and provider coordinates safely
           }
         }),
       hasCode("LINEAR_CONFIG_INVALID")
+    );
+  }
+
+  for (const delivery of [
+    undefined,
+    {
+      enabled: true,
+      mappingIndex: "../outside.json"
+    },
+    {
+      enabled: true,
+      mappingIndex:
+        "config\\github-delivery-map.json"
+    },
+    {
+      enabled: "yes",
+      mappingIndex:
+        "config/github-delivery-map.json"
+    },
+    {
+      enabled: true,
+      mappingIndex:
+        "config/github-delivery-map.json",
+      token: "must-not-be-configured"
+    }
+  ]) {
+    assert.throws(
+      () =>
+        getGitHubDeliveryCoordinates({
+          project: "TaskSeal",
+          github: {
+            repository:
+              "netpilot-z/TaskSeal",
+            delivery
+          }
+        }),
+      hasCode("GITHUB_CONFIG_INVALID")
     );
   }
 

@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "provider": "github",
+  "target": {
+    "repository": "netpilot-z/TaskSeal"
+  },
+  "entries": []
+}

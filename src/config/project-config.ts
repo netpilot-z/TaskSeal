@@ -16,6 +16,12 @@ export interface LinearBootstrapCoordinates {
   readonly backlogState: string;
 }
 
+export interface GitHubDeliveryCoordinates {
+  readonly repository: string;
+  readonly enabled: boolean;
+  readonly mappingIndex: string;
+}
+
 export interface LinearReadyWorkCoordinates {
   readonly workspace: string;
   readonly team: string;
@@ -101,6 +107,38 @@ export function getGitHubCoordinates(
   }
 
   return { repository };
+}
+
+export function getGitHubDeliveryCoordinates(
+  configuration: ProjectConfiguration | null | undefined
+): GitHubDeliveryCoordinates {
+  const { repository } =
+    getGitHubCoordinates(configuration);
+  const delivery =
+    configuration?.github?.delivery;
+
+  if (
+    !isRecord(delivery) ||
+    !hasExactKeys(delivery, [
+      "enabled",
+      "mappingIndex"
+    ]) ||
+    typeof delivery.enabled !== "boolean" ||
+    !isRepositoryRelativePath(
+      delivery.mappingIndex
+    )
+  ) {
+    throw configError(
+      "GITHUB_CONFIG_INVALID",
+      "GitHub delivery configuration requires an enabled flag and repository-relative mapping index."
+    );
+  }
+
+  return {
+    repository,
+    enabled: delivery.enabled,
+    mappingIndex: delivery.mappingIndex
+  };
 }
 
 export function getLinearCoordinates(

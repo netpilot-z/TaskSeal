@@ -14,7 +14,8 @@ export type ProviderName = "github" | "linear" | "gitee";
 export type ProviderObjectType =
   | "check"
   | "issue"
-  | "pull_request";
+  | "pull_request"
+  | "pull_request_review";
 
 export interface ProviderSourceObject {
   providerObjectKey: string;
@@ -41,6 +42,21 @@ export interface ProviderPullRequestObservation {
 
 export interface ProviderCheckObservation {
   headRevision: string;
+  outcome: "passed" | "failed";
+  name?: string;
+  appId?: string;
+  pullRequestRevisionId?: string;
+}
+
+export type ProviderPullRequestReviewState =
+  | "approved"
+  | "changes_requested"
+  | "dismissed";
+
+export interface ProviderPullRequestReviewObservation {
+  headRevision: string;
+  reviewerId: string;
+  state: ProviderPullRequestReviewState;
   outcome: "passed" | "failed";
 }
 
@@ -73,10 +89,22 @@ export interface ProviderCheckFact {
   candidateEvent: EvidenceRecordedEvent;
 }
 
+export interface ProviderPullRequestReviewFact {
+  sourceObject: ProviderSourceObject & {
+    provider: "github";
+    objectType: "pull_request_review";
+  };
+  revision: ProviderRevision;
+  observed:
+    ProviderPullRequestReviewObservation;
+  candidateEvent: EvidenceRecordedEvent;
+}
+
 export type ProviderFact =
   | ProviderIssueFact
   | ProviderPullRequestFact
-  | ProviderCheckFact;
+  | ProviderCheckFact
+  | ProviderPullRequestReviewFact;
 
 export interface ProviderSnapshotScope {
   kind: "repository" | "team";
@@ -92,6 +120,23 @@ export interface ProviderSnapshotMapping {
   artifactId?: string;
   artifactRevision?: string;
   criterionKey?: string;
+  deliveryBindingDigest?: string;
+  pullRequestNumber?: number;
+  evidenceBindings?: Array<{
+    providerObjectKey: string;
+    criterionKey: string;
+    source:
+      | {
+          kind: "check_run";
+          name: string;
+          appId?: string;
+        }
+      | {
+          kind:
+            "pull_request_review";
+          reviewerId: string;
+        };
+  }>;
 }
 
 export interface ProviderSnapshotV2 {
@@ -114,4 +159,75 @@ export function digestProviderFactContent(
     sourceObject: fact.sourceObject,
     observed: fact.observed
   });
+}
+
+export function deriveGitHubDeliveryEventId({
+  deliveryBindingDigest,
+  workItemId,
+  attemptId,
+  artifactId,
+  artifactRevision,
+  sourceObjectKey,
+  sourceRevisionId,
+  criterionKey
+}: {
+  deliveryBindingDigest: string;
+  workItemId: string;
+  attemptId: string;
+  artifactId: string;
+  artifactRevision: string;
+  sourceObjectKey: string;
+  sourceRevisionId: string;
+  criterionKey?: string | undefined;
+}): string {
+  const digest = digestCanonicalJson({
+    schemaVersion: 1,
+    kind:
+      criterionKey === undefined
+        ? "artifact"
+        : "evidence",
+    deliveryBindingDigest,
+    workItemId,
+    attemptId,
+    artifactId,
+    artifactRevision,
+    sourceObjectKey,
+    sourceRevisionId,
+    ...(criterionKey === undefined
+      ? {}
+      : { criterionKey })
+  });
+
+  return `github:delivery:${digest.slice("sha256:".length)}`;
+}
+
+export function deriveGitHubCheckSourceRevision({
+  completedAt,
+  name,
+  appId,
+  pullRequestRevisionId
+}: {
+  completedAt: string;
+  name: string;
+  appId: string;
+  pullRequestRevisionId: string;
+}): string {
+  return digestCanonicalJson({
+    schemaVersion: 2,
+    kind: "github_check_run",
+    completedAt,
+    name,
+    appId,
+    pullRequestRevisionId
+  });
+}
+
+export function deriveGitHubReviewSourceRevision({
+  pullRequestUpdatedAt,
+  state
+}: {
+  pullRequestUpdatedAt: string;
+  state: ProviderPullRequestReviewState;
+}): string {
+  return `${pullRequestUpdatedAt}:${state}`;
 }

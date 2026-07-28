@@ -7,12 +7,15 @@ import {
   MAX_PROVIDER_FACT_PROVENANCE_CLAIMS
 } from "../application/provider-fact-provenance.ts";
 import {
+  deriveGitHubCheckSourceRevision,
+  deriveGitHubReviewSourceRevision,
   digestProviderFactContent
 } from "../lib/provider-snapshot.ts";
 import {
   readGitHubCheckRun,
   readGitHubIssue,
-  readGitHubPullRequest
+  readGitHubPullRequest,
+  readGitHubPullRequestReview
 } from "./github-read-client.ts";
 import type {
   FetchLike
@@ -308,6 +311,13 @@ async function verifyGitHubClaim(
     claim.locator.kind === "github.check_run"
   ) {
     let check;
+    let pullRequest:
+      | Awaited<
+          ReturnType<
+            typeof readGitHubPullRequest
+          >
+        >
+      | null = null;
 
     try {
       check = await readGitHubCheckRun({
@@ -315,6 +325,20 @@ async function verifyGitHubClaim(
         repository,
         checkRunId: claim.locator.id
       });
+      if (
+        claim.locator
+          .pullRequestNumber !==
+        undefined
+      ) {
+        pullRequest =
+          await readGitHubPullRequest({
+            ...readOptions,
+            repository,
+            pullRequestNumber:
+              claim.locator
+                .pullRequestNumber
+          });
+      }
     } catch {
       throw unavailable();
     }
@@ -336,6 +360,31 @@ async function verifyGitHubClaim(
       externalId,
       url: check.details_url
     };
+    const deliveryCheckAppId =
+      check.app === undefined ||
+      check.app === null
+        ? null
+        : String(check.app.id);
+    const sourceRevisionId =
+      claim.locator
+        .pullRequestNumber ===
+      undefined
+        ? check.completed_at
+        : deliveryCheckAppId !== null &&
+            /^[1-9]\d*$/.test(
+              deliveryCheckAppId
+            )
+          ? deriveGitHubCheckSourceRevision({
+              completedAt:
+                check.completed_at,
+              name: check.name,
+              appId:
+                deliveryCheckAppId,
+              pullRequestRevisionId:
+                pullRequest
+                  ?.updated_at ?? ""
+            })
+          : null;
 
     return (
       externalId === claim.externalId &&
@@ -343,7 +392,7 @@ async function verifyGitHubClaim(
       sourceObject.providerObjectKey ===
         claim.providerObjectKey &&
       check.details_url === claim.url &&
-      check.completed_at ===
+      sourceRevisionId ===
         claim.sourceRevisionId &&
       claim.eventType ===
         "evidence.recorded" &&
@@ -354,6 +403,34 @@ async function verifyGitHubClaim(
       claim.content.kind === "check" &&
       check.head_sha ===
         claim.content.headRevision &&
+      (
+        pullRequest === null ||
+        (
+          claim.locator
+            .pullRequestNumber !==
+            undefined &&
+          String(
+            pullRequest.number
+          ) ===
+            String(
+              claim.locator
+                .pullRequestNumber
+            ) &&
+          isMappedGitHubPullRequestUrl({
+            value:
+              pullRequest.html_url,
+            repository,
+            pullRequestNumber:
+              claim.locator
+                .pullRequestNumber
+          }) &&
+          pullRequest.head.sha ===
+            check.head_sha &&
+          pullRequest.head.sha ===
+            claim.content
+              .headRevision
+        )
+      ) &&
       (
         check.conclusion === "success"
           ? "passed"
@@ -368,6 +445,118 @@ async function verifyGitHubClaim(
               ? "passed"
               : "failed"
         }
+      }) === claim.contentDigest
+    );
+  }
+
+  if (
+    claim.objectType ===
+      "pull_request_review" &&
+    claim.locator.kind ===
+      "github.pull_request_review"
+  ) {
+    let pullRequest;
+    let review;
+
+    try {
+      review =
+        await readGitHubPullRequestReview({
+          ...readOptions,
+          repository,
+          pullRequestNumber:
+            claim.locator
+              .pullRequestNumber,
+          reviewId:
+            claim.locator.id
+        });
+      pullRequest =
+        await readGitHubPullRequest({
+          ...readOptions,
+          repository,
+          pullRequestNumber:
+            claim.locator
+              .pullRequestNumber
+        });
+    } catch {
+      throw unavailable();
+    }
+
+    const state =
+      review.state === "APPROVED"
+        ? "approved"
+        : review.state ===
+            "CHANGES_REQUESTED"
+          ? "changes_requested"
+          : review.state ===
+              "DISMISSED"
+            ? "dismissed"
+            : null;
+    if (
+      state === null ||
+      claim.content.kind !==
+        "pull_request_review"
+    ) {
+      return false;
+    }
+
+    const externalId = String(review.id);
+    const reviewerId =
+      String(review.user.id);
+    const outcome =
+      state === "approved"
+        ? "passed"
+        : "failed";
+    const sourceObject = {
+      providerObjectKey:
+        `github:pull_request_review:${externalId}`,
+      provider: "github" as const,
+      objectType:
+        "pull_request_review" as const,
+      externalId,
+      url: review.html_url
+    };
+    const observed = {
+      headRevision:
+        pullRequest.head.sha,
+      reviewerId,
+      state,
+      outcome
+    };
+
+    return (
+      externalId === claim.externalId &&
+      externalId ===
+        claim.locator.id &&
+      String(pullRequest.number) ===
+        String(
+          claim.locator
+            .pullRequestNumber
+        ) &&
+      sourceObject.providerObjectKey ===
+        claim.providerObjectKey &&
+      review.html_url === claim.url &&
+      review.commit_id ===
+        pullRequest.head.sha &&
+      pullRequest.head.sha ===
+        claim.content.headRevision &&
+      reviewerId ===
+        claim.content.reviewerId &&
+      state === claim.content.state &&
+      outcome === claim.content.outcome &&
+      pullRequest.updated_at ===
+        claim.sourceOccurredAt &&
+      pullRequest.updated_at ===
+        claim.eventOccurredAt &&
+      deriveGitHubReviewSourceRevision({
+        pullRequestUpdatedAt:
+          pullRequest.updated_at,
+        state
+      }) === claim.sourceRevisionId &&
+      claim.eventType ===
+        "evidence.recorded" &&
+      digestProviderFactContent({
+        sourceObject,
+        observed
       }) === claim.contentDigest
     );
   }
@@ -572,6 +761,48 @@ function readGitHubRepository(
     )
     ? repository
     : null;
+}
+
+function isMappedGitHubPullRequestUrl({
+  value,
+  repository,
+  pullRequestNumber
+}: {
+  value: string;
+  repository: string;
+  pullRequestNumber: number;
+}): boolean {
+  let url: URL;
+
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+
+  const [owner, name] =
+    repository.split("/");
+  const parts = url.pathname.split("/");
+
+  return (
+    url.protocol === "https:" &&
+    url.hostname.toLowerCase() ===
+      "github.com" &&
+    !url.username &&
+    !url.password &&
+    !url.port &&
+    !url.search &&
+    !url.hash &&
+    parts.length === 5 &&
+    parts[0] === "" &&
+    parts[1]?.toLowerCase() ===
+      owner &&
+    parts[2]?.toLowerCase() ===
+      name &&
+    parts[3] === "pull" &&
+    parts[4] ===
+      String(pullRequestNumber)
+  );
 }
 
 function readLinearScope(
