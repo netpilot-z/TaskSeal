@@ -35,6 +35,18 @@ reconciliation 才能成为 canonical 事实。deadline/cancel 会在 Host settl
 bounded Adapter cleanup；清理未确认会形成稳定错误、fence 当前 Host，并要求重建
 runtime 后才能继续派发。
 
+NP-9 已加入独立的 Decomposition Lifecycle：`preview → human approve → explicit
+dispatch ticks → node Evidence/Acceptance → retirement`。计划只引用既有 WorkItem，
+不建立第二套任务；owner 绑定批准时的 Runner profile revision，节点只有在全部依赖
+accepted 后才可派发和验收。Control Room 只使用 `acceptedNodes / totalNodes` 作为
+进度，展示真实 phase、blocker、owner drift、Evidence、retry 和 Attempt trace，
+ready queue 明确为 ephemeral。legacy approval-only 文件保持 envelope v1，首条 retirement
+才升级 v2；新 approval record v2 在同一 admission claim 内捕获 root/node Attempt
+baseline，并写 envelope v3。节点 phase、retry、依赖和 Acceptance 只读取 baseline
+之后的当前 plan Attempt；replacement generation 不继承旧历史状态。退役不可逆，
+且必须经过唯一 lifecycle dispatcher 的 coordinator/canonical/acceptance claim
+静默检查，释放 ownership 但不删除或改写 WorkItem 与任何交付历史。
+
 自 2026-07-28 起，Linear 是内部产品研发任务的权威来源；GitHub Issue 只承载外部 Bug、公开反馈和仓库级问题，GitHub PR/Review/CI 继续承载代码交付。仓库 `docs/tickets/` 是可审查的规格拆分与 bootstrap 输入，不是第二套在线状态；`NP-2`～`NP-12` 已按预存 UUID 创建并回读核验，映射见 `0007-linear-bootstrap-map.json`，默认 `0006` manifest 当前为空。GitHub 规划 Issue `#7`、`#25`、`#32` 已留下 Linear 链接并迁移关闭。Issue 创建、更新和评论权限已验证；权限扩展后重试 `issueRelationCreate` 仍返回 `FORBIDDEN`，因此原生依赖关系尚未建立。Issue Create Operation v2 仍只在 fake transport 验证；人工 Acceptance 专用 Transition Operation v3 已通过默认关闭的 `linear.acceptance` 开关接入 Control Room 与真实 HTTP exchange，其他外部 mutation 不能旁路各自的审批合同。
 
 Linear ready-work intake 已使用独立 connector/application composition 实现：50×20 有界读取精确 Todo Issue，客户端复核 Organization/Team/Project/State，合并原生 inverse blocker 与严格 bootstrap UUID topology，并按 UUID 实时读取依赖的 Done 状态。bootstrap map target 必须与 resolved Organization/Team/Project UUID 精确一致；foreign/missing target 在候选读取前停止。正确 scope 的 map 只补充已覆盖 Issue 的历史拓扑，不是新任务 allowlist；未覆盖 Issue 由完整 native relation 判定。只有依赖完整且全部为配置的 completed state 才能 preview/apply；missing、Canceled、非 Done 或 unknown 都停止。CLI 必须显式提供 Issue UUID、WorkItem ID、Evidence key 与 reviewed plan digest；list 不打开 canonical journal，新 apply 复用 Snapshot Import/provenance/atomic batch，只物化本地 rich ExternalLink，不启动 Runner、不写 Linear。apply 会先重放本地 journal；committed receipt 只有同时绑定 provider/scope/source/work-item/mapping 才可在配置、凭证和网络前离线返回 idempotent。禁用开关时新 ready-work 请求零网络，历史 receipt replay 仍保持可用。
@@ -63,6 +75,9 @@ Provider status v2 已由 application façade 并行读取 Provider Observation 
 | `DigitalEmployeeAdapter` | 可替换执行端的 v1 窄 port；只获得 instruction、受限 workspace、deadline 与 AbortSignal，不获得控制面能力。 |
 | `RunnerCapabilityManifest` | Runner 对 workspace/cancel/timeout/handoff 的版本化能力声明；声明本身不授权。 |
 | `HandoffClaim` | Runner 返回的 bounded 不可信 Artifact/Evidence 坐标；不是 canonical Artifact/Evidence，也不能直接用于 Acceptance。 |
+| `DecompositionPlan` | 人工批准、digest-bound 的有界 WorkItem DAG；保存稳定拓扑、节点 owner profile、执行约束、验收标准和 retry policy。 |
+| `DecompositionAttemptBaseline` | approval 线性化点为 root/node 捕获的 Attempt ID 前缀水位；定义当前计划的执行代际，前缀漂移时失败关闭。 |
+| `DecompositionRetirement` | 已批准计划的不可逆终止决定；释放 active ownership，保留审批与全部交付历史，同一 plan ID 不可复活。 |
 | `Artifact` | 执行产生的交付物，例如 Pull Request、文档、视频或报告。 |
 | `Evidence` | 支持验收判断的可复核事实，例如测试结果、截图、审查结论。 |
 | `AcceptanceDecision` | 对 WorkItem 作出的接受或拒绝决定。 |
@@ -106,3 +121,8 @@ Provider status v2 已由 application façade 并行读取 Provider Observation 
 19. GitHub Review import 使用 PolicyBinding v3；第一条 v3 batch 落盘后形成单向 reader fence，只能回退到认识 v1/v2/v3 union 的版本。Committed delivery receipt 必须以当前 mapping、active Artifact、Evidence selector、actions 和 event IDs 离线重建；旧 head 或 mapping 漂移不得复用历史 receipt。
 20. 新 Acceptance 必须提交浏览器所见的 review revision，actor 只能由服务端固定身份注入；Reject 永不访问 Linear，Accept 的本地决定先于任何 Provider write。Linear 同步失败或未知不能回滚、覆盖或伪装本地 Acceptance。
 21. 当前 accepted WorkItem 不得通过普通 Run 隐式创建新 Attempt；显式 reopen 需要独立合同。Transition response lost 只允许从持久 operation 按同一 UUID reconcile，不允许第二次 mutation。
+22. Decomposition 节点必须引用既有且唯一的 canonical WorkItem；root 不能递归成为节点，同一 active WorkItem 不能被两个计划占有。
+23. DAG 节点只有在全部依赖被当前 plan Attempt 与 Acceptance basis 证明 accepted 时才能派发或验收；全局 status、旧计划 Attempt、Artifact 或 Evidence 都不能替代。
+24. Decomposition progress 只按 accepted nodes 计算；ephemeral queue、active phase、retry time 或 Agent 自报文本都不能转换成完成百分比。
+25. Retirement 只能在 root 与全部节点对 coordinator 和 canonical WorkItem 均静默时提交；它与 dispatch 必须线性化、终态不可复活，并且不得删除或改写任何交付历史。
+26. Approval、普通 Run、Acceptance 与 Retirement 必须经过同一个 lifecycle admission owner；baseline 之前的 Attempt 不得计入当前计划的 owner、retry、trace、Evidence 或 Acceptance。

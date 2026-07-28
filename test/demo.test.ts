@@ -28,6 +28,18 @@ test("the complete fixture chain produces a reproducible accepted dashboard", as
   assert.ok(workItem);
   const evidence = workItem.evidence[0];
   assert.ok(evidence);
-  assert.equal(workItem.progress, 100);
+  assert.deepEqual(
+    workItem.progress,
+    {
+      basis:
+        "acceptance-and-current-evidence",
+      accepted: true,
+      passedEvidence: 1,
+      failedEvidence: 0,
+      missingEvidence: 0,
+      totalEvidence: 1,
+      uncertainty: "verified"
+    }
+  );
   assert.equal(evidence.outcome, "passed");
 });

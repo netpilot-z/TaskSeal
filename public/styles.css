@@ -503,6 +503,12 @@ h1 {
   color: var(--text);
 }
 
+.button-danger {
+  border-color: rgba(255, 130, 119, 0.55);
+  background: rgba(255, 130, 119, 0.16);
+  color: #ffd2ce;
+}
+
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -562,6 +568,340 @@ h1 {
 
 .summary-accepted {
   --card-color: var(--accent);
+}
+
+.orchestration-panel {
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+
+.orchestration-heading {
+  align-items: center;
+}
+
+.orchestration-overview {
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.orchestration-plans {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.orchestration-empty {
+  display: grid;
+  min-height: 150px;
+  place-content: center;
+  text-align: center;
+}
+
+.orchestration-empty p {
+  max-width: 520px;
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.orchestration-plan {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--surface-raised);
+}
+
+.orchestration-plan-header,
+.orchestration-node-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.orchestration-plan-header h3,
+.orchestration-node-heading h4 {
+  margin: 4px 0 5px;
+  font-size: 16px;
+}
+
+.orchestration-plan-header p {
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.orchestration-dispatch {
+  min-height: 44px;
+  flex: 0 0 auto;
+}
+
+.orchestration-plan-actions,
+.orchestration-retirement-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.orchestration-retirement-form {
+  display: grid;
+  gap: 13px;
+  margin-top: 14px;
+  padding: 15px;
+  border: 1px solid rgba(255, 130, 119, 0.34);
+  border-radius: 12px;
+  background: rgba(255, 130, 119, 0.05);
+}
+
+.orchestration-retirement-form[hidden] {
+  display: none;
+}
+
+.orchestration-retirement-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.orchestration-retirement-form select,
+.orchestration-retirement-form textarea {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.orchestration-retirement-form textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.orchestration-retirement-form select:focus-visible,
+.orchestration-retirement-form textarea:focus-visible,
+.orchestration-retirement-record:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.retirement-warning {
+  margin: 0;
+  color: #ffd2ce;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.retirement-confirmation {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+}
+
+.retirement-confirmation input {
+  width: 18px;
+  height: 18px;
+}
+
+.orchestration-metadata,
+.orchestration-node-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 18px 0 0;
+}
+
+.orchestration-metadata > div,
+.orchestration-node-facts > div {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.orchestration-metadata dt,
+.orchestration-node-facts dt {
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.orchestration-metadata dd,
+.orchestration-node-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
+.orchestration-queue {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.orchestration-nodes,
+.orchestration-attempts {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.orchestration-node {
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--muted);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.orchestration-node[data-phase="ready"],
+.orchestration-node[data-phase="accepted"] {
+  border-left-color: var(--accent);
+}
+
+.orchestration-node[data-phase="running"] {
+  border-left-color: var(--blue);
+}
+
+.orchestration-node[data-phase="blocked"],
+.orchestration-node[data-phase="unknown"] {
+  border-left-color: var(--red);
+}
+
+.orchestration-phase {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.orchestration-node-heading code,
+.orchestration-attempts code {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.orchestration-evidence {
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.orchestration-blockers {
+  display: grid;
+  gap: 4px;
+  margin: 10px 0 0;
+  padding: 10px 10px 10px 28px;
+  border: 1px solid rgba(255, 130, 119, 0.25);
+  border-radius: 9px;
+  background: rgba(255, 130, 119, 0.06);
+  color: #ffc5bf;
+  font-size: 10px;
+}
+
+.orchestration-attempts li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.orchestration-node details {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.orchestration-retirement-audit {
+  padding: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.orchestration-retirement-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.orchestration-retirement-heading h3 {
+  margin: 4px 0 0;
+  font-size: 14px;
+}
+
+.orchestration-retirement-heading > span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.orchestration-retirements {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.orchestration-retirement-record {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1.2fr)
+    minmax(0, 1fr)
+    minmax(0, 1fr)
+    minmax(0, 0.8fr);
+  gap: 8px 14px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: rgba(0, 0, 0, 0.1);
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.orchestration-retirement-record > div {
+  display: grid;
+  gap: 3px;
+}
+
+.orchestration-retirement-record strong {
+  color: var(--text);
+}
+
+.orchestration-retirement-record code,
+.orchestration-retirement-record p,
+.orchestration-retirement-record span {
+  overflow-wrap: anywhere;
+}
+
+.orchestration-retirement-record details {
+  grid-column: 1 / -1;
+}
+
+.orchestration-retirement-record p {
+  margin: 7px 0 0;
+  line-height: 1.5;
+}
+
+.orchestration-retirement-empty {
+  padding: 13px;
+  border: 1px dashed var(--line);
+  border-radius: 11px;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .provider-panel {
@@ -1161,28 +1501,33 @@ h1 {
   align-items: center;
   gap: 14px;
   margin: 24px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.018);
 }
 
-.progress-track {
-  height: 5px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: #252c2a;
+.progress-row > div {
+  display: grid;
+  gap: 3px;
 }
 
-.progress-track span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, #94b64a, var(--accent));
-  transition: width 360ms ease;
+.progress-row strong {
+  color: var(--text);
+  font-size: 13px;
 }
 
-.progress-row > strong {
-  min-width: 36px;
+.progress-row small {
   color: var(--muted);
   font-size: 11px;
-  text-align: right;
+}
+
+.progress-certainty {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .work-detail-grid {
@@ -1564,6 +1909,12 @@ h1 {
   .provider-content {
     grid-template-columns: 1fr;
   }
+
+  .orchestration-metadata,
+  .orchestration-node-facts {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 620px) {
@@ -1639,9 +1990,47 @@ h1 {
   }
 
   .provider-panel-heading,
-  .provider-heading-actions {
+  .provider-heading-actions,
+  .orchestration-heading,
+  .orchestration-plan-header,
+  .orchestration-node-heading,
+  .orchestration-retirement-heading {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .orchestration-overview {
+    align-self: flex-start;
+    white-space: normal;
+  }
+
+  .orchestration-plan-actions,
+  .orchestration-retirement-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  .orchestration-plan-actions .button,
+  .orchestration-retirement-actions .button {
+    width: 100%;
+  }
+
+  .orchestration-metadata,
+  .orchestration-node-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .orchestration-evidence {
+    white-space: normal;
+  }
+
+  .orchestration-retirement-record {
+    grid-template-columns: 1fr;
+  }
+
+  .orchestration-retirement-record details {
+    grid-column: auto;
   }
 
   .provider-heading-actions {

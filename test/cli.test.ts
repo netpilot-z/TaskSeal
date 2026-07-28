@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import {
   resolveCodexInvocation,
   runCli,
+  runLocalCodexWorkItem,
   startPersistentControlRoom
 } from "../src/cli.ts";
 import type {
@@ -385,11 +386,39 @@ test("persistent start wires one service and runner into the Control Room", asyn
     }
   };
   const runner = {
+    manifest: {
+      runnerId: "codex-app-server"
+    },
     async run(options: ManagedRunnerRunOptions) {
       calls.push(options);
       return { outcome: "completed" };
     }
   };
+  const decomposition = {
+    capabilities: {
+      preview: true,
+      approve: true,
+      dispatch: true,
+      retire: true
+    },
+    preview() {
+      return {};
+    },
+    async approve() {
+      return {};
+    },
+    async retire() {
+      return {};
+    },
+    listRetirements() {
+      return [];
+    },
+    assertManualRunAllowed() {},
+    assertAcceptanceAllowed() {},
+    createDispatcher() {
+      throw new Error("not called");
+    }
+  } as PersistentTaskSealServerOptions["decomposition"];
   const providerObservations = {
     async list() {
       return {
@@ -457,7 +486,11 @@ test("persistent start wires one service and runner into the Control Room", asyn
     initialize: async () => {
       initialized = true;
     },
-    runtimeFactory: async () => ({ service, runner }),
+    runtimeFactory: async () => ({
+      service,
+      runner,
+      decomposition
+    }),
     providerObservationRuntimeFactory: async () => ({
       readModel: providerObservations
     }),
@@ -499,6 +532,10 @@ test("persistent start wires one service and runner into the Control Room", asyn
   assert.equal(server instanceof FakeServer, true);
   assert.ok(serverOptions);
   assert.equal(serverOptions.service, service);
+  assert.equal(
+    serverOptions.decomposition,
+    decomposition
+  );
   assert.equal(acceptanceService, service);
   assert.equal(
     serverOptions.acceptance,
@@ -537,13 +574,34 @@ test("persistent start wires one service and runner into the Control Room", asyn
       cancellationAccepted: false
     })
   };
-  await serverOptions.runWorkItem({
+  const runControlRoomWorkItem =
+    serverOptions.runWorkItem;
+  await runControlRoomWorkItem({
     workItemId: "TS-1",
+    runnerId: "codex-app-server",
     prompt: "Run from the Control Room.",
     sandbox: "read-only",
+    timeoutMs: 120_000,
     signal,
     terminalization
   });
+  await assert.rejects(
+    async () =>
+      runControlRoomWorkItem({
+        workItemId: "TS-2",
+        runnerId: "unknown-runner",
+        prompt: "Do not run.",
+        sandbox: "read-only",
+        timeoutMs: 120_000,
+        signal,
+        terminalization
+      }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code ===
+        "RUNNER_NOT_AVAILABLE"
+  );
   assert.deepEqual(calls, [
     { port: 0, host: "127.0.0.1" },
     {
@@ -551,6 +609,7 @@ test("persistent start wires one service and runner into the Control Room", asyn
       instruction:
         "Run from the Control Room.",
       workspaceAccess: "read-only",
+      timeoutMs: 120_000,
       signal,
       terminalization,
       cwd
@@ -676,6 +735,64 @@ test("run returns a failing exit code for non-completed turns", async (t) => {
 
   assert.equal(exitCode, 1);
   assert.match(output.text(), /failed/);
+});
+
+test("local CLI run refuses a WorkItem managed by an approved decomposition", async () => {
+  let runnerInvoked = false;
+
+  await assert.rejects(
+    runLocalCodexWorkItem({
+      cwd: ".",
+      workItemId: "TS-1",
+      prompt: "Do not bypass the DAG.",
+      runtimeFactory:
+        async () => ({
+          service: {
+            getWorkItem() {
+              return {
+                id: "TS-1",
+                title:
+                  "Managed work"
+              };
+            }
+          },
+          runner: {
+            async run() {
+              runnerInvoked = true;
+              return {
+                attemptId:
+                  "attempt-unexpected",
+                outcome:
+                  "completed",
+                handoffClaims: []
+              };
+            }
+          },
+          decomposition: {
+            assertManualRunAllowed() {
+              throw Object.assign(
+                new Error(
+                  "Managed WorkItems must use DAG dispatch."
+                ),
+                {
+                  code:
+                    "DECOMPOSITION_MANAGED_WORK_ITEM"
+                }
+              );
+            }
+          }
+        })
+    }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code ===
+        "DECOMPOSITION_MANAGED_WORK_ITEM"
+  );
+  assert.equal(
+    runnerInvoked,
+    false
+  );
 });
 
 test("run rejects incomplete or unknown arguments before starting Codex", async (t) => {

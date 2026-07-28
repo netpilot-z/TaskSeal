@@ -94,4 +94,21 @@ test("dashboard projection does not present previous attempt evidence as current
     workItem.acceptanceHistory,
     []
   );
+  assert.deepEqual(
+    workItem.progress,
+    {
+      basis:
+        "acceptance-and-current-evidence",
+      accepted: false,
+      passedEvidence: 0,
+      failedEvidence: 0,
+      missingEvidence: 1,
+      totalEvidence: 1,
+      uncertainty: "incomplete"
+    }
+  );
+  assert.equal(
+    "percent" in workItem.progress,
+    false
+  );
 });

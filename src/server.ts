@@ -18,12 +18,21 @@ import type {
 } from "./application/acceptance-delivery-coordinator.ts";
 import type {
   AttemptRunCoordinatorSnapshot,
+  AttemptRunExecutionContext,
+  AttemptRunStartResult,
   AttemptRunTerminalization,
   AttemptRunView
 } from "./application/attempt-run-coordinator.ts";
 import type {
   ProviderSyncQueryPort
 } from "./application/provider-sync-projection.ts";
+import type {
+  DecompositionExecutionOptions,
+  DecompositionProjection
+} from "./application/decomposition-dispatcher.ts";
+import type {
+  RetiredDecompositionRecord
+} from "./application/decomposition-plan-journal.ts";
 import type { DashboardProjection } from "./dashboard/projection.ts";
 import type { DemoStep } from "./demo/scenario.ts";
 
@@ -55,8 +64,10 @@ export interface PersistentAcceptancePort {
 
 export interface RunWorkItemOptions {
   workItemId: string;
+  runnerId?: string | undefined;
   prompt: string;
   sandbox: "read-only" | "workspace-write";
+  timeoutMs?: number | undefined;
   signal: AbortSignal;
   terminalization: AttemptRunTerminalization;
 }
@@ -65,6 +76,76 @@ export type RunWorkItem = (
   options: RunWorkItemOptions
 ) => unknown | Promise<unknown>;
 
+export interface PersistentDecompositionDispatcherPort {
+  list(): readonly DecompositionProjection[];
+  dispatchOnce(input: {
+    planId: string;
+    expectedPlanDigest: string;
+  }): unknown | Promise<unknown>;
+  retireOnce(input: {
+    planId: string;
+    expectedPlanDigest: string;
+    reasonCode:
+      | "interrupted"
+      | "human_rejected"
+      | "runner_profile_drift"
+      | "operator_rollback";
+    note: string;
+  }): unknown | Promise<unknown>;
+  assertManualRunAllowed(
+    workItemId: string
+  ): void;
+  startManualRun(input: {
+    workItemId: string;
+    execute(
+      context:
+        AttemptRunExecutionContext
+    ): unknown | Promise<unknown>;
+  }): AttemptRunStartResult;
+  decideAcceptanceOnce<T>(
+    input: {
+      workItemId: string;
+      decision:
+        | "accepted"
+        | "rejected";
+      decide: () =>
+        T | Promise<T>;
+    }
+  ): Promise<T>;
+}
+
+export interface PersistentDecompositionControlPort {
+  readonly capabilities: {
+    readonly preview: boolean;
+    readonly approve: boolean;
+    readonly dispatch: boolean;
+    readonly retire: boolean;
+  };
+  preview(draft: unknown): unknown;
+  approve(input: {
+    draft: unknown;
+    expectedPlanDigest: unknown;
+  }): unknown | Promise<unknown>;
+  listRetirements():
+    readonly RetiredDecompositionRecord[];
+  assertManualRunAllowed(
+    workItemId: string
+  ): void;
+  assertAcceptanceAllowed(
+    workItemId: string,
+    decision:
+      | "accepted"
+      | "rejected"
+  ): void;
+  createDispatcher(options: {
+    attemptRuns: AttemptRunCoordinator;
+    execute(
+      options: DecompositionExecutionOptions
+    ): unknown | Promise<unknown>;
+  }): PersistentDecompositionDispatcherPort;
+  getHealth?(): unknown;
+}
+
 export interface DemoTaskSealServerOptions {
   steps: readonly DemoStep[];
   initialStep?: number | undefined;
@@ -72,6 +153,7 @@ export interface DemoTaskSealServerOptions {
   providerStatus?: never;
   runWorkItem?: never;
   maxConcurrentRuns?: never;
+  decomposition?: never;
 }
 
 export interface PersistentTaskSealServerOptions {
@@ -88,6 +170,10 @@ export interface PersistentTaskSealServerOptions {
   } | undefined;
   operatorId?:
     | string
+    | null
+    | undefined;
+  decomposition?:
+    | PersistentDecompositionControlPort
     | null
     | undefined;
   runWorkItem: RunWorkItem;
@@ -124,6 +210,9 @@ interface PersistentRuntime {
     readonly reconcileLinearTransition: boolean;
   };
   operatorId: string | null;
+  decomposition:
+    | PersistentDecompositionControlPort
+    | null;
   runWorkItem: RunWorkItem;
   maxConcurrentRuns: number;
   csrfToken: string;
@@ -140,6 +229,29 @@ interface RuntimeError {
 interface RunRequestBody {
   prompt: string;
   readOnly?: boolean | undefined;
+}
+
+interface DecompositionPreviewRequestBody {
+  draft: unknown;
+}
+
+interface DecompositionApprovalRequestBody {
+  draft: unknown;
+  expectedPlanDigest: string;
+}
+
+interface DecompositionDispatchRequestBody {
+  expectedPlanDigest: string;
+}
+
+interface DecompositionRetirementRequestBody {
+  expectedPlanDigest: string;
+  reasonCode:
+    | "interrupted"
+    | "human_rejected"
+    | "runner_profile_drift"
+    | "operator_rollback";
+  note: string;
 }
 
 interface ResponseFailure {
@@ -160,7 +272,14 @@ interface DemoSnapshot extends DashboardProjection {
     demo: true;
     runAttempt: false;
     cancelAttempt: false;
+    previewDecomposition: false;
+    approveDecomposition: false;
+    dispatchDecomposition: false;
+    retireDecomposition: false;
   };
+  orchestration: readonly [];
+  decompositionRetirements:
+    readonly [];
   demo: {
     currentStep: number;
     totalSteps: number;
@@ -184,7 +303,15 @@ interface PersistentSnapshot extends DashboardProjection {
     decideAcceptance: boolean;
     linearTransition: boolean;
     reconcileLinearTransition: boolean;
+    previewDecomposition: boolean;
+    approveDecomposition: boolean;
+    dispatchDecomposition: boolean;
+    retireDecomposition: boolean;
   };
+  orchestration:
+    readonly DecompositionProjection[];
+  decompositionRetirements:
+    readonly RetiredDecompositionRecord[];
   runtime: {
     activeWorkItemIds: string[];
     capacity: Omit<
@@ -253,6 +380,35 @@ export function createTaskSealServer(
             runtime.maxConcurrentRuns
         })
       : null;
+  const decompositionDispatcher =
+    runtime.mode === "persistent" &&
+    runtime.decomposition !== null
+      ? runtime.decomposition.createDispatcher({
+          attemptRuns:
+            requireAttemptRuns(
+              attemptRuns
+            ),
+          execute: ({
+            workItemId,
+            runnerId,
+            instruction,
+            workspaceAccess,
+            timeoutMs,
+            signal,
+            terminalization
+          }) =>
+            runtime.runWorkItem({
+              workItemId,
+              runnerId,
+              prompt: instruction,
+              sandbox:
+                workspaceAccess,
+              timeoutMs,
+              signal,
+              terminalization
+            })
+        })
+      : null;
   const lastErrors = new Map<string, RuntimeError>();
   let shutdownPromise: Promise<void> | null = null;
 
@@ -283,7 +439,9 @@ export function createTaskSealServer(
                 lastErrors,
                 runtime.csrfToken,
                 runtime.acceptanceCapabilities,
-                runtime.operatorId
+                runtime.operatorId,
+                decompositionDispatcher,
+                runtime.decomposition
               )
             : buildDemoSnapshot(
                 runtime.steps,
@@ -301,6 +459,193 @@ export function createTaskSealServer(
           response,
           200,
           await runtime.providerStatus.list()
+        );
+      }
+
+      if (
+        runtime.mode === "persistent" &&
+        request.method === "POST" &&
+        pathname ===
+          "/api/decompositions/preview"
+      ) {
+        validatePersistentWriteRequest(
+          request,
+          runtime.csrfToken
+        );
+        const decomposition =
+          requireDecompositionControl(
+            runtime.decomposition
+          );
+        if (
+          !decomposition.capabilities
+            .preview
+        ) {
+          throw new HttpError(
+            403,
+            "DECOMPOSITION_PREVIEW_DISABLED",
+            "TaskSeal decomposition preview is disabled."
+          );
+        }
+        const body =
+          validateDecompositionPreviewBody(
+            await readJsonBody(
+              request,
+              1024 * 1024
+            )
+          );
+        return writeJson(
+          response,
+          200,
+          decomposition.preview(
+            body.draft
+          )
+        );
+      }
+
+      if (
+        runtime.mode === "persistent" &&
+        request.method === "POST" &&
+        pathname ===
+          "/api/decompositions/approve"
+      ) {
+        validatePersistentWriteRequest(
+          request,
+          runtime.csrfToken
+        );
+        const decomposition =
+          requireDecompositionControl(
+            runtime.decomposition
+          );
+        if (
+          !decomposition.capabilities
+            .approve
+        ) {
+          throw new HttpError(
+            403,
+            "DECOMPOSITION_APPROVAL_DISABLED",
+            "TaskSeal decomposition approval is disabled."
+          );
+        }
+        const body =
+          validateDecompositionApprovalBody(
+            await readJsonBody(
+              request,
+              1024 * 1024
+            )
+          );
+        return writeJson(
+          response,
+          200,
+          await decomposition.approve(
+            body
+          )
+        );
+      }
+
+      const decompositionDispatchMatch =
+        runtime.mode === "persistent" &&
+        request.method === "POST" &&
+        /^\/api\/decompositions\/([^/]+)\/dispatch$/.exec(
+          pathname
+        );
+
+      if (
+        decompositionDispatchMatch &&
+        runtime.mode === "persistent"
+      ) {
+        validatePersistentWriteRequest(
+          request,
+          runtime.csrfToken
+        );
+        const decomposition =
+          requireDecompositionControl(
+            runtime.decomposition
+          );
+        if (
+          !decomposition.capabilities
+            .dispatch
+        ) {
+          throw new HttpError(
+            403,
+            "DECOMPOSITION_DISPATCH_DISABLED",
+            "TaskSeal decomposition dispatch is disabled."
+          );
+        }
+        const dispatcher =
+          requireDecompositionDispatcher(
+            decompositionDispatcher
+          );
+        const planId =
+          decodePathSegment(
+            decompositionDispatchMatch[1]
+          );
+        const body =
+          validateDecompositionDispatchBody(
+            await readJsonBody(request)
+          );
+        return writeJson(
+          response,
+          202,
+          await dispatcher.dispatchOnce({
+            planId,
+            expectedPlanDigest:
+              body.expectedPlanDigest
+          })
+        );
+      }
+
+      const decompositionRetirementMatch =
+        runtime.mode === "persistent" &&
+        request.method === "POST" &&
+        /^\/api\/decompositions\/([^/]+)\/retire$/.exec(
+          pathname
+        );
+
+      if (
+        decompositionRetirementMatch &&
+        runtime.mode === "persistent"
+      ) {
+        validatePersistentWriteRequest(
+          request,
+          runtime.csrfToken
+        );
+        const decomposition =
+          requireDecompositionControl(
+            runtime.decomposition
+          );
+        const dispatcher =
+          requireDecompositionDispatcher(
+            decompositionDispatcher
+          );
+        if (
+          !decomposition.capabilities
+            .retire
+        ) {
+          throw new HttpError(
+            403,
+            "DECOMPOSITION_RETIREMENT_DISABLED",
+            "TaskSeal decomposition retirement is disabled."
+          );
+        }
+        const planId =
+          decodePathSegment(
+            decompositionRetirementMatch[1]
+          );
+        const body =
+          validateDecompositionRetirementBody(
+            await readJsonBody(request)
+          );
+        return writeJson(
+          response,
+          200,
+          await dispatcher.retireOnce({
+            planId,
+            expectedPlanDigest:
+              body.expectedPlanDigest,
+            reasonCode:
+              body.reasonCode,
+            note: body.note
+          })
         );
       }
 
@@ -349,13 +694,31 @@ export function createTaskSealServer(
           validateAcceptanceBody(
             await readJsonBody(request)
           );
+        const decide = () =>
+          runtime.acceptance!.decide({
+            workItemId,
+            ...body
+          });
         return writeJson(
           response,
           200,
-          await runtime.acceptance.decide({
-            workItemId,
-            ...body
-          })
+          decompositionDispatcher ===
+            null
+            ? (
+                runtime.decomposition
+                  ?.assertAcceptanceAllowed(
+                    workItemId,
+                    body.decision
+                  ),
+                await decide()
+              )
+            : await decompositionDispatcher
+                .decideAcceptanceOnce({
+                  workItemId,
+                  decision:
+                    body.decision,
+                  decide
+                })
         );
       }
 
@@ -426,27 +789,35 @@ export function createTaskSealServer(
         const body = validateRunBody(
           await readJsonBody(request)
         );
-
         lastErrors.delete(workItemId);
-        const run = requireAttemptRuns(
-          attemptRuns
-        ).start({
-          workItemId,
-          execute: ({
+        const execute = ({
+          signal,
+          terminalization
+        }: AttemptRunExecutionContext) =>
+          runtime.runWorkItem({
+            workItemId,
+            prompt: body.prompt,
+            sandbox:
+              body.readOnly === false
+                ? "workspace-write"
+                : "read-only",
             signal,
             terminalization
-          }) =>
-            runtime.runWorkItem({
-              workItemId,
-              prompt: body.prompt,
-              sandbox:
-                body.readOnly === false
-                  ? "workspace-write"
-                  : "read-only",
-              signal,
-              terminalization
-            })
-        });
+          });
+        const run =
+          decompositionDispatcher ===
+          null
+            ? requireAttemptRuns(
+                attemptRuns
+              ).start({
+                workItemId,
+                execute
+              })
+            : decompositionDispatcher
+                .startManualRun({
+                  workItemId,
+                  execute
+                });
         void run.execution.catch((error) => {
           lastErrors.set(workItemId, {
             code: readSafeErrorCode(
@@ -467,7 +838,9 @@ export function createTaskSealServer(
             lastErrors,
             runtime.csrfToken,
             runtime.acceptanceCapabilities,
-            runtime.operatorId
+            runtime.operatorId,
+            decompositionDispatcher,
+            runtime.decomposition
           )
         );
       }
@@ -514,7 +887,9 @@ export function createTaskSealServer(
             lastErrors,
             runtime.csrfToken,
             runtime.acceptanceCapabilities,
-            runtime.operatorId
+            runtime.operatorId,
+            decompositionDispatcher,
+            runtime.decomposition
           )
         );
       }
@@ -635,6 +1010,8 @@ function createServerRuntime(
       };
     const operatorId =
       options.operatorId ?? null;
+    const decomposition =
+      options.decomposition ?? null;
     if (
       typeof service.snapshot !== "function" ||
       typeof service.getWorkItem !== "function" ||
@@ -645,6 +1022,9 @@ function createServerRuntime(
         acceptance,
         acceptanceCapabilities,
         operatorId
+      ) ||
+      !isValidDecompositionRuntime(
+        decomposition
       )
     ) {
       throw new TypeError(
@@ -659,6 +1039,7 @@ function createServerRuntime(
       acceptance,
       acceptanceCapabilities,
       operatorId,
+      decomposition,
       runWorkItem: options.runWorkItem,
       maxConcurrentRuns:
         options.maxConcurrentRuns ?? 1,
@@ -678,6 +1059,58 @@ function createServerRuntime(
       steps.length
     )
   };
+}
+
+function isValidDecompositionRuntime(
+  decomposition:
+    | PersistentDecompositionControlPort
+    | null
+): boolean {
+  if (decomposition === null) {
+    return true;
+  }
+  const capabilities =
+    decomposition.capabilities;
+  return (
+    isRecord(decomposition) &&
+    isRecord(capabilities) &&
+    hasExactKeys(capabilities, [
+      "preview",
+      "approve",
+      "dispatch",
+      "retire"
+    ]) &&
+    typeof capabilities.preview ===
+      "boolean" &&
+    typeof capabilities.approve ===
+      "boolean" &&
+    typeof capabilities.dispatch ===
+      "boolean" &&
+    typeof capabilities.retire ===
+      "boolean" &&
+    typeof decomposition.preview ===
+      "function" &&
+    typeof decomposition.approve ===
+      "function" &&
+    typeof decomposition
+      .listRetirements ===
+      "function" &&
+    typeof decomposition
+      .assertManualRunAllowed ===
+      "function" &&
+    typeof decomposition
+      .assertAcceptanceAllowed ===
+      "function" &&
+    typeof decomposition
+      .createDispatcher ===
+      "function" &&
+    (
+      decomposition.getHealth ===
+        undefined ||
+      typeof decomposition.getHealth ===
+        "function"
+    )
+  );
 }
 
 interface AcceptanceRequestBody {
@@ -768,27 +1201,45 @@ function readRequestPathname(value: unknown): string {
 function readFencedHealth(
   runtime: ServerRuntime
 ): FencedHealth | null {
-  if (
-    runtime.mode !== "persistent" ||
-    typeof runtime.service.getHealth !== "function"
-  ) {
+  if (runtime.mode !== "persistent") {
     return null;
   }
+  const healthValues = [
+    typeof runtime.service
+      .getHealth === "function"
+      ? runtime.service.getHealth()
+      : null,
+    typeof runtime.decomposition
+      ?.getHealth === "function"
+      ? runtime.decomposition
+          .getHealth()
+      : null
+  ];
 
-  const health = runtime.service.getHealth();
-
-  if (!isRecord(health) || health.status !== "fenced") {
-    return null;
+  for (const health of healthValues) {
+    if (
+      !isRecord(health) ||
+      health.status !== "fenced"
+    ) {
+      continue;
+    }
+    return {
+      status: "fenced",
+      code: readSafeErrorCode(
+        health,
+        "SERVICE_FENCED"
+      ),
+      planDigest:
+        typeof health.planDigest ===
+        "string"
+          ? health.planDigest.slice(
+              0,
+              256
+            )
+          : null
+    };
   }
-
-  return {
-    status: "fenced",
-    code: readSafeErrorCode(health, "SERVICE_FENCED"),
-    planDigest:
-      typeof health.planDigest === "string"
-        ? health.planDigest.slice(0, 256)
-        : null
-  };
+  return null;
 }
 
 function buildDemoSnapshot(
@@ -803,8 +1254,14 @@ function buildDemoSnapshot(
     capabilities: {
       demo: true,
       runAttempt: false,
-      cancelAttempt: false
+      cancelAttempt: false,
+      previewDecomposition: false,
+      approveDecomposition: false,
+      dispatchDecomposition: false,
+      retireDecomposition: false
     },
+    orchestration: [],
+    decompositionRetirements: [],
     demo: {
       currentStep,
       totalSteps: steps.length,
@@ -827,7 +1284,11 @@ function buildPersistentSnapshot(
   csrfToken: string,
   acceptanceCapabilities:
     PersistentRuntime["acceptanceCapabilities"],
-  operatorId: string | null
+  operatorId: string | null,
+  decompositionDispatcher:
+    PersistentDecompositionDispatcherPort | null,
+  decomposition:
+    PersistentDecompositionControlPort | null
 ): PersistentSnapshot {
   const dashboard = service.snapshot();
   const coordination = attemptRuns.snapshot();
@@ -855,8 +1316,26 @@ function buildPersistentSnapshot(
           .linearTransition,
       reconcileLinearTransition:
         acceptanceCapabilities
-          .reconcileLinearTransition
+          .reconcileLinearTransition,
+      previewDecomposition:
+        decomposition?.capabilities
+          .preview ?? false,
+      approveDecomposition:
+        decomposition?.capabilities
+          .approve ?? false,
+      dispatchDecomposition:
+        decomposition?.capabilities
+          .dispatch ?? false,
+      retireDecomposition:
+        decomposition?.capabilities
+          .retire ?? false
     },
+    orchestration:
+      decompositionDispatcher?.list() ??
+      [],
+    decompositionRetirements:
+      decomposition?.listRetirements() ??
+      [],
     runtime: {
       activeWorkItemIds: coordination.runs.map(
         (run) => run.workItemId
@@ -894,12 +1373,43 @@ function requireAttemptRuns(
   return value;
 }
 
+function requireDecompositionControl(
+  value:
+    | PersistentDecompositionControlPort
+    | null
+): PersistentDecompositionControlPort {
+  if (!value) {
+    throw new HttpError(
+      403,
+      "DECOMPOSITION_DISABLED",
+      "TaskSeal decomposition control is disabled."
+    );
+  }
+  return value;
+}
+
+function requireDecompositionDispatcher(
+  value:
+    | PersistentDecompositionDispatcherPort
+    | null
+): PersistentDecompositionDispatcherPort {
+  if (!value) {
+    throw new HttpError(
+      403,
+      "DECOMPOSITION_DISABLED",
+      "TaskSeal decomposition dispatch is disabled."
+    );
+  }
+  return value;
+}
+
 function clampStep(value: number, maximum: number): number {
   return Math.max(0, Math.min(value, maximum));
 }
 
 async function readJsonBody(
-  request: IncomingMessage
+  request: IncomingMessage,
+  maximumBytes = 64 * 1024
 ): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -924,7 +1434,7 @@ async function readJsonBody(
 
     size += chunk.length;
 
-    if (size > 64 * 1024) {
+    if (size > maximumBytes) {
       exceeded = true;
       continue;
     }
@@ -936,7 +1446,7 @@ async function readJsonBody(
     throw new HttpError(
       413,
       "REQUEST_TOO_LARGE",
-      "TaskSeal run request exceeds 64 KiB."
+      "TaskSeal request body exceeds its size limit."
     );
   }
 
@@ -952,6 +1462,134 @@ async function readJsonBody(
       "TaskSeal run request must contain valid JSON."
     );
   }
+}
+
+function validateDecompositionPreviewBody(
+  body: unknown
+): DecompositionPreviewRequestBody {
+  if (
+    !isRecord(body) ||
+    !hasExactKeys(body, ["draft"])
+  ) {
+    throw new HttpError(
+      400,
+      "INVALID_DECOMPOSITION_PREVIEW_REQUEST",
+      "TaskSeal decomposition preview request is invalid."
+    );
+  }
+  return {
+    draft: body.draft
+  };
+}
+
+function validateDecompositionApprovalBody(
+  body: unknown
+): DecompositionApprovalRequestBody {
+  if (
+    !isRecord(body) ||
+    !hasExactKeys(body, [
+      "draft",
+      "expectedPlanDigest"
+    ]) ||
+    typeof body.expectedPlanDigest !==
+      "string" ||
+    !/^sha256:[0-9a-f]{64}$/.test(
+      body.expectedPlanDigest
+    )
+  ) {
+    throw new HttpError(
+      400,
+      "INVALID_DECOMPOSITION_APPROVAL_REQUEST",
+      "TaskSeal decomposition approval request is invalid."
+    );
+  }
+  return {
+    draft: body.draft,
+    expectedPlanDigest:
+      body.expectedPlanDigest
+  };
+}
+
+function validateDecompositionDispatchBody(
+  body: unknown
+): DecompositionDispatchRequestBody {
+  if (
+    !isRecord(body) ||
+    !hasExactKeys(body, [
+      "expectedPlanDigest"
+    ]) ||
+    typeof body.expectedPlanDigest !==
+      "string" ||
+    !/^sha256:[0-9a-f]{64}$/.test(
+      body.expectedPlanDigest
+    )
+  ) {
+    throw new HttpError(
+      400,
+      "INVALID_DECOMPOSITION_DISPATCH_REQUEST",
+      "TaskSeal decomposition dispatch request is invalid."
+    );
+  }
+  return {
+    expectedPlanDigest:
+      body.expectedPlanDigest
+  };
+}
+
+function validateDecompositionRetirementBody(
+  body: unknown
+): DecompositionRetirementRequestBody {
+  if (
+    !isRecord(body) ||
+    !hasExactKeys(body, [
+      "expectedPlanDigest",
+      "reasonCode",
+      "note"
+    ]) ||
+    typeof body.expectedPlanDigest !==
+      "string" ||
+    !/^sha256:[0-9a-f]{64}$/.test(
+      body.expectedPlanDigest
+    ) ||
+    (
+      body.reasonCode !==
+        "interrupted" &&
+      body.reasonCode !==
+        "human_rejected" &&
+      body.reasonCode !==
+        "runner_profile_drift" &&
+      body.reasonCode !==
+        "operator_rollback"
+    ) ||
+    typeof body.note !==
+      "string" ||
+    body.note !==
+      body.note.trim() ||
+    body.note.length === 0 ||
+    !body.note.isWellFormed() ||
+    [...body.note].length >
+      2_048 ||
+    Buffer.byteLength(
+      body.note,
+      "utf8"
+    ) > 8_192 ||
+    /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029]/.test(
+      body.note
+    )
+  ) {
+    throw new HttpError(
+      400,
+      "INVALID_DECOMPOSITION_RETIREMENT_REQUEST",
+      "TaskSeal decomposition retirement request is invalid."
+    );
+  }
+  return {
+    expectedPlanDigest:
+      body.expectedPlanDigest,
+    reasonCode:
+      body.reasonCode,
+    note: body.note
+  };
 }
 
 function validatePersistentWriteRequest(
@@ -1222,6 +1860,131 @@ function normalizeResponseError(
             : 409,
       code: error.code,
       message: error.message
+    };
+  }
+
+  if (
+    isRecord(error) &&
+    (
+      error.name ===
+        "DecompositionPlanError" ||
+      error.name ===
+        "DecompositionControlError" ||
+      error.name ===
+        "DecompositionPlanJournalError" ||
+      error.name ===
+        "DecompositionPlanStoreError" ||
+      error.name ===
+        "DecompositionDispatcherError"
+    )
+  ) {
+    const code = readSafeErrorCode(
+      error,
+      "DECOMPOSITION_ERROR"
+    );
+    const statusCode =
+      code ===
+        "DECOMPOSITION_PLAN_NOT_FOUND"
+        ? 404
+        : code ===
+              "DECOMPOSITION_APPROVAL_DISABLED" ||
+            code ===
+              "DECOMPOSITION_PREVIEW_DISABLED" ||
+            code ===
+              "DECOMPOSITION_DISPATCH_DISABLED"
+              || code ===
+                "DECOMPOSITION_RETIREMENT_DISABLED"
+          ? 403
+          : code ===
+                "DECOMPOSITION_CAPACITY_REACHED" ||
+              code ===
+                "RUN_CAPACITY_REACHED"
+            ? 429
+            : code ===
+                  "DECOMPOSITION_MANAGED_WORK_ITEM" ||
+                code ===
+                  "DECOMPOSITION_APPROVING" ||
+                code ===
+                  "DECOMPOSITION_ACCEPTING" ||
+                code ===
+                  "DECOMPOSITION_APPROVAL_ACTIVE" ||
+                code ===
+                  "DECOMPOSITION_APPROVAL_STALE" ||
+                code ===
+                  "DECOMPOSITION_ROOT_NOT_READY" ||
+                code ===
+                  "DECOMPOSITION_DEPENDENCY_NOT_ACCEPTED" ||
+                code ===
+                  "DECOMPOSITION_DISPATCH_STALE" ||
+                code ===
+                  "DECOMPOSITION_NOT_DISPATCHABLE" ||
+                code ===
+                  "DECOMPOSITION_PLAN_STALE" ||
+                code ===
+                  "DECOMPOSITION_PLAN_CONFLICT" ||
+                code ===
+                  "DECOMPOSITION_PLAN_OWNERSHIP_CONFLICT"
+                || code ===
+                  "DECOMPOSITION_RETIRING"
+                || code ===
+                  "DECOMPOSITION_RETIREMENT_ACTIVE"
+                || code ===
+                  "DECOMPOSITION_RETIREMENT_STALE"
+                || code ===
+                  "DECOMPOSITION_RETIREMENT_CONFLICT"
+                || code ===
+                  "DECOMPOSITION_PLAN_RETIRED"
+                || code ===
+                  "DECOMPOSITION_WORK_ITEM_REOPEN_REQUIRED"
+                || code ===
+                  "DECOMPOSITION_BASELINE_MISSING"
+                || code ===
+                  "DECOMPOSITION_WORK_ITEM_HISTORY_DRIFT"
+                || code ===
+                  "DECOMPOSITION_ATTEMPT_OUTSIDE_PLAN"
+                || code ===
+                  "DECOMPOSITION_OWNER_EXECUTION_DRIFT"
+                || code ===
+                  "DECOMPOSITION_RUNNER_PROFILE_DRIFT"
+                || code ===
+                  "DECOMPOSITION_ATTEMPT_NOT_COMPLETED"
+              ? 409
+              : code ===
+                    "DECOMPOSITION_JOURNAL_WRITE_FAILED" ||
+                  code ===
+                    "DECOMPOSITION_CLOCK_INVALID" ||
+                  code.includes(
+                    "REOPEN"
+                  ) ||
+                  code.includes(
+                    "COMMIT_OUTCOME_UNKNOWN"
+                  ) ||
+                  error.name ===
+                    "DecompositionPlanStoreError"
+                ? 503
+                : 422;
+    return {
+      statusCode,
+      code,
+      message:
+        statusCode === 503
+          ? code.includes(
+                "REOPEN"
+              ) ||
+              code.includes(
+                "COMMIT_OUTCOME_UNKNOWN"
+              )
+            ? "TaskSeal decomposition control is unavailable and must be reopened."
+            : "TaskSeal decomposition control is temporarily unavailable."
+          : statusCode === 404
+            ? "The TaskSeal decomposition plan does not exist."
+            : statusCode === 403
+              ? "TaskSeal decomposition capability is disabled."
+              : statusCode === 429
+                ? "TaskSeal decomposition execution capacity is full."
+                : statusCode === 409
+                  ? "TaskSeal decomposition request conflicts with current state."
+                  : "TaskSeal rejected the decomposition request."
     };
   }
 

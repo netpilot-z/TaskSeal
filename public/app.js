@@ -1,9 +1,12 @@
 import {
   AcceptanceTruthFence,
+  createAccessibleOrchestrationState,
   createAccessibleSnapshotState,
   createAcceptanceControlState,
+  createOrchestrationPanelModel,
   createRunControlState,
   DashboardRequestGate,
+  normalizeRequiredAuditNote,
   PromptDraftStore,
   reconcileSelectedWorkItemId,
   semanticSnapshotKey,
@@ -26,6 +29,30 @@ const elements = {
   agents: document.querySelector("#summary-agents"),
   reviewing: document.querySelector("#summary-reviewing"),
   accepted: document.querySelector("#summary-accepted"),
+  orchestrationPanel:
+    document.querySelector(
+      "#orchestration-panel"
+    ),
+  orchestrationOverview:
+    document.querySelector(
+      "#orchestration-overview"
+    ),
+  orchestrationPlans:
+    document.querySelector(
+      "#orchestration-plans"
+    ),
+  orchestrationRetirementCount:
+    document.querySelector(
+      "#orchestration-retirement-count"
+    ),
+  orchestrationRetirements:
+    document.querySelector(
+      "#orchestration-retirements"
+    ),
+  orchestrationLiveStatus:
+    document.querySelector(
+      "#orchestration-live-status"
+    ),
   providerPanel: document.querySelector("#provider-panel"),
   providerOverview: document.querySelector(
     "#provider-overview"
@@ -130,11 +157,19 @@ let polling = false;
 let lastRuntimeErrorKey = null;
 let csrfToken = null;
 let renderedWorkItemsKey = null;
+let renderedOrchestrationKey = null;
+let announcedOrchestrationKey = null;
 let renderedWorkItemSelectorKey = null;
 let renderedTimelineKey = null;
 let announcedStateKey = null;
 let lastRunnerStatusLabel = null;
 let latestSnapshot = null;
+let orchestrationMutation = null;
+const retirementDrafts = new Map();
+let pendingRetirementFocusPlanId =
+  null;
+let pendingOrchestrationFocusToken =
+  null;
 let providerInitialized = false;
 let providerPanelState = createProviderPanelState();
 let renderedProviderKey = null;
@@ -197,6 +232,135 @@ elements.workItems.addEventListener("click", (event) => {
 elements.providerRefresh.addEventListener(
   "click",
   () => requestProviderSnapshot()
+);
+elements.orchestrationPlans.addEventListener(
+  "click",
+  (event) => {
+    if (
+      !(
+        event.target instanceof
+        Element
+      )
+    ) {
+      return;
+    }
+    const dispatchButton =
+      event.target.closest(
+      "[data-dispatch-plan]"
+    );
+    if (dispatchButton) {
+      void dispatchDecomposition(
+        dispatchButton.dataset
+          .dispatchPlan
+      );
+      return;
+    }
+    const toggle = event.target.closest(
+      "[data-toggle-retirement]"
+    );
+    if (toggle) {
+      toggleRetirementForm(
+        toggle.dataset
+          .toggleRetirement
+      );
+      return;
+    }
+    const cancel = event.target.closest(
+      "[data-cancel-retirement]"
+    );
+    if (cancel) {
+      cancelRetirementForm(
+        cancel.dataset
+          .cancelRetirement
+      );
+    }
+  }
+);
+elements.orchestrationPlans.addEventListener(
+  "input",
+  (event) => {
+    if (
+      event.target instanceof
+        Element
+    ) {
+      if (
+        event.target instanceof
+          HTMLTextAreaElement &&
+        event.target.name ===
+          "note"
+      ) {
+        event.target
+          .setCustomValidity("");
+      }
+      saveRetirementDraft(
+        event.target.closest(
+          "[data-retirement-form]"
+        )
+      );
+    }
+  }
+);
+elements.orchestrationPlans.addEventListener(
+  "submit",
+  (event) => {
+    if (
+      !(event.target instanceof
+        HTMLFormElement)
+    ) {
+      return;
+    }
+    event.preventDefault();
+    const noteField =
+      event.target.elements
+        .namedItem("note");
+    const normalizedNote =
+      normalizeRequiredAuditNote(
+        noteField instanceof
+            HTMLTextAreaElement
+          ? noteField.value
+          : null
+      );
+    if (
+      noteField instanceof
+        HTMLTextAreaElement
+    ) {
+      noteField.setCustomValidity(
+        normalizedNote === null
+          ? "Enter an audit note that contains visible text."
+          : ""
+      );
+    }
+    saveRetirementDraft(
+      event.target
+    );
+    if (
+      !event.target.reportValidity()
+    ) {
+      if (
+        normalizedNote === null &&
+        noteField instanceof
+          HTMLTextAreaElement
+      ) {
+        noteField.focus();
+      }
+      return;
+    }
+    if (
+      normalizedNote !== null &&
+      noteField instanceof
+        HTMLTextAreaElement
+    ) {
+      noteField.value =
+        normalizedNote;
+      saveRetirementDraft(
+        event.target
+      );
+    }
+    void retireDecomposition(
+      event.target.dataset
+        .retirementForm
+    );
+  }
 );
 
 loadDashboard();
@@ -295,6 +459,238 @@ async function cancelCodex() {
     }
   } finally {
     setBusy(false);
+  }
+}
+
+async function dispatchDecomposition(
+  planId
+) {
+  const plan =
+    latestSnapshot?.orchestration?.find(
+      (candidate) =>
+        candidate.planId === planId
+    );
+  if (!plan || !csrfToken) {
+    showToast(
+      "The approved plan or session token is no longer available."
+    );
+    return;
+  }
+
+  orchestrationMutation = {
+    kind: "dispatch",
+    planId
+  };
+  setBusy(true);
+  try {
+    const response = await fetch(
+      `/api/decompositions/${encodeURIComponent(
+        plan.planId
+      )}/dispatch`,
+      {
+        method: "POST",
+        headers: {
+          "content-type":
+            "application/json",
+          "x-taskseal-csrf-token":
+            csrfToken
+        },
+        body: JSON.stringify({
+          expectedPlanDigest:
+            plan.planDigest
+        })
+      }
+    );
+    const payload =
+      await response.json();
+    if (!response.ok) {
+      throw new Error(
+        payload.message ??
+          "TaskSeal decomposition dispatch failed."
+      );
+    }
+    await requestSnapshot(
+      "/api/dashboard",
+      { method: "GET" }
+    );
+  } catch (error) {
+    showToast(
+      error instanceof Error
+        ? error.message
+        : "TaskSeal decomposition dispatch failed."
+    );
+  } finally {
+    orchestrationMutation = null;
+    setBusy(false);
+  }
+}
+
+function toggleRetirementForm(
+  planId
+) {
+  if (!planId || busy) {
+    return;
+  }
+  const current =
+    retirementDrafts.get(planId) ?? {
+      open: false,
+      reasonCode: "",
+      note: "",
+      confirmed: false
+    };
+  retirementDrafts.set(planId, {
+    ...current,
+    open: !current.open
+  });
+  renderedOrchestrationKey = null;
+  renderOrchestration(
+    latestSnapshot
+  );
+  if (!current.open) {
+    queueMicrotask(() =>
+      elements.orchestrationPlans
+        .querySelector(
+          `[data-retirement-reason="${escapeAttribute(
+            planId
+          )}"]`
+        )
+        ?.focus()
+    );
+  }
+}
+
+function cancelRetirementForm(
+  planId
+) {
+  if (!planId || busy) {
+    return;
+  }
+  retirementDrafts.delete(planId);
+  renderedOrchestrationKey = null;
+  renderOrchestration(
+    latestSnapshot
+  );
+  elements.orchestrationPlans
+    .querySelector(
+      `[data-toggle-retirement="${escapeAttribute(
+        planId
+      )}"]`
+    )
+    ?.focus();
+}
+
+function saveRetirementDraft(form) {
+  if (
+    !(
+      form instanceof
+      HTMLFormElement
+    )
+  ) {
+    return;
+  }
+  const planId =
+    form.dataset.retirementForm;
+  if (!planId) {
+    return;
+  }
+  const fields =
+    form.elements;
+  retirementDrafts.set(planId, {
+    open: true,
+    reasonCode:
+      fields.reasonCode?.value ??
+      "",
+    note:
+      fields.note?.value ?? "",
+    confirmed:
+      fields.confirmed?.checked ===
+      true
+  });
+}
+
+async function retireDecomposition(
+  planId
+) {
+  const plan =
+    latestSnapshot?.orchestration?.find(
+      (candidate) =>
+        candidate.planId === planId
+    );
+  const draft =
+    retirementDrafts.get(planId);
+  if (
+    !plan ||
+    !draft ||
+    !csrfToken
+  ) {
+    showToast(
+      "The approved plan or session token is no longer available."
+    );
+    return;
+  }
+
+  orchestrationMutation = {
+    kind: "retire",
+    planId
+  };
+  setBusy(true);
+  let committed = false;
+  try {
+    const response = await fetch(
+      `/api/decompositions/${encodeURIComponent(
+        plan.planId
+      )}/retire`,
+      {
+        method: "POST",
+        headers: {
+          "content-type":
+            "application/json",
+          "x-taskseal-csrf-token":
+            csrfToken
+        },
+        body: JSON.stringify({
+          expectedPlanDigest:
+            plan.planDigest,
+          reasonCode:
+            draft.reasonCode,
+          note: draft.note.trim()
+        })
+      }
+    );
+    const payload =
+      await response.json();
+    if (!response.ok) {
+      throw new Error(
+        payload.message ??
+          "TaskSeal decomposition retirement failed."
+      );
+    }
+    committed = true;
+    retirementDrafts.delete(planId);
+    pendingRetirementFocusPlanId =
+      planId;
+    await requestSnapshot(
+      "/api/dashboard",
+      { method: "GET" }
+    );
+    showToast(
+      "Plan retired. WorkItems and delivery evidence were retained."
+    );
+  } catch (error) {
+    showToast(
+      error instanceof Error
+        ? error.message
+        : "TaskSeal decomposition retirement failed."
+    );
+  } finally {
+    orchestrationMutation = null;
+    setBusy(false);
+    if (
+      committed &&
+      pendingRetirementFocusPlanId
+    ) {
+      restoreRetirementAuditFocus();
+    }
   }
 }
 
@@ -702,6 +1098,8 @@ function render(snapshot) {
     ? "Fixture demo"
     : "Persistent journal";
   elements.providerPanel.hidden = isDemo;
+  elements.orchestrationPanel.hidden =
+    isDemo;
 
   if (!isDemo && !providerInitialized) {
     providerInitialized = true;
@@ -740,12 +1138,718 @@ function render(snapshot) {
     );
     applyRunControls();
     applyAcceptanceControls();
+    renderOrchestration(snapshot);
     renderTimeline(createAttemptTimeline(snapshot.workItems));
     revealRuntimeError(snapshot.runtime?.errors);
   }
 
   renderWorkItems(snapshot.workItems);
   announceSnapshot(snapshot);
+}
+
+function renderOrchestration(snapshot) {
+  const model =
+    createOrchestrationPanelModel(
+      snapshot,
+      busy,
+      orchestrationMutation
+    );
+  const renderKey =
+    semanticSnapshotKey(model);
+  if (
+    renderKey ===
+    renderedOrchestrationKey
+  ) {
+    return;
+  }
+  renderedOrchestrationKey =
+    renderKey;
+  const focusToken =
+    document.activeElement
+      ?.dataset
+      ?.orchestrationFocus ??
+    null;
+  const retirementFocusPlanId =
+    document.activeElement
+      ?.dataset
+      ?.retirementRecord ??
+    null;
+
+  elements.orchestrationPanel.hidden =
+    !model.visible;
+  elements.orchestrationOverview.textContent =
+    model.overview;
+  elements.orchestrationPlans.innerHTML =
+    model.plans.length === 0
+      ? `
+      <div class="orchestration-empty">
+        <strong>No active decomposition plans</strong>
+        <p>Approve a bounded plan through the local API, or continue with the retained retirement audit below.</p>
+      </div>
+      `
+      : model.plans
+          .map(
+            renderOrchestrationPlan
+          )
+          .join("");
+  elements.orchestrationRetirementCount
+    .textContent =
+      `${model.retirements.length} retired`;
+  elements.orchestrationRetirements
+    .innerHTML =
+      model.retirements.length === 0
+        ? `
+          <li class="orchestration-retirement-empty">
+            No plans have been retired.
+          </li>
+        `
+        : model.retirements
+            .map(
+              renderRetirementAuditRecord
+            )
+            .join("");
+
+  const accessibleState =
+    createAccessibleOrchestrationState(
+      snapshot
+    );
+  const accessibleKey =
+    semanticSnapshotKey(
+      accessibleState
+    );
+  if (
+    accessibleKey !==
+    announcedOrchestrationKey
+  ) {
+    announcedOrchestrationKey =
+      accessibleKey;
+    elements.orchestrationLiveStatus
+      .textContent =
+        createOrchestrationAnnouncement(
+          model
+        );
+  }
+
+  if (
+    busy
+  ) {
+    return;
+  }
+  if (
+    pendingRetirementFocusPlanId
+  ) {
+    restoreRetirementAuditFocus();
+  } else if (
+    retirementFocusPlanId
+  ) {
+    focusRetirementAuditRecord(
+      retirementFocusPlanId
+    );
+  } else if (
+    pendingOrchestrationFocusToken
+  ) {
+    if (
+      restoreOrchestrationFocus(
+        pendingOrchestrationFocusToken
+      )
+    ) {
+      pendingOrchestrationFocusToken =
+        null;
+    }
+  } else if (focusToken) {
+    restoreOrchestrationFocus(
+      focusToken
+    );
+  }
+}
+
+function renderOrchestrationPlan(plan) {
+  const nodeById = new Map(
+    plan.nodes.map((node) => [
+      node.nodeId,
+      node
+    ])
+  );
+  const orderedNodes =
+    plan.topologicalOrder
+      .map((nodeId) =>
+        nodeById.get(nodeId)
+      )
+      .filter(Boolean);
+  const disabled =
+    plan.dispatchControl.enabled
+      ? ""
+      : " disabled";
+  const retirementDisabled =
+    plan.retirementControl.enabled
+      ? ""
+      : " disabled";
+  const draft =
+    retirementDrafts.get(
+      plan.planId
+    ) ?? {
+      open: false,
+      reasonCode: "",
+      note: "",
+      confirmed: false
+    };
+  const retirementFormDisabled =
+    plan.retirementControl.enabled &&
+    !busy
+      ? ""
+      : " disabled";
+  const busyDisabled =
+    busy ? " disabled" : "";
+
+  return `
+    <article
+      class="orchestration-plan"
+      data-orchestration-plan="${escapeAttribute(
+        plan.planId
+      )}"
+      tabindex="-1"
+      aria-labelledby="orchestration-plan-${escapeAttribute(
+        plan.planId
+      )}"
+    >
+      <header class="orchestration-plan-header">
+        <div>
+          <p class="work-id">${escapeHtml(
+            plan.planId
+          )}</p>
+          <h3 id="orchestration-plan-${escapeAttribute(
+            plan.planId
+          )}">
+            ${escapeHtml(
+              `${plan.progress.acceptedNodes} / ${plan.progress.totalNodes} nodes accepted`
+            )}
+          </h3>
+          <p>
+            ${escapeHtml(
+              `${plan.progress.uncertainNodes} nodes remain unresolved · queue is ephemeral`
+            )}
+          </p>
+        </div>
+        <div class="orchestration-plan-actions">
+          <button
+            class="button button-primary orchestration-dispatch"
+            type="button"
+            data-dispatch-plan="${escapeAttribute(
+              plan.planId
+            )}"
+            data-orchestration-focus="${escapeAttribute(
+              `dispatch:${plan.planId}`
+            )}"
+            ${disabled}
+          >
+            ${escapeHtml(
+              plan.dispatchControl.label
+            )}
+          </button>
+          <button
+            class="button button-secondary orchestration-retire-toggle"
+            type="button"
+            data-toggle-retirement="${escapeAttribute(
+              plan.planId
+            )}"
+            data-orchestration-focus="${escapeAttribute(
+              `retire-toggle:${plan.planId}`
+            )}"
+            aria-expanded="${
+              draft.open
+                ? "true"
+                : "false"
+            }"
+            aria-controls="retirement-form-${escapeAttribute(
+              plan.planId
+            )}"
+            ${retirementDisabled}
+          >
+            ${escapeHtml(
+              plan.retirementControl
+                .label
+            )}
+          </button>
+        </div>
+      </header>
+      <dl class="orchestration-metadata">
+        <div>
+          <dt>Root</dt>
+          <dd>${escapeHtml(
+            plan.rootWorkItemId
+          )}</dd>
+        </div>
+        <div>
+          <dt>Approved by</dt>
+          <dd>${escapeHtml(
+            plan.approvedBy
+          )}</dd>
+        </div>
+        <div>
+          <dt>Plan revision</dt>
+          <dd title="${escapeAttribute(
+            plan.planDigest
+          )}">${escapeHtml(
+            shortDigest(
+              plan.planDigest
+            )
+          )}</dd>
+        </div>
+        <div>
+          <dt>Concurrency</dt>
+          <dd>${escapeHtml(
+            `${plan.activeNodeIds.length} active / ${plan.dispatch.maxParallelism} allowed`
+          )}</dd>
+        </div>
+      </dl>
+      <p class="orchestration-queue">
+        ${escapeHtml(
+          `${plan.queue.queuedCount} / ${plan.queue.limit} ready nodes · Ephemeral; dispatch again after active nodes settle`
+        )}
+      </p>
+      <form
+        class="orchestration-retirement-form"
+        id="retirement-form-${escapeAttribute(
+          plan.planId
+        )}"
+        data-retirement-form="${escapeAttribute(
+          plan.planId
+        )}"
+        ${draft.open ? "" : " hidden"}
+      >
+        <p class="retirement-warning">
+          Retirement is irreversible for this plan ID. It releases orchestration ownership without deleting WorkItems, Attempts, Artifacts, Evidence, or acceptance history.
+        </p>
+        <label>
+          <span>Retirement reason</span>
+          <select
+            name="reasonCode"
+            required
+            data-retirement-reason="${escapeAttribute(
+              plan.planId
+            )}"
+            data-orchestration-focus="${escapeAttribute(
+              `retire-reason:${plan.planId}`
+            )}"
+            ${retirementFormDisabled}
+          >
+            ${renderRetirementReasonOptions(
+              draft.reasonCode
+            )}
+          </select>
+        </label>
+        <label>
+          <span>Audit note</span>
+          <textarea
+            name="note"
+            maxlength="2048"
+            required
+            aria-required="true"
+            data-orchestration-focus="${escapeAttribute(
+              `retire-note:${plan.planId}`
+            )}"
+            ${retirementFormDisabled}
+          >${escapeHtml(
+            draft.note
+          )}</textarea>
+          <small>
+            Required. The note is retained in the local lifecycle audit.
+          </small>
+        </label>
+        <label class="retirement-confirmation">
+          <input
+            name="confirmed"
+            type="checkbox"
+            required
+            data-orchestration-focus="${escapeAttribute(
+              `retire-confirm:${plan.planId}`
+            )}"
+            ${
+              draft.confirmed
+                ? " checked"
+                : ""
+            }
+            ${retirementFormDisabled}
+          />
+          <span>I understand this plan ID cannot be reactivated.</span>
+        </label>
+        <div class="orchestration-retirement-actions">
+          <button
+            class="button button-secondary"
+            type="button"
+            data-cancel-retirement="${escapeAttribute(
+              plan.planId
+            )}"
+            data-orchestration-focus="${escapeAttribute(
+              `retire-cancel:${plan.planId}`
+            )}"
+            ${busyDisabled}
+          >
+            Cancel
+          </button>
+          <button
+            class="button button-danger"
+            type="submit"
+            data-orchestration-focus="${escapeAttribute(
+              `retire-submit:${plan.planId}`
+            )}"
+            ${retirementFormDisabled}
+          >
+            ${
+              orchestrationMutation
+                ?.kind ===
+                  "retire" &&
+              orchestrationMutation
+                .planId ===
+                plan.planId
+                ? "Retiring…"
+                : "Confirm retirement"
+            }
+          </button>
+        </div>
+      </form>
+      <ol
+        class="orchestration-nodes"
+        aria-label="Dependency nodes"
+      >
+        ${orderedNodes
+          .map(renderOrchestrationNode)
+          .join("")}
+      </ol>
+    </article>
+  `;
+}
+
+function renderRetirementReasonOptions(
+  selectedReason
+) {
+  const options = [
+    ["", "Choose a reason…"],
+    [
+      "interrupted",
+      "Execution interrupted"
+    ],
+    [
+      "human_rejected",
+      "Human rejected delivery"
+    ],
+    [
+      "runner_profile_drift",
+      "Runner profile changed"
+    ],
+    [
+      "operator_rollback",
+      "Operator rollback"
+    ]
+  ];
+  return options
+    .map(
+      ([value, label]) => `
+        <option
+          value="${value}"
+          ${
+            value === selectedReason
+              ? "selected"
+              : ""
+          }
+        >${label}</option>
+      `
+    )
+    .join("");
+}
+
+function renderRetirementAuditRecord(
+  record
+) {
+  return `
+    <li
+      class="orchestration-retirement-record"
+      data-retirement-record="${escapeAttribute(
+        record.planId
+      )}"
+      tabindex="-1"
+      aria-label="${escapeAttribute(
+        `Plan ${record.planId} retired by ${record.retiredBy}`
+      )}"
+    >
+      <div>
+        <strong>${escapeHtml(
+          record.planId
+        )}</strong>
+        <span>${escapeHtml(
+          record.reasonLabel
+        )}</span>
+      </div>
+      <time datetime="${escapeAttribute(
+        record.retiredAt
+      )}">${escapeHtml(
+        formatDateTime(
+          record.retiredAt
+        )
+      )}</time>
+      <span>${escapeHtml(
+        `Retired by ${record.retiredBy}`
+      )}</span>
+      <code title="${escapeAttribute(
+        record.planDigest
+      )}">${escapeHtml(
+        shortDigest(
+          record.planDigest
+        )
+      )}</code>
+      <details>
+        <summary>Audit note</summary>
+        <p>${escapeHtml(
+          record.note
+        )}</p>
+      </details>
+    </li>
+  `;
+}
+
+function createOrchestrationAnnouncement(
+  model
+) {
+  const activeSummary =
+    model.plans.length === 0
+      ? "No active decomposition plans."
+      : model.plans
+          .map(
+            (plan) =>
+              `Plan ${plan.planId}: ${plan.progress.acceptedNodes} of ${plan.progress.totalNodes} nodes accepted, ${plan.countsByPhase.running} running, ${plan.countsByPhase.waiting_dependencies} waiting on dependencies, and ${plan.queue.queuedCount} ready in an ephemeral queue.`
+          )
+          .join(" ");
+  const latest =
+    model.retirements[0];
+  return latest
+    ? `${activeSummary} ${model.retirements.length} retired plans retained in audit. Latest: ${latest.planId}, ${latest.reasonLabel}, retired by ${latest.retiredBy}.`
+    : `${activeSummary} No retirement records.`;
+}
+
+function restoreRetirementAuditFocus() {
+  if (
+    busy ||
+    !pendingRetirementFocusPlanId
+  ) {
+    return;
+  }
+  if (
+    focusRetirementAuditRecord(
+      pendingRetirementFocusPlanId
+    )
+  ) {
+    pendingRetirementFocusPlanId =
+      null;
+    pendingOrchestrationFocusToken =
+      null;
+  }
+}
+
+function focusRetirementAuditRecord(
+  planId
+) {
+  const focusTarget =
+    elements.orchestrationRetirements
+      .querySelector(
+        `[data-retirement-record="${escapeAttribute(
+          planId
+        )}"]`
+      );
+  focusTarget?.focus();
+  return (
+    focusTarget !== null &&
+    document.activeElement ===
+      focusTarget
+  );
+}
+
+function restoreOrchestrationFocus(
+  focusToken
+) {
+  const focusTarget =
+    elements.orchestrationPlans
+      .querySelector(
+        `[data-orchestration-focus="${escapeAttribute(
+          focusToken
+        )}"]`
+      );
+  if (
+    focusTarget &&
+    !focusTarget.matches(
+      ":disabled"
+    )
+  ) {
+    focusTarget.focus();
+    if (
+      document.activeElement ===
+      focusTarget
+    ) {
+      return true;
+    }
+  }
+  const separator =
+    focusToken.indexOf(":");
+  const planId =
+    separator >= 0
+      ? focusToken.slice(
+          separator + 1
+        )
+      : "";
+  const fallback =
+    planId.length > 0
+      ? elements
+          .orchestrationPlans
+          .querySelector(
+            `[data-orchestration-plan="${escapeAttribute(
+              planId
+            )}"]`
+          )
+      : null;
+  fallback?.focus();
+  return (
+    fallback !== null &&
+    document.activeElement ===
+      fallback
+  );
+}
+
+function renderOrchestrationNode(node) {
+  const dependencies =
+    node.dependsOn.length > 0
+      ? node.dependsOn.join(", ")
+      : "None";
+  const blockers =
+    node.blockingReasons.length > 0
+      ? `
+        <ul class="orchestration-blockers">
+          ${node.blockingReasons
+            .map(
+              (reason) => `
+                <li>
+                  <strong>${escapeHtml(
+                    reason.label
+                  )}</strong>
+                  ${
+                    reason
+                      .relatedNodeIds
+                      .length > 0
+                      ? `<span> · ${escapeHtml(
+                          reason.relatedNodeIds.join(
+                            ", "
+                          )
+                        )}</span>`
+                      : ""
+                  }
+                </li>
+              `
+            )
+            .join("")}
+        </ul>
+      `
+      : "";
+  const trace =
+    node.attemptTrace.length > 0
+      ? `
+        <details>
+          <summary>${escapeHtml(
+            `${node.attemptTrace.length} attempt${
+              node.attemptTrace.length ===
+              1
+                ? ""
+                : "s"
+            }`
+          )}</summary>
+          <ol class="orchestration-attempts">
+            ${node.attemptTrace
+              .map(
+                (attempt) => `
+                  <li>
+                    <code>${escapeHtml(
+                      attempt.id
+                    )}</code>
+                    <span>${escapeHtml(
+                      `${attempt.status} · ${attempt.agentId}`
+                    )}</span>
+                  </li>
+                `
+              )
+              .join("")}
+          </ol>
+        </details>
+      `
+      : "";
+
+  return `
+    <li class="orchestration-node" data-phase="${escapeAttribute(
+      node.phase
+    )}">
+      <div class="orchestration-node-heading">
+        <div>
+          <span class="orchestration-phase">${escapeHtml(
+            formatOrchestrationPhase(
+              node.phase
+            )
+          )}</span>
+          <h4>${escapeHtml(
+            node.title
+          )}</h4>
+          <code>${escapeHtml(
+            `${node.nodeId} · ${node.workItemId}`
+          )}</code>
+        </div>
+        <span class="orchestration-evidence">
+          ${escapeHtml(
+            `${node.evidence.passed}/${node.evidence.total} evidence passed`
+          )}
+        </span>
+      </div>
+      <dl class="orchestration-node-facts">
+        <div>
+          <dt>Depends on</dt>
+          <dd>${escapeHtml(
+            dependencies
+          )}</dd>
+        </div>
+        <div>
+          <dt>Planned owner</dt>
+          <dd>${escapeHtml(
+            `${node.owner.runnerId} · ${node.owner.match}`
+          )}</dd>
+        </div>
+        <div>
+          <dt>Actual agent</dt>
+          <dd>${escapeHtml(
+            node.actualAgentId ??
+              "Not started"
+          )}</dd>
+        </div>
+        <div>
+          <dt>Retry</dt>
+          <dd>${escapeHtml(
+            `${node.retry.attempts}/${node.retry.maxAttempts}${
+              node.retry.nextEligibleAt
+                ? ` · next ${node.retry.nextEligibleAt}`
+                : ""
+            }`
+          )}</dd>
+        </div>
+      </dl>
+      ${blockers}
+      ${trace}
+    </li>
+  `;
+}
+
+function formatOrchestrationPhase(
+  phase
+) {
+  return String(phase)
+    .replaceAll("_", " ")
+    .replace(
+      /^./,
+      (letter) =>
+        letter.toUpperCase()
+    );
 }
 
 function renderProviderPanel() {
@@ -1623,12 +2727,7 @@ function renderWorkItem(item) {
         </div>
       </div>
 
-      <div class="progress-row">
-        <div class="progress-track" aria-label="${item.progress}% complete">
-          <span style="width: ${item.progress}%"></span>
-        </div>
-        <strong>${item.progress}%</strong>
-      </div>
+      ${renderDeliveryProgress(item.progress)}
 
       <div class="work-detail-grid">
         <div class="detail-block">
@@ -1748,6 +2847,58 @@ function renderEvidence(criterion, evidence) {
   `;
 }
 
+function renderDeliveryProgress(progress) {
+  const accepted = progress?.accepted === true;
+  const passed = Number.isInteger(
+    progress?.passedEvidence
+  )
+    ? progress.passedEvidence
+    : 0;
+  const failed = Number.isInteger(
+    progress?.failedEvidence
+  )
+    ? progress.failedEvidence
+    : 0;
+  const missing = Number.isInteger(
+    progress?.missingEvidence
+  )
+    ? progress.missingEvidence
+    : 0;
+  const total = Number.isInteger(
+    progress?.totalEvidence
+  )
+    ? progress.totalEvidence
+    : 0;
+
+  return `
+    <div
+      class="progress-row"
+      aria-label="${
+        accepted
+          ? "Delivery accepted with verified evidence"
+          : `${passed} of ${total} required evidence checks passed; completion remains uncertain`
+      }"
+    >
+      <div>
+        <span class="detail-label">Evidence-bound progress</span>
+        <strong>${
+          accepted
+            ? "Human acceptance verified"
+            : `${passed} / ${total} evidence passed`
+        }</strong>
+        <small>${
+          accepted
+            ? "Completion is a verified decision."
+            : `${failed} failed · ${missing} missing · no completion estimate`
+        }</small>
+      </div>
+      <span class="progress-certainty">
+        ${accepted ? "Verified" : "Uncertain"}
+      </span>
+    </div>
+  `;
+}
+
 function renderArtifact(artifact) {
   const safeUrl = safeExternalUrl(artifact.url);
   const label = escapeHtml(artifact.kind);
@@ -1860,12 +3011,36 @@ function announceSnapshot(snapshot) {
 }
 
 function setBusy(isBusy) {
+  if (isBusy && !busy) {
+    pendingOrchestrationFocusToken =
+      document.activeElement
+        ?.dataset
+        ?.orchestrationFocus ??
+      null;
+  }
   busy = isBusy;
   elements.resetButton.disabled = isBusy;
   elements.nextButton.disabled = isBusy || demoComplete;
   elements.runButton.disabled = isBusy || demoComplete;
   if (latestSnapshot?.workItems) {
     renderWorkItems(latestSnapshot.workItems);
+    renderOrchestration(
+      latestSnapshot
+    );
+  }
+  if (
+    !isBusy &&
+    !pendingRetirementFocusPlanId &&
+    pendingOrchestrationFocusToken
+  ) {
+    if (
+      restoreOrchestrationFocus(
+        pendingOrchestrationFocusToken
+      )
+    ) {
+      pendingOrchestrationFocusToken =
+        null;
+    }
   }
   applyRunControls();
   applyAcceptanceControls();
@@ -1883,6 +3058,16 @@ function formatTime(value) {
     minute: "2-digit",
     second: "2-digit"
   }).format(new Date(value));
+}
+
+function formatDateTime(value) {
+  return new Intl.DateTimeFormat(
+    undefined,
+    {
+      dateStyle: "medium",
+      timeStyle: "short"
+    }
+  ).format(new Date(value));
 }
 
 function formatObservationTime(value) {

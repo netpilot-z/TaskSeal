@@ -1,3 +1,15 @@
+export function normalizeRequiredAuditNote(
+  value
+) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim();
+  return normalized.length > 0
+    ? normalized
+    : null;
+}
+
 export class DashboardRequestGate {
   constructor() {
     this.latestIssued = 0;
@@ -156,6 +168,253 @@ export function semanticSnapshotKey(value) {
   return JSON.stringify(value);
 }
 
+const ORCHESTRATION_BLOCKER_LABELS = {
+  WORK_ITEM_MISSING:
+    "Referenced work item is unavailable",
+  DEPENDENCY_NOT_ACCEPTED:
+    "Waiting for accepted dependencies",
+  RUNNER_PROFILE_DRIFT:
+    "Planned runner profile changed",
+  OWNER_EXECUTION_DRIFT:
+    "Actual runner differs from the approved owner",
+  DISPATCH_EXECUTION_FAILED:
+    "Dispatch failed before a new attempt was recorded",
+  EVIDENCE_FAILED:
+    "Current evidence failed",
+  RETRY_EXHAUSTED:
+    "Automatic retry limit reached",
+  INTERRUPTED_REQUIRES_REVIEW:
+    "Interrupted attempt requires human review",
+  HUMAN_REJECTED:
+    "Human acceptance was rejected"
+};
+
+const RETIREMENT_REASON_LABELS = {
+  interrupted:
+    "Execution interrupted",
+  human_rejected:
+    "Human rejected delivery",
+  runner_profile_drift:
+    "Runner profile changed",
+  operator_rollback:
+    "Operator rollback"
+};
+
+export function createOrchestrationPanelModel(
+  snapshot,
+  busy = false,
+  mutation = null
+) {
+  const visible =
+    snapshot?.mode === "persistent";
+  const workItemById = new Map(
+    (snapshot?.workItems ?? []).map(
+      (workItem) => [
+        workItem.id,
+        workItem
+      ]
+    )
+  );
+  const availableSlots =
+    snapshot?.runtime?.capacity
+      ?.availableSlots ?? 0;
+  const canDispatch = Boolean(
+    snapshot?.capabilities
+      ?.dispatchDecomposition
+  );
+  const canRetire = Boolean(
+    snapshot?.capabilities
+      ?.retireDecomposition
+  );
+  const activeWorkItemIds =
+    new Set(
+      snapshot?.runtime
+        ?.activeWorkItemIds ?? []
+    );
+  const plans = (
+    Array.isArray(
+      snapshot?.orchestration
+    )
+      ? snapshot.orchestration
+      : []
+  ).map((plan) => {
+    const nodeById = new Map(
+      (plan.nodes ?? []).map(
+        (node) => [
+          node.nodeId,
+          node
+        ]
+      )
+    );
+    const orderedNodeIds =
+      Array.isArray(
+        plan.topologicalOrder
+      )
+        ? plan.topologicalOrder
+        : [...nodeById.keys()].sort();
+    const nodes = orderedNodeIds
+      .map((nodeId) =>
+        nodeById.get(nodeId)
+      )
+      .filter(Boolean)
+      .map((node) => ({
+        ...node,
+        title:
+          workItemById.get(
+            node.workItemId
+          )?.title ??
+          "Unknown work item",
+        blockingReasons: (
+          node.blockingReasons ?? []
+        ).map((reason) => ({
+          code: reason.code,
+          label:
+            ORCHESTRATION_BLOCKER_LABELS[
+              reason.code
+            ] ??
+            "Unknown blocking condition",
+          relatedNodeIds:
+            reason.relatedNodeIds ??
+            []
+        }))
+      }));
+    const readyCount =
+      plan.queue?.queuedCount ?? 0;
+    const activeCount =
+      plan.activeNodeIds?.length ?? 0;
+    const parallelLimit =
+      plan.dispatch
+        ?.maxParallelism ?? 1;
+    const counts =
+      plan.countsByPhase ?? {};
+    const ownedWorkItemIds = [
+      plan.rootWorkItemId,
+      ...nodes.map(
+        (node) => node.workItemId
+      )
+    ];
+    const hasActiveOwnedWork =
+      ownedWorkItemIds.some(
+        (workItemId) =>
+          activeWorkItemIds.has(
+            workItemId
+          ) ||
+          workItemById.get(
+            workItemId
+          )?.status === "running"
+      );
+    const isDispatching =
+      mutation?.kind === "dispatch" &&
+      mutation.planId === plan.planId;
+    const isRetiring =
+      mutation?.kind === "retire" &&
+      mutation.planId === plan.planId;
+    let label;
+    let enabled = false;
+
+    if (busy) {
+      label = isDispatching
+        ? "Dispatching…"
+        : "Busy";
+    } else if (
+      plan.progress?.acceptedNodes ===
+      plan.progress?.totalNodes &&
+      plan.progress?.totalNodes > 0
+    ) {
+      label = "All nodes accepted";
+    } else if (!canDispatch) {
+      label = "Dispatch unavailable";
+    } else if (readyCount === 0) {
+      label =
+        activeCount > 0
+          ? "Waiting for active nodes"
+          : (counts.blocked ?? 0) +
+                (counts.unknown ?? 0) >
+              0
+            ? "Needs attention"
+            : "Waiting for dependencies";
+    } else if (
+      availableSlots < 1 ||
+      activeCount >= parallelLimit
+    ) {
+      label =
+        "Execution capacity full";
+    } else {
+      enabled = true;
+      label = `Dispatch ${readyCount} ready node${
+        readyCount === 1 ? "" : "s"
+      }`;
+    }
+
+    return {
+      ...plan,
+      nodes,
+      dispatchControl: {
+        enabled,
+        label,
+        readyCount
+      },
+      retirementControl: {
+        enabled:
+          canRetire &&
+          !busy &&
+          !hasActiveOwnedWork,
+        label: isRetiring
+          ? "Retiring…"
+          : busy
+            ? "Busy"
+            : !canRetire
+              ? "Retirement unavailable"
+              : hasActiveOwnedWork
+                ? "Wait for active work"
+                : "Retire plan",
+        hasActiveOwnedWork
+      }
+    };
+  });
+  const retirements = (
+    Array.isArray(
+      snapshot
+        ?.decompositionRetirements
+    )
+      ? snapshot
+          .decompositionRetirements
+      : []
+  )
+    .map((record) => ({
+      planId: record.planId,
+      planDigest:
+        record.planDigest,
+      retiredBy: record.retiredBy,
+      retiredAt: record.retiredAt,
+      reasonCode:
+        record.reasonCode,
+      reasonLabel:
+        RETIREMENT_REASON_LABELS[
+          record.reasonCode
+        ] ??
+        "Unknown retirement reason",
+      note: record.note
+    }))
+    .toSorted(
+      (left, right) =>
+        right.retiredAt.localeCompare(
+          left.retiredAt
+        ) ||
+        left.planId.localeCompare(
+          right.planId
+        )
+    );
+
+  return {
+    visible,
+    plans,
+    retirements,
+    overview:
+      `${plans.length} active · ${retirements.length} retired`
+  };
+}
+
 export function reconcileSelectedWorkItemId(
   selectedWorkItemId,
   workItems
@@ -212,12 +471,18 @@ export function createRunControlState(
     Math.max(0, 1 - activeIds.length);
   const lastAttempt =
     selectedWorkItem?.attempts?.at(-1) ?? null;
+  const managedPlanId =
+    findManagedPlanId(
+      snapshot,
+      selectedWorkItemId
+    );
   const canRun = Boolean(
     snapshot.mode === "persistent" &&
       snapshot.capabilities?.runAttempt &&
       selectedWorkItem &&
       selectedWorkItem.status !==
         "accepted" &&
+      managedPlanId === null &&
       !selectedIsActive &&
       availableSlots > 0 &&
       !busy
@@ -237,8 +502,10 @@ export function createRunControlState(
         ? selectedRun.cancelRequestedAt
           ? "Finishing cancellation…"
           : "Saving outcome…"
-        : selectedIsActive
+          : selectedIsActive
           ? "Codex running…"
+          : managedPlanId !== null
+            ? "Use DAG dispatch"
           : selectedWorkItem
                 ?.status === "accepted"
             ? "Accepted"
@@ -263,7 +530,8 @@ export function createRunControlState(
       selectedRun,
       selectedIsActive,
       lastAttempt,
-      availableSlots
+      availableSlots,
+      managedPlanId
     }),
     selectedWorkItemId:
       selectedWorkItem?.id ?? null,
@@ -322,6 +590,11 @@ export function createAcceptanceControlState(
             )?.outcome === "passed"
         )
   );
+  const decompositionBlockLabel =
+    findAcceptanceBlockLabel(
+      snapshot,
+      selectedWorkItemId
+    );
   const canDecide = Boolean(
     snapshot.mode === "persistent" &&
       snapshot.capabilities
@@ -329,6 +602,8 @@ export function createAcceptanceControlState(
       workItem &&
       eligibleStatus &&
       decision === null &&
+      decompositionBlockLabel ===
+        null &&
       !busy &&
       !dashboardTruthPending
   );
@@ -379,7 +654,8 @@ export function createAcceptanceControlState(
       providerTruthPending,
     localLabel:
       decision === null
-        ? "Awaiting human decision"
+        ? decompositionBlockLabel ??
+          "Awaiting human decision"
         : decision.decision ===
             "accepted"
           ? "Accepted locally"
@@ -550,12 +826,74 @@ export function createAccessibleSnapshotState(snapshot) {
   };
 }
 
+export function createAccessibleOrchestrationState(
+  snapshot
+) {
+  return {
+    plans: (
+      Array.isArray(
+        snapshot.orchestration
+      )
+        ? snapshot.orchestration
+        : []
+    ).map((plan) => ({
+      planId: plan.planId,
+      planDigest: plan.planDigest,
+      progress: plan.progress,
+      countsByPhase:
+        plan.countsByPhase,
+      queue: plan.queue,
+      topologicalOrder:
+        plan.topologicalOrder,
+      dispatch: plan.dispatch,
+      activeNodeIds:
+        plan.activeNodeIds,
+      nodes: (plan.nodes ?? []).map(
+        (node) => ({
+          nodeId: node.nodeId,
+          workItemId:
+            node.workItemId,
+          phase: node.phase,
+          dependsOn:
+            node.dependsOn,
+          owner: node.owner,
+          actualAgentId:
+            node.actualAgentId,
+          blockingReasons:
+            node.blockingReasons,
+          retry: node.retry,
+          evidence: node.evidence
+        })
+      )
+    })),
+    retirements: (
+      Array.isArray(
+        snapshot
+          .decompositionRetirements
+      )
+        ? snapshot
+            .decompositionRetirements
+        : []
+    ).map((record) => ({
+      planId: record.planId,
+      planDigest:
+        record.planDigest,
+      retiredBy: record.retiredBy,
+      retiredAt: record.retiredAt,
+      reasonCode:
+        record.reasonCode,
+      note: record.note
+    }))
+  };
+}
+
 function createRunStatusLabel({
   selectedWorkItem,
   selectedRun,
   selectedIsActive,
   lastAttempt,
-  availableSlots
+  availableSlots,
+  managedPlanId
 }) {
   if (!selectedWorkItem) {
     return "No work item selected";
@@ -588,6 +926,10 @@ function createRunStatusLabel({
     } is running`;
   }
 
+  if (managedPlanId !== null) {
+    return `${selectedWorkItem.id} · Managed by decomposition ${managedPlanId}; use DAG dispatch`;
+  }
+
   if (availableSlots < 1) {
     return `${selectedWorkItem.id} · execution capacity is full; retry after a run settles`;
   }
@@ -597,6 +939,95 @@ function createRunStatusLabel({
   }
 
   return `${selectedWorkItem.id} · ready to run`;
+}
+
+function findManagedPlanId(
+  snapshot,
+  workItemId
+) {
+  if (
+    typeof workItemId !== "string"
+  ) {
+    return null;
+  }
+  for (
+    const plan of
+      snapshot.orchestration ?? []
+  ) {
+    if (
+      (plan.nodes ?? []).some(
+        (node) =>
+          node.workItemId ===
+          workItemId
+      )
+    ) {
+      return plan.planId;
+    }
+    if (
+      plan.rootWorkItemId ===
+        workItemId &&
+      plan.progress
+        ?.acceptedNodes !==
+        plan.progress?.totalNodes
+    ) {
+      return plan.planId;
+    }
+  }
+  return null;
+}
+
+function findAcceptanceBlockLabel(
+  snapshot,
+  workItemId
+) {
+  if (
+    typeof workItemId !== "string"
+  ) {
+    return null;
+  }
+  for (
+    const plan of
+      snapshot.orchestration ?? []
+  ) {
+    if (
+      plan.rootWorkItemId ===
+        workItemId &&
+      plan.progress
+        ?.acceptedNodes !==
+        plan.progress?.totalNodes
+    ) {
+      return `Waiting for all decomposition nodes in ${plan.planId} to be accepted`;
+    }
+    const node = (
+      plan.nodes ?? []
+    ).find(
+      (candidate) =>
+        candidate.workItemId ===
+        workItemId
+    );
+    if (!node) {
+      continue;
+    }
+    const nodeById = new Map(
+      (plan.nodes ?? []).map(
+        (candidate) => [
+          candidate.nodeId,
+          candidate
+        ]
+      )
+    );
+    if (
+      (node.dependsOn ?? []).some(
+        (dependencyId) =>
+          nodeById.get(
+            dependencyId
+          )?.phase !== "accepted"
+      )
+    ) {
+      return `Waiting for accepted decomposition dependencies in ${plan.planId}`;
+    }
+  }
+  return null;
 }
 
 function createDefaultPrompt(workItem) {
