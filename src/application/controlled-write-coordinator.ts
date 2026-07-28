@@ -1,10 +1,12 @@
 import {
   createControlledWriteOperation,
+  createControlledWriteOperationV2,
   transitionControlledWriteOperation
 } from "./controlled-write-operation.ts";
 import type {
   ControlledWriteActor,
-  ControlledWriteOperation
+  ControlledWriteOperation,
+  ControlledWriteOperationV2
 } from "./controlled-write-operation.ts";
 import {
   ProviderOperationJournalError
@@ -16,8 +18,12 @@ import type {
 } from "./provider-operation-journal.ts";
 import type {
   LinearWriteCreateResult,
+  LinearWriteCreateResultV2,
+  LinearWriteObservedPlacementV2,
   LinearWriteQueryResult,
-  LinearWriteTransportPort
+  LinearWriteQueryResultV2,
+  LinearWriteTransportPort,
+  LinearWriteTransportV2Port
 } from "./linear-write-transport.ts";
 
 export interface ControlledWriteCoordinatorJournalPort
@@ -28,6 +34,9 @@ export interface ControlledWriteCoordinatorJournalPort
 export interface ControlledWriteCoordinatorOptions {
   journal: ControlledWriteCoordinatorJournalPort;
   transport: LinearWriteTransportPort;
+  transportV2?:
+    | LinearWriteTransportV2Port
+    | undefined;
   clock?: (() => unknown) | undefined;
 }
 
@@ -36,6 +45,11 @@ export interface ControlledWritePreparationInput {
   resolvedTarget: unknown;
   clientRequestId: unknown;
   payload: unknown;
+}
+
+export interface ControlledWritePreparationInputV2
+  extends ControlledWritePreparationInput {
+  sourceIntent: unknown;
 }
 
 export interface ControlledWriteCoordinatorOperationInput {
@@ -60,11 +74,15 @@ export class ControlledWriteCoordinator {
   static async open({
     journal,
     transport,
+    transportV2,
     clock = () => new Date()
   }: ControlledWriteCoordinatorOptions): Promise<ControlledWriteCoordinator> {
     try {
       validateJournal(journal);
       validateTransport(transport);
+      if (transportV2 !== undefined) {
+        validateTransportV2(transportV2);
+      }
     } catch {
       throw invalidInput();
     }
@@ -76,6 +94,7 @@ export class ControlledWriteCoordinator {
       new ControlledWriteCoordinator({
         journal,
         transport,
+        transportV2,
         clock
       });
     await coordinator.recoverInterruptedOperations();
@@ -84,6 +103,9 @@ export class ControlledWriteCoordinator {
 
   readonly #journal: ControlledWriteCoordinatorJournalPort;
   readonly #transport: LinearWriteTransportPort;
+  readonly #transportV2:
+    | LinearWriteTransportV2Port
+    | undefined;
   readonly #clock: () => unknown;
   readonly #operationQueues = new Map<
     string,
@@ -94,14 +116,19 @@ export class ControlledWriteCoordinator {
   private constructor({
     journal,
     transport,
+    transportV2,
     clock
   }: {
     journal: ControlledWriteCoordinatorJournalPort;
     transport: LinearWriteTransportPort;
+    transportV2:
+      | LinearWriteTransportV2Port
+      | undefined;
     clock: () => unknown;
   }) {
     this.#journal = journal;
     this.#transport = transport;
+    this.#transportV2 = transportV2;
     this.#clock = clock;
   }
 
@@ -158,6 +185,66 @@ export class ControlledWriteCoordinator {
     );
   }
 
+  async prepareV2(
+    inputValue: unknown
+  ): Promise<ControlledWriteOperationV2> {
+    this.assertOpen();
+    let input: ControlledWritePreparationInputV2;
+    let candidate: ControlledWriteOperationV2;
+
+    try {
+      input = normalizePreparationInputV2(
+        inputValue
+      );
+      candidate = createControlledWriteOperationV2({
+        configuredTarget: input.configuredTarget,
+        resolvedTarget: input.resolvedTarget,
+        clientRequestId: input.clientRequestId,
+        sourceIntent: input.sourceIntent,
+        payload: input.payload,
+        preparedAt: this.captureTimestamp()
+      });
+    } catch (error) {
+      if (
+        error instanceof
+        ControlledWriteCoordinatorError
+      ) {
+        throw error;
+      }
+      throw invalidInput();
+    }
+
+    return this.enqueue(
+      candidate.plan.operationKey,
+      async () => {
+        this.assertOpen();
+        const current = await this.readCurrent(
+          candidate.plan.operationKey
+        );
+
+        if (current !== null) {
+          if (
+            current.schemaVersion === 2 &&
+            current.plan.planDigest ===
+              candidate.plan.planDigest
+          ) {
+            return current;
+          }
+          throw planConflict();
+        }
+
+        const result = await this.append(
+          0,
+          candidate
+        );
+        if (result.operation.schemaVersion !== 2) {
+          throw planConflict();
+        }
+        return result.operation;
+      }
+    );
+  }
+
   approve(
     inputValue: unknown
   ): Promise<ControlledWriteOperation> {
@@ -204,6 +291,12 @@ export class ControlledWriteCoordinator {
         if (current.status !== "approved") {
           throw stateInvalid();
         }
+        const transportV2 =
+          current.schemaVersion === 2
+            ? requireTransportV2(
+                this.#transportV2
+              )
+            : null;
 
         const submitting = transitionSafely(
           current,
@@ -225,19 +318,51 @@ export class ControlledWriteCoordinator {
           throw reopenRequired();
         }
 
+        const committed = begin.operation;
         let transportResult: unknown;
         try {
           transportResult =
-            await this.#transport.createIssue({
-              clientRequestId:
-                submitting.plan.clientRequestId,
-              teamId:
-                submitting.plan.resolvedTarget.teamId,
-              title:
-                submitting.plan.payload.title,
-              description:
-                submitting.plan.payload.description
-            });
+            committed.schemaVersion === 1
+              ? await this.#transport.createIssue({
+                  clientRequestId:
+                    committed.plan
+                      .clientRequestId,
+                  teamId:
+                    committed.plan.resolvedTarget
+                      .teamId,
+                  title:
+                    committed.plan.payload.title,
+                  description:
+                    committed.plan.payload
+                      .description
+                })
+              : await (
+                  transportV2 as LinearWriteTransportV2Port
+                ).createIssueV2({
+                  clientRequestId:
+                    committed.plan
+                      .clientRequestId,
+                  organizationId:
+                    committed.plan.resolvedTarget
+                      .organizationId,
+                  teamId:
+                    committed.plan.resolvedTarget
+                      .teamId,
+                  projectId:
+                    committed.plan.resolvedTarget
+                      .projectId,
+                  stateId:
+                    committed.plan.resolvedTarget
+                      .stateId,
+                  parentIssueId:
+                    committed.plan.resolvedTarget
+                      .parentIssueId,
+                  title:
+                    committed.plan.payload.title,
+                  description:
+                    committed.plan.payload
+                      .description
+                });
         } catch {
           transportResult = null;
         }
@@ -245,16 +370,16 @@ export class ControlledWriteCoordinator {
         try {
           const completedAt =
             this.captureTimestampOr(
-              submitting.updatedAt
+              committed.updatedAt
             );
           const completed =
             projectSubmissionResult(
-              submitting,
+              committed,
               transportResult,
               completedAt
             );
           const result = await this.append(
-            submitting.version,
+            committed.version,
             completed
           );
           return result.operation;
@@ -301,6 +426,12 @@ export class ControlledWriteCoordinator {
         ) {
           throw stateInvalid();
         }
+        const transportV2 =
+          current.schemaVersion === 2
+            ? requireTransportV2(
+                this.#transportV2
+              )
+            : null;
 
         const reconciling = transitionSafely(
           current,
@@ -322,18 +453,43 @@ export class ControlledWriteCoordinator {
           throw reopenRequired();
         }
 
+        const committed = begin.operation;
         let transportResult: unknown;
         try {
           transportResult =
-            await this.#transport.queryByClientUuid(
-              {
-                clientRequestId:
-                  reconciling.plan.clientRequestId,
-                teamId:
-                  reconciling.plan.resolvedTarget
-                    .teamId
-              }
-            );
+            committed.schemaVersion === 1
+              ? await this.#transport.queryByClientUuid(
+                  {
+                    clientRequestId:
+                      committed.plan
+                        .clientRequestId,
+                    teamId:
+                      committed.plan
+                        .resolvedTarget.teamId
+                  }
+                )
+              : await (
+                  transportV2 as LinearWriteTransportV2Port
+                ).queryByClientUuidV2({
+                  clientRequestId:
+                    committed.plan
+                      .clientRequestId,
+                  organizationId:
+                    committed.plan.resolvedTarget
+                      .organizationId,
+                  teamId:
+                    committed.plan.resolvedTarget
+                      .teamId,
+                  projectId:
+                    committed.plan.resolvedTarget
+                      .projectId,
+                  stateId:
+                    committed.plan.resolvedTarget
+                      .stateId,
+                  parentIssueId:
+                    committed.plan.resolvedTarget
+                      .parentIssueId
+                });
         } catch {
           transportResult = null;
         }
@@ -341,16 +497,16 @@ export class ControlledWriteCoordinator {
         try {
           const completedAt =
             this.captureTimestampOr(
-              reconciling.updatedAt
+              committed.updatedAt
             );
           const completed =
             projectReconciliationResult(
-              reconciling,
+              committed,
               transportResult,
               completedAt
             );
           const result = await this.append(
-            reconciling.version,
+            committed.version,
             completed
           );
           return result.operation;
@@ -659,6 +815,13 @@ function projectSubmissionResult(
   value: unknown,
   occurredAt: string
 ): ControlledWriteOperation {
+  if (submitting.schemaVersion === 2) {
+    return projectSubmissionResultV2(
+      submitting,
+      value,
+      occurredAt
+    );
+  }
   const result = normalizeCreateResult(value);
 
   if (result?.kind === "created") {
@@ -670,6 +833,46 @@ function projectSubmissionResult(
           occurredAt,
           observedTeamId:
             result.observedTeamId,
+          issue: result.issue
+        }
+      );
+    } catch {
+      return submissionUnknown(
+        submitting,
+        occurredAt
+      );
+    }
+  }
+  if (result?.kind === "not_dispatched") {
+    return transitionSafely(submitting, {
+      type: "submission_not_dispatched",
+      occurredAt,
+      diagnosticCode:
+        "LINEAR_WRITE_NOT_DISPATCHED"
+    });
+  }
+  return submissionUnknown(
+    submitting,
+    occurredAt
+  );
+}
+
+function projectSubmissionResultV2(
+  submitting: ControlledWriteOperationV2,
+  value: unknown,
+  occurredAt: string
+): ControlledWriteOperation {
+  const result = normalizeCreateResultV2(value);
+
+  if (result?.kind === "created") {
+    try {
+      return transitionControlledWriteOperation(
+        submitting,
+        {
+          type: "submission_created",
+          occurredAt,
+          observedPlacement:
+            result.observedPlacement,
           issue: result.issue
         }
       );
@@ -711,6 +914,13 @@ function projectReconciliationResult(
   value: unknown,
   occurredAt: string
 ): ControlledWriteOperation {
+  if (reconciling.schemaVersion === 2) {
+    return projectReconciliationResultV2(
+      reconciling,
+      value,
+      occurredAt
+    );
+  }
   const result = normalizeQueryResult(value);
 
   if (result?.kind === "found") {
@@ -722,6 +932,52 @@ function projectReconciliationResult(
           occurredAt,
           observedTeamId:
             result.observedTeamId,
+          issue: result.issue
+        }
+      );
+    } catch {
+      return reconciliationAmbiguous(
+        reconciling,
+        occurredAt
+      );
+    }
+  }
+  if (result?.kind === "absent") {
+    return transitionSafely(reconciling, {
+      type: "reconciliation_absent",
+      occurredAt
+    });
+  }
+  if (result?.kind === "ambiguous") {
+    return reconciliationAmbiguous(
+      reconciling,
+      occurredAt
+    );
+  }
+  return transitionSafely(reconciling, {
+    type: "reconciliation_failed",
+    occurredAt,
+    diagnosticCode:
+      "LINEAR_RECONCILIATION_FAILED"
+  });
+}
+
+function projectReconciliationResultV2(
+  reconciling: ControlledWriteOperationV2,
+  value: unknown,
+  occurredAt: string
+): ControlledWriteOperation {
+  const result = normalizeQueryResultV2(value);
+
+  if (result?.kind === "found") {
+    try {
+      return transitionControlledWriteOperation(
+        reconciling,
+        {
+          type: "reconciliation_found",
+          occurredAt,
+          observedPlacement:
+            result.observedPlacement,
           issue: result.issue
         }
       );
@@ -831,6 +1087,70 @@ function normalizeCreateResult(
   }
 }
 
+function normalizeCreateResultV2(
+  value: unknown
+): LinearWriteCreateResultV2 | null {
+  try {
+    const result = readDataRecord(value);
+    if (result.kind === "created") {
+      requireExactKeys(result, [
+        "kind",
+        "issue",
+        "observedPlacement"
+      ]);
+      const issue = normalizeResultIssue(
+        result.issue
+      );
+      const observedPlacement =
+        normalizeResultPlacementV2(
+          result.observedPlacement
+        );
+      if (
+        issue === null ||
+        observedPlacement === null
+      ) {
+        return null;
+      }
+      return {
+        kind: "created",
+        issue,
+        observedPlacement
+      };
+    }
+    if (result.kind === "not_dispatched") {
+      requireExactKeys(result, [
+        "kind",
+        "diagnosticCode"
+      ]);
+      return result.diagnosticCode ===
+        "LINEAR_WRITE_NOT_DISPATCHED"
+        ? {
+            kind: "not_dispatched",
+            diagnosticCode:
+              "LINEAR_WRITE_NOT_DISPATCHED"
+          }
+        : null;
+    }
+    if (result.kind === "outcome_unknown") {
+      requireExactKeys(result, [
+        "kind",
+        "diagnosticCode"
+      ]);
+      return result.diagnosticCode ===
+        "LINEAR_WRITE_OUTCOME_UNKNOWN"
+        ? {
+            kind: "outcome_unknown",
+            diagnosticCode:
+              "LINEAR_WRITE_OUTCOME_UNKNOWN"
+          }
+        : null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function normalizeQueryResult(
   value: unknown
 ): LinearWriteQueryResult | null {
@@ -902,6 +1222,126 @@ function normalizeQueryResult(
   }
 }
 
+function normalizeQueryResultV2(
+  value: unknown
+): LinearWriteQueryResultV2 | null {
+  try {
+    const result = readDataRecord(value);
+    if (result.kind === "found") {
+      requireExactKeys(result, [
+        "kind",
+        "issue",
+        "observedPlacement"
+      ]);
+      const issue = normalizeResultIssue(
+        result.issue
+      );
+      const observedPlacement =
+        normalizeResultPlacementV2(
+          result.observedPlacement
+        );
+      if (
+        issue === null ||
+        observedPlacement === null
+      ) {
+        return null;
+      }
+      return {
+        kind: "found",
+        issue,
+        observedPlacement
+      };
+    }
+    if (result.kind === "absent") {
+      requireExactKeys(result, ["kind"]);
+      return { kind: "absent" };
+    }
+    if (result.kind === "failed") {
+      requireExactKeys(result, [
+        "kind",
+        "diagnosticCode"
+      ]);
+      return result.diagnosticCode ===
+        "LINEAR_RECONCILIATION_FAILED"
+        ? {
+            kind: "failed",
+            diagnosticCode:
+              "LINEAR_RECONCILIATION_FAILED"
+          }
+        : null;
+    }
+    if (result.kind === "ambiguous") {
+      requireExactKeys(result, [
+        "kind",
+        "diagnosticCode"
+      ]);
+      return result.diagnosticCode ===
+        "LINEAR_RECONCILIATION_AMBIGUOUS"
+        ? {
+            kind: "ambiguous",
+            diagnosticCode:
+              "LINEAR_RECONCILIATION_AMBIGUOUS"
+          }
+        : null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeResultIssue(
+  value: unknown
+): {
+  id: string;
+  identifier: string;
+} | null {
+  const issue = readExactRecord(value, [
+    "id",
+    "identifier"
+  ]);
+  return typeof issue.id === "string" &&
+    typeof issue.identifier === "string"
+    ? {
+        id: issue.id,
+        identifier: issue.identifier
+      }
+    : null;
+}
+
+function normalizeResultPlacementV2(
+  value: unknown
+): LinearWriteObservedPlacementV2 | null {
+  const placement = readExactRecord(value, [
+    "organizationId",
+    "teamId",
+    "projectId",
+    "stateId",
+    "parentIssueId"
+  ]);
+  if (
+    typeof placement.organizationId !==
+      "string" ||
+    typeof placement.teamId !== "string" ||
+    typeof placement.projectId !== "string" ||
+    typeof placement.stateId !== "string" ||
+    !(
+      placement.parentIssueId === null ||
+      typeof placement.parentIssueId ===
+        "string"
+    )
+  ) {
+    return null;
+  }
+  return {
+    organizationId: placement.organizationId,
+    teamId: placement.teamId,
+    projectId: placement.projectId,
+    stateId: placement.stateId,
+    parentIssueId: placement.parentIssueId
+  };
+}
+
 function normalizePreparationInput(
   value: unknown
 ): ControlledWritePreparationInput {
@@ -915,6 +1355,25 @@ function normalizePreparationInput(
     configuredTarget: input.configuredTarget,
     resolvedTarget: input.resolvedTarget,
     clientRequestId: input.clientRequestId,
+    payload: input.payload
+  };
+}
+
+function normalizePreparationInputV2(
+  value: unknown
+): ControlledWritePreparationInputV2 {
+  const input = readExactRecord(value, [
+    "configuredTarget",
+    "resolvedTarget",
+    "clientRequestId",
+    "sourceIntent",
+    "payload"
+  ]);
+  return {
+    configuredTarget: input.configuredTarget,
+    resolvedTarget: input.resolvedTarget,
+    clientRequestId: input.clientRequestId,
+    sourceIntent: input.sourceIntent,
     payload: input.payload
   };
 }
@@ -1053,6 +1512,36 @@ function validateTransport(
   ) {
     throw invalidInput();
   }
+}
+
+function validateTransportV2(
+  value: unknown
+): asserts value is LinearWriteTransportV2Port {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    typeof Reflect.get(
+      value,
+      "createIssueV2"
+    ) !== "function" ||
+    typeof Reflect.get(
+      value,
+      "queryByClientUuidV2"
+    ) !== "function"
+  ) {
+    throw invalidInput();
+  }
+}
+
+function requireTransportV2(
+  value:
+    | LinearWriteTransportV2Port
+    | undefined
+): LinearWriteTransportV2Port {
+  if (value === undefined) {
+    throw stateInvalid();
+  }
+  return value;
 }
 
 function readExactRecord<const T extends readonly string[]>(
