@@ -24,6 +24,7 @@ import {
   computeBaseWorkflowDigest
 } from "./import-plan.ts";
 import type {
+  ImportAction,
   ImportPlan
 } from "./import-plan.ts";
 import {
@@ -69,6 +70,8 @@ export interface TaskSealServiceOpenOptions {
 interface TaskSealServiceState {
   workflow: Workflow;
   receiptsByPlanDigest: Map<string, ImportReceipt>;
+  receiptContextsByPlanDigest:
+    Map<string, ImportReceiptContext>;
   batchesById: Map<string, string>;
 }
 
@@ -77,6 +80,9 @@ interface TaskSealServiceConstructorOptions {
   workflow: Workflow;
   receiptsByPlanDigest?:
     | Map<string, ImportReceipt>
+    | undefined;
+  receiptContextsByPlanDigest?:
+    | Map<string, ImportReceiptContext>
     | undefined;
   batchesById?: Map<string, string> | undefined;
   importPolicyProvider?:
@@ -121,6 +127,12 @@ interface ImportReceiptQuery {
   planDigest: string;
 }
 
+export interface ImportReceiptContext {
+  receipt: ImportReceipt;
+  policyBinding: PolicyBinding;
+  actions: ImportAction[];
+}
+
 interface RecoverRunningAttemptsOptions {
   occurredAt?: string;
 }
@@ -138,6 +150,8 @@ export class TaskSealService {
     let workflow = createWorkflow();
     const receiptsByPlanDigest =
       new Map<string, ImportReceipt>();
+    const receiptContextsByPlanDigest =
+      new Map<string, ImportReceiptContext>();
     const batchesById = new Map<string, string>();
 
     for (const [index, record] of records.entries()) {
@@ -188,6 +202,13 @@ export class TaskSealService {
             validated.record.planDigest,
             validated.receipt
           );
+          receiptContextsByPlanDigest.set(
+            validated.record.planDigest,
+            projectImportReceiptContext(
+              validated.record,
+              validated.receipt
+            )
+          );
         } else {
           workflow = applyEvent(workflow, record);
         }
@@ -204,6 +225,7 @@ export class TaskSealService {
       journal,
       workflow,
       receiptsByPlanDigest,
+      receiptContextsByPlanDigest,
       batchesById,
       importPolicyProvider,
       providerIngressRegistry,
@@ -228,6 +250,7 @@ export class TaskSealService {
     journal,
     workflow,
     receiptsByPlanDigest = new Map(),
+    receiptContextsByPlanDigest = new Map(),
     batchesById = new Map(),
     importPolicyProvider,
     providerIngressRegistry,
@@ -238,6 +261,7 @@ export class TaskSealService {
     this.#state = {
       workflow,
       receiptsByPlanDigest,
+      receiptContextsByPlanDigest,
       batchesById
     };
     this.#writeQueue = Promise.resolve();
@@ -461,6 +485,9 @@ export class TaskSealService {
     const nextBatches = new Map(
       this.#state.batchesById
     );
+    const nextReceiptContexts = new Map(
+      this.#state.receiptContextsByPlanDigest
+    );
     nextReceipts.set(
       normalizedPlan.planDigest,
       validated.receipt
@@ -468,6 +495,13 @@ export class TaskSealService {
     nextBatches.set(
       validated.record.batchId,
       validated.recordDigest
+    );
+    nextReceiptContexts.set(
+      normalizedPlan.planDigest,
+      projectImportReceiptContext(
+        validated.record,
+        validated.receipt
+      )
     );
 
     if (
@@ -519,6 +553,8 @@ export class TaskSealService {
     this.#state = {
       workflow: candidate,
       receiptsByPlanDigest: nextReceipts,
+      receiptContextsByPlanDigest:
+        nextReceiptContexts,
       batchesById: nextBatches
     };
 
@@ -679,6 +715,19 @@ export class TaskSealService {
     const receipt =
       this.#state.receiptsByPlanDigest.get(planDigest);
     return receipt ? structuredClone(receipt) : null;
+  }
+
+  getImportReceiptContext({
+    planDigest
+  }: ImportReceiptQuery): ImportReceiptContext | null {
+    this.assertAvailable();
+    const context =
+      this.#state.receiptContextsByPlanDigest.get(
+        planDigest
+      );
+    return context
+      ? structuredClone(context)
+      : null;
   }
 
   getHealth(): TaskSealServiceHealth {
@@ -1329,6 +1378,18 @@ function importPlanIngressMismatch(): TaskSealServiceError {
     "IMPORT_PLAN_TAMPERED",
     "ImportPlan events do not match the authorized Provider ingress binding."
   );
+}
+
+function projectImportReceiptContext(
+  record: ImportBatchRecord,
+  receipt: ImportReceipt
+): ImportReceiptContext {
+  return {
+    receipt: structuredClone(receipt),
+    policyBinding:
+      structuredClone(record.policyBinding),
+    actions: structuredClone(record.actions)
+  };
 }
 
 function readErrorMessage(error: unknown): string {

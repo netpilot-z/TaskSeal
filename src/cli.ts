@@ -97,6 +97,12 @@ import type {
 import type {
   ProviderName
 } from "./lib/provider-snapshot.ts";
+import {
+  executeLocalLinearReadyWork
+} from "./linear-ready-work-runtime.ts";
+import type {
+  LinearReadyWorkCommandOptions
+} from "./linear-ready-work-runtime.ts";
 
 export type CliExitCode = 0 | 1 | 2;
 
@@ -216,6 +222,16 @@ type InspectGiteeHealth = (
 type CreateLinearDryRun = (
   options: LinearDryRunOptions
 ) => unknown | Promise<unknown>;
+type ExecuteLinearReadyWork = (
+  options: LinearReadyWorkCommandOptions
+) => unknown | Promise<unknown>;
+type ParsedLinearReadyWorkArguments =
+  LinearReadyWorkCommandOptions extends
+    infer Command
+    ? Command extends { readonly cwd: string }
+      ? Omit<Command, "cwd">
+      : never
+    : never;
 
 type ProviderObservationCoordinatorFactory = (options: {
   cwd: string;
@@ -246,6 +262,9 @@ export interface RunCliOptions {
   inspectGitee?: InspectGitee | undefined;
   inspectGiteeHealth?: InspectGiteeHealth | undefined;
   createLinearDryRun?: CreateLinearDryRun | undefined;
+  executeLinearReadyWork?:
+    | ExecuteLinearReadyWork
+    | undefined;
   providerObservationCoordinatorFactory?:
     | ProviderObservationCoordinatorFactory
     | undefined;
@@ -443,6 +462,9 @@ const USAGE = `Usage:
   taskseal inspect linear --issue <identifier-or-uuid> --work-item <id> --criterion <key> [--snapshot-version 2 --title-management provider|none]
   taskseal inspect gitee-health
   taskseal inspect gitee --issue <case-sensitive-reference> --work-item <id> --criterion <key> --snapshot-version 2 --title-management provider|none
+  taskseal ready linear
+  taskseal ready linear --mode preview --issue <uuid> --work-item <id> --criterion <key>
+  taskseal ready linear --mode apply --issue <uuid> --work-item <id> --criterion <key> --expected-plan-digest <sha256>
   taskseal sync linear --dry-run [--source <repository-relative-path>]
 `;
 
@@ -461,6 +483,7 @@ export async function runCli({
   inspectGitee,
   inspectGiteeHealth,
   createLinearDryRun,
+  executeLinearReadyWork,
   providerObservationCoordinatorFactory
 }: RunCliOptions = {}): Promise<CliExitCode> {
   const command = args[0] ?? "start";
@@ -709,6 +732,42 @@ export async function runCli({
       return 0;
     } catch (error) {
       output.write(renderSyncError(error));
+      return 1;
+    }
+  }
+
+  if (command === "ready") {
+    if (args[1] !== "linear") {
+      output.write(USAGE);
+      return 2;
+    }
+
+    const options =
+      parseLinearReadyWorkArguments(
+        args.slice(2)
+      );
+
+    if (!options) {
+      output.write(USAGE);
+      return 2;
+    }
+
+    try {
+      const execute =
+        executeLinearReadyWork ??
+        executeLocalLinearReadyWork;
+      const result = await execute({
+        cwd,
+        ...options
+      } as LinearReadyWorkCommandOptions);
+      output.write(
+        `${JSON.stringify(result, null, 2)}\n`
+      );
+      return 0;
+    } catch (error) {
+      output.write(
+        renderLinearReadyWorkError(error)
+      );
       return 1;
     }
   }
@@ -1871,6 +1930,111 @@ function parseLinearSyncArguments(
   return null;
 }
 
+function parseLinearReadyWorkArguments(
+  args: readonly string[]
+): ParsedLinearReadyWorkArguments | null {
+  if (args.length === 0) {
+    return { mode: "list" };
+  }
+
+  const previewValues =
+    parseNamedArguments(args, [
+      "--mode",
+      "--issue",
+      "--work-item",
+      "--criterion"
+    ]);
+
+  if (
+    previewValues !== null &&
+    previewValues["--mode"] ===
+      "preview"
+  ) {
+    const issueId =
+      previewValues["--issue"];
+
+    if (!isReadyWorkUuid(issueId)) {
+      return null;
+    }
+
+    return {
+      mode: "preview",
+      issueId: issueId.toLowerCase(),
+      workItemId: readNamedArgument(
+        previewValues,
+        "--work-item"
+      ),
+      requiredEvidence: [
+        readNamedArgument(
+          previewValues,
+          "--criterion"
+        )
+      ]
+    };
+  }
+
+  const applyValues = parseNamedArguments(
+    args,
+    [
+      "--mode",
+      "--issue",
+      "--work-item",
+      "--criterion",
+      "--expected-plan-digest"
+    ]
+  );
+
+  if (
+    applyValues === null ||
+    applyValues["--mode"] !== "apply"
+  ) {
+    return null;
+  }
+
+  const issueId = applyValues["--issue"];
+  const expectedPlanDigest =
+    applyValues[
+      "--expected-plan-digest"
+    ];
+
+  if (
+    !isReadyWorkUuid(issueId) ||
+    typeof expectedPlanDigest !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/.test(
+      expectedPlanDigest
+    )
+  ) {
+    return null;
+  }
+
+  return {
+    mode: "apply",
+    issueId: issueId.toLowerCase(),
+    workItemId: readNamedArgument(
+      applyValues,
+      "--work-item"
+    ),
+    requiredEvidence: [
+      readNamedArgument(
+        applyValues,
+        "--criterion"
+      )
+    ],
+    expectedPlanDigest
+  };
+}
+
+function isReadyWorkUuid(
+  value: unknown
+): value is string {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      value
+    )
+  );
+}
+
 function renderInspectError(error: unknown): string {
   const code = renderErrorCode(error);
   const message = readErrorMessage(
@@ -1887,6 +2051,12 @@ function renderSyncError(error: unknown): string {
     "Unknown synchronization planning error."
   );
   return `TaskSeal sync dry-run failed${code}: ${message.slice(0, 2_000)}\n`;
+}
+
+function renderLinearReadyWorkError(
+  _error: unknown
+): string {
+  return "TaskSeal ready failed [LINEAR_READY_FAILED]: Linear ready-work request failed.\n";
 }
 
 function renderErrorCode(error: unknown): string {

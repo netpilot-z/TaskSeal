@@ -9,6 +9,7 @@ import {
   getGitHubCoordinates,
   getLinearBootstrapCoordinates,
   getLinearCoordinates,
+  getLinearReadyWorkCoordinates,
   readProjectConfiguration
 } from "../src/config/project-config.ts";
 
@@ -22,7 +23,14 @@ test("project configuration exposes validated non-secret provider coordinates", 
       workspace: "TaskSeal",
       team: "netpilot",
       project: "TaskSeal Delivery",
-      backlogState: "Backlog"
+      backlogState: "Backlog",
+      readyWork: {
+        enabled: true,
+        readyState: "Todo",
+        completedState: "Done",
+        dependencyIndex:
+          "docs/tickets/0007-linear-bootstrap-map.json"
+      }
     },
     mode: "persistent"
   });
@@ -47,6 +55,19 @@ test("project configuration exposes validated non-secret provider coordinates", 
       team: "netpilot",
       project: "TaskSeal Delivery",
       backlogState: "Backlog"
+    }
+  );
+  assert.deepEqual(
+    getLinearReadyWorkCoordinates(configuration),
+    {
+      workspace: "TaskSeal",
+      team: "netpilot",
+      project: "TaskSeal Delivery",
+      readyState: "Todo",
+      completedState: "Done",
+      dependencyIndex:
+        "docs/tickets/0007-linear-bootstrap-map.json",
+      enabled: true
     }
   );
   assert.doesNotMatch(JSON.stringify(configuration), new RegExp(escapeRegExp(cwd)));
@@ -106,6 +127,58 @@ test("project configuration reports invalid JSON and provider coordinates safely
         getLinearBootstrapCoordinates({
           project: "TaskSeal",
           linear
+        }),
+      hasCode("LINEAR_CONFIG_INVALID")
+    );
+  }
+
+  for (const readyWork of [
+    undefined,
+    {
+      enabled: true,
+      readyState: "Todo",
+      completedState: "Done",
+      dependencyIndex: "../outside.json"
+    },
+    {
+      enabled: true,
+      readyState: "Todo",
+      completedState: "Done",
+      dependencyIndex:
+        "docs\\dependencies.json"
+    },
+    {
+      enabled: true,
+      readyState: "Todo",
+      completedState: "Done",
+      dependencyIndex:
+        "docs/base.json:dependencies.json"
+    },
+    {
+      enabled: "yes",
+      readyState: "Todo",
+      completedState: "Done",
+      dependencyIndex:
+        "docs/tickets/0007-linear-bootstrap-map.json"
+    },
+    {
+      enabled: true,
+      readyState: "Todo",
+      completedState: "Todo",
+      dependencyIndex:
+        "docs/tickets/0007-linear-bootstrap-map.json"
+    }
+  ]) {
+    assert.throws(
+      () =>
+        getLinearReadyWorkCoordinates({
+          project: "TaskSeal",
+          linear: {
+            workspace: "TaskSeal",
+            team: "netpilot",
+            project: "TaskSeal",
+            readyWork
+          }
         }),
       hasCode("LINEAR_CONFIG_INVALID")
     );
