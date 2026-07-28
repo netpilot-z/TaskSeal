@@ -26,9 +26,34 @@ export interface ControlledWriteConfiguredTarget {
   key: string;
 }
 
+export interface ControlledWriteConfiguredTargetV2 {
+  kind: "project_state";
+  key: string;
+  workspace: string;
+  team: string;
+  project: string;
+  state: string;
+}
+
 export interface ControlledWriteResolvedTarget {
   organizationId: string;
   teamId: string;
+}
+
+export interface ControlledWriteResolvedTargetV2 {
+  organizationId: string;
+  teamId: string;
+  projectId: string;
+  stateId: string;
+  parentIssueId: string | null;
+}
+
+export interface ControlledWriteSourceIntentV2 {
+  kind: "taskseal.linear-ticket-draft";
+  source: string;
+  sourceTicket: string;
+  idempotencyKey: string;
+  draftPayloadDigest: string;
 }
 
 export interface ControlledWritePayload {
@@ -36,7 +61,7 @@ export interface ControlledWritePayload {
   description: string;
 }
 
-export interface ControlledWriteOperationPlan {
+export interface ControlledWriteOperationPlanV1 {
   schemaVersion: 1;
   provider: "linear";
   capability: "work-item.write";
@@ -49,6 +74,26 @@ export interface ControlledWriteOperationPlan {
   operationKey: string;
   planDigest: string;
 }
+
+export interface ControlledWriteOperationPlanV2 {
+  schemaVersion: 2;
+  provider: "linear";
+  capability: "work-item.write";
+  action: "work-item.create";
+  configuredTarget: ControlledWriteConfiguredTargetV2;
+  resolvedTarget: ControlledWriteResolvedTargetV2;
+  clientRequestId: string;
+  sourceIntent: ControlledWriteSourceIntentV2;
+  sourceIntentDigest: string;
+  payload: ControlledWritePayload;
+  payloadDigest: string;
+  operationKey: string;
+  planDigest: string;
+}
+
+export type ControlledWriteOperationPlan =
+  | ControlledWriteOperationPlanV1
+  | ControlledWriteOperationPlanV2;
 
 export interface ControlledWriteActor {
   type: "human";
@@ -68,11 +113,27 @@ export interface ControlledWriteIssueIdentity {
   identifier: string;
 }
 
+export interface ControlledWriteObservedPlacementV2 {
+  organizationId: string;
+  teamId: string;
+  projectId: string;
+  stateId: string;
+  parentIssueId: string | null;
+}
+
+export interface ControlledWriteIssueIdentityV2
+  extends ControlledWriteIssueIdentity {
+  placement: ControlledWriteObservedPlacementV2;
+}
+
 export interface ControlledWriteSubmission {
   attempt: number;
   startedAt: string | null;
   completedAt: string | null;
-  issue: ControlledWriteIssueIdentity | null;
+  issue:
+    | ControlledWriteIssueIdentity
+    | ControlledWriteIssueIdentityV2
+    | null;
 }
 
 export interface ControlledWriteReconciliation {
@@ -85,12 +146,13 @@ export interface ControlledWriteReconciliation {
     | "failed"
     | "ambiguous"
     | null;
-  issue: ControlledWriteIssueIdentity | null;
+  issue:
+    | ControlledWriteIssueIdentity
+    | ControlledWriteIssueIdentityV2
+    | null;
 }
 
-export interface ControlledWriteOperation {
-  schemaVersion: 1;
-  plan: ControlledWriteOperationPlan;
+interface ControlledWriteOperationFields {
   version: number;
   status: ControlledWriteOperationStatus;
   approval: ControlledWriteApproval | null;
@@ -101,12 +163,28 @@ export interface ControlledWriteOperation {
   updatedAt: string;
 }
 
+export interface ControlledWriteOperationV1
+  extends ControlledWriteOperationFields {
+  schemaVersion: 1;
+  plan: ControlledWriteOperationPlanV1;
+}
+
+export interface ControlledWriteOperationV2
+  extends ControlledWriteOperationFields {
+  schemaVersion: 2;
+  plan: ControlledWriteOperationPlanV2;
+}
+
+export type ControlledWriteOperation =
+  | ControlledWriteOperationV1
+  | ControlledWriteOperationV2;
+
 export type ControlledWritePlanClassification =
   | "idempotent"
   | "conflict"
   | "different";
 
-const PLAN_KEYS = [
+const PLAN_KEYS_V1 = [
   "schemaVersion",
   "provider",
   "capability",
@@ -114,6 +192,21 @@ const PLAN_KEYS = [
   "configuredTarget",
   "resolvedTarget",
   "clientRequestId",
+  "payload",
+  "payloadDigest",
+  "operationKey",
+  "planDigest"
+] as const;
+const PLAN_KEYS_V2 = [
+  "schemaVersion",
+  "provider",
+  "capability",
+  "action",
+  "configuredTarget",
+  "resolvedTarget",
+  "clientRequestId",
+  "sourceIntent",
+  "sourceIntentDigest",
   "payload",
   "payloadDigest",
   "operationKey",
@@ -164,7 +257,7 @@ const STATUSES = new Set<ControlledWriteOperationStatus>([
 
 export function createControlledWriteOperation(
   value: unknown
-): ControlledWriteOperation {
+): ControlledWriteOperationV1 {
   const input = readExactRecord(value, [
     "configuredTarget",
     "resolvedTarget",
@@ -172,7 +265,7 @@ export function createControlledWriteOperation(
     "payload",
     "preparedAt"
   ]);
-  const plan = createPlan({
+  const plan = createPlanV1({
     configuredTarget: normalizeConfiguredTarget(
       input.configuredTarget
     ),
@@ -187,25 +280,81 @@ export function createControlledWriteOperation(
   });
   const preparedAt = normalizeTimestamp(input.preparedAt);
 
-  return freezeOperation(
-    normalizeOperation({
-      schemaVersion: 1,
-      plan,
-      version: 1,
-      status: "approval_required",
-      approval: null,
-      submission: {
-        attempt: 0,
-        startedAt: null,
-        completedAt: null,
-        issue: null
-      },
-      reconciliation: null,
-      diagnosticCode: null,
-      createdAt: preparedAt,
-      updatedAt: preparedAt
-    })
+  const operation = normalizeOperation({
+    schemaVersion: 1,
+    plan,
+    version: 1,
+    status: "approval_required",
+    approval: null,
+    submission: {
+      attempt: 0,
+      startedAt: null,
+      completedAt: null,
+      issue: null
+    },
+    reconciliation: null,
+    diagnosticCode: null,
+    createdAt: preparedAt,
+    updatedAt: preparedAt
+  });
+  if (operation.schemaVersion !== 1) {
+    throw invalidOperation();
+  }
+  return freezeOperation(operation);
+}
+
+export function createControlledWriteOperationV2(
+  value: unknown
+): ControlledWriteOperationV2 {
+  const input = readExactRecord(value, [
+    "configuredTarget",
+    "resolvedTarget",
+    "clientRequestId",
+    "sourceIntent",
+    "payload",
+    "preparedAt"
+  ]);
+  const plan = createPlanV2({
+    configuredTarget:
+      normalizeConfiguredTargetV2(
+        input.configuredTarget
+      ),
+    resolvedTarget: normalizeResolvedTargetV2(
+      input.resolvedTarget
+    ),
+    clientRequestId: normalizeUuid(
+      input.clientRequestId,
+      true
+    ),
+    sourceIntent: normalizeSourceIntentV2(
+      input.sourceIntent
+    ),
+    payload: normalizePayload(input.payload)
+  });
+  const preparedAt = normalizeTimestamp(
+    input.preparedAt
   );
+  const operation = normalizeOperation({
+    schemaVersion: 2,
+    plan,
+    version: 1,
+    status: "approval_required",
+    approval: null,
+    submission: {
+      attempt: 0,
+      startedAt: null,
+      completedAt: null,
+      issue: null
+    },
+    reconciliation: null,
+    diagnosticCode: null,
+    createdAt: preparedAt,
+    updatedAt: preparedAt
+  });
+  if (operation.schemaVersion !== 2) {
+    throw invalidOperation();
+  }
+  return freezeOperation(operation);
 }
 
 export function parseControlledWriteOperation(
@@ -311,19 +460,31 @@ export function transitionControlledWriteOperation(
 
   if (type === "submission_created") {
     requireTransition(operation, "submitting");
-    requireExactKeys(action, [
-      "type",
-      "occurredAt",
-      "observedTeamId",
-      "issue"
-    ]);
+    requireExactKeys(
+      action,
+      operation.schemaVersion === 1
+        ? [
+            "type",
+            "occurredAt",
+            "observedTeamId",
+            "issue"
+          ]
+        : [
+            "type",
+            "occurredAt",
+            "observedPlacement",
+            "issue"
+          ]
+    );
     const occurredAt = normalizeTransitionTime(
       action.occurredAt,
       operation.updatedAt
     );
     const issue = normalizeObservedIssue(
       action.issue,
-      action.observedTeamId,
+      operation.schemaVersion === 1
+        ? action.observedTeamId
+        : action.observedPlacement,
       operation.plan
     );
 
@@ -420,12 +581,19 @@ export function transitionControlledWriteOperation(
     requireExactKeys(
       action,
       type === "reconciliation_found"
-        ? [
-            "type",
-            "occurredAt",
-            "observedTeamId",
-            "issue"
-          ]
+        ? operation.schemaVersion === 1
+          ? [
+              "type",
+              "occurredAt",
+              "observedTeamId",
+              "issue"
+            ]
+          : [
+              "type",
+              "occurredAt",
+              "observedPlacement",
+              "issue"
+            ]
         : ["type", "occurredAt"]
     );
     const occurredAt = normalizeTransitionTime(
@@ -436,7 +604,9 @@ export function transitionControlledWriteOperation(
       type === "reconciliation_found"
         ? normalizeObservedIssue(
             action.issue,
-            action.observedTeamId,
+            operation.schemaVersion === 1
+              ? action.observedTeamId
+              : action.observedPlacement,
             operation.plan
           )
         : null;
@@ -516,7 +686,10 @@ export function validateControlledWriteOperationTransition(
   const previous = normalizeOperation(previousValue);
   const next = normalizeOperation(nextValue);
 
-  if (next.version !== previous.version + 1) {
+  if (
+    next.schemaVersion !== previous.schemaVersion ||
+    next.version !== previous.version + 1
+  ) {
     throw transitionInvalid();
   }
 
@@ -579,8 +752,22 @@ function deriveTransitionAction(
       return {
         type: "submission_created",
         occurredAt: next.updatedAt,
-        observedTeamId: next.plan.resolvedTarget.teamId,
-        issue: next.submission.issue
+        ...(next.schemaVersion === 1
+          ? {
+              observedTeamId:
+                next.plan.resolvedTarget.teamId
+            }
+          : {
+              observedPlacement:
+                requireV2Issue(
+                  next.submission.issue
+                ).placement
+            }),
+        issue: {
+          id: next.submission.issue.id,
+          identifier:
+            next.submission.issue.identifier
+        }
       };
     }
     if (next.status === "failed") {
@@ -625,8 +812,22 @@ function deriveTransitionAction(
       return {
         type: "reconciliation_found",
         occurredAt: next.updatedAt,
-        observedTeamId: next.plan.resolvedTarget.teamId,
-        issue: next.reconciliation.issue
+        ...(next.schemaVersion === 1
+          ? {
+              observedTeamId:
+                next.plan.resolvedTarget.teamId
+            }
+          : {
+              observedPlacement:
+                requireV2Issue(
+                  next.reconciliation.issue
+                ).placement
+            }),
+        issue: {
+          id: next.reconciliation.issue.id,
+          identifier:
+            next.reconciliation.issue.identifier
+        }
       };
     }
     if (
@@ -663,7 +864,37 @@ function deriveTransitionAction(
   throw transitionInvalid();
 }
 
-function createPlan({
+function createOperationIdentity(
+  clientRequestId: string
+): {
+  domain: "taskseal.controlled-write.operation-key:v1";
+  schemaVersion: 1;
+  provider: "linear";
+  capability: "work-item.write";
+  action: "work-item.create";
+  clientRequestId: string;
+} {
+  return {
+    domain:
+      "taskseal.controlled-write.operation-key:v1",
+    schemaVersion: 1,
+    provider: "linear",
+    capability: "work-item.write",
+    action: "work-item.create",
+    clientRequestId
+  };
+}
+
+function createPayloadDigest(
+  payload: ControlledWritePayload
+): string {
+  return digestCanonicalJson({
+    domain: "taskseal.controlled-write.payload:v1",
+    payload
+  });
+}
+
+function createPlanV1({
   configuredTarget,
   resolvedTarget,
   clientRequestId,
@@ -673,20 +904,12 @@ function createPlan({
   resolvedTarget: ControlledWriteResolvedTarget;
   clientRequestId: string;
   payload: ControlledWritePayload;
-}): ControlledWriteOperationPlan {
-  const identity = {
-    domain: "taskseal.controlled-write.operation-key:v1",
-    schemaVersion: 1,
-    provider: "linear",
-    capability: "work-item.write",
-    action: "work-item.create",
-    clientRequestId
-  };
-  const payloadDigest = digestCanonicalJson({
-    domain: "taskseal.controlled-write.payload:v1",
-    payload
-  });
-  const operationKey = digestCanonicalJson(identity);
+}): ControlledWriteOperationPlanV1 {
+  const payloadDigest =
+    createPayloadDigest(payload);
+  const operationKey = digestCanonicalJson(
+    createOperationIdentity(clientRequestId)
+  );
   const withoutPlanDigest = {
     schemaVersion: 1 as const,
     provider: "linear" as const,
@@ -709,10 +932,79 @@ function createPlan({
   };
 }
 
+function createPlanV2({
+  configuredTarget,
+  resolvedTarget,
+  clientRequestId,
+  sourceIntent,
+  payload
+}: {
+  configuredTarget: ControlledWriteConfiguredTargetV2;
+  resolvedTarget: ControlledWriteResolvedTargetV2;
+  clientRequestId: string;
+  sourceIntent: ControlledWriteSourceIntentV2;
+  payload: ControlledWritePayload;
+}): ControlledWriteOperationPlanV2 {
+  const sourceIntentDigest =
+    digestCanonicalJson({
+      domain:
+        "taskseal.controlled-write.source-intent:v2",
+      sourceIntent
+    });
+  const payloadDigest =
+    createPayloadDigest(payload);
+  const operationKey = digestCanonicalJson(
+    createOperationIdentity(clientRequestId)
+  );
+  const withoutPlanDigest = {
+    schemaVersion: 2 as const,
+    provider: "linear" as const,
+    capability: "work-item.write" as const,
+    action: "work-item.create" as const,
+    configuredTarget,
+    resolvedTarget,
+    clientRequestId,
+    sourceIntent,
+    sourceIntentDigest,
+    payload,
+    payloadDigest,
+    operationKey
+  };
+
+  return {
+    ...withoutPlanDigest,
+    planDigest: digestCanonicalJson({
+      domain:
+        "taskseal.controlled-write.plan:v2",
+      plan: withoutPlanDigest
+    })
+  };
+}
+
 function normalizePlan(
   value: unknown
 ): ControlledWriteOperationPlan {
-  const plan = readExactRecord(value, PLAN_KEYS);
+  const candidate = readDataRecord(value);
+
+  if (
+    candidate.schemaVersion !== 1 &&
+    candidate.schemaVersion !== 2
+  ) {
+    throw invalidOperation();
+  }
+
+  return candidate.schemaVersion === 1
+    ? normalizePlanV1(value)
+    : normalizePlanV2(value);
+}
+
+function normalizePlanV1(
+  value: unknown
+): ControlledWriteOperationPlanV1 {
+  const plan = readExactRecord(
+    value,
+    PLAN_KEYS_V1
+  );
 
   if (
     plan.schemaVersion !== 1 ||
@@ -723,7 +1015,7 @@ function normalizePlan(
     throw invalidOperation();
   }
 
-  const normalized = createPlan({
+  const normalized = createPlanV1({
     configuredTarget: normalizeConfiguredTarget(
       plan.configuredTarget
     ),
@@ -751,13 +1043,65 @@ function normalizePlan(
   return normalized;
 }
 
+function normalizePlanV2(
+  value: unknown
+): ControlledWriteOperationPlanV2 {
+  const plan = readExactRecord(
+    value,
+    PLAN_KEYS_V2
+  );
+
+  if (
+    plan.schemaVersion !== 2 ||
+    plan.provider !== "linear" ||
+    plan.capability !== "work-item.write" ||
+    plan.action !== "work-item.create"
+  ) {
+    throw invalidOperation();
+  }
+
+  const normalized = createPlanV2({
+    configuredTarget:
+      normalizeConfiguredTargetV2(
+        plan.configuredTarget
+      ),
+    resolvedTarget: normalizeResolvedTargetV2(
+      plan.resolvedTarget
+    ),
+    clientRequestId: normalizeUuid(
+      plan.clientRequestId,
+      true
+    ),
+    sourceIntent: normalizeSourceIntentV2(
+      plan.sourceIntent
+    ),
+    payload: normalizePayload(plan.payload)
+  });
+
+  if (
+    normalizeDigest(plan.sourceIntentDigest) !==
+      normalized.sourceIntentDigest ||
+    normalizeDigest(plan.payloadDigest) !==
+      normalized.payloadDigest ||
+    normalizeDigest(plan.operationKey) !==
+      normalized.operationKey ||
+    normalizeDigest(plan.planDigest) !==
+      normalized.planDigest
+  ) {
+    throw invalidOperation();
+  }
+
+  return normalized;
+}
+
 function normalizeOperation(
   value: unknown
 ): ControlledWriteOperation {
   const operation = readExactRecord(value, OPERATION_KEYS);
 
   if (
-    operation.schemaVersion !== 1 ||
+    (operation.schemaVersion !== 1 &&
+      operation.schemaVersion !== 2) ||
     !Number.isSafeInteger(operation.version) ||
     (operation.version as number) < 1 ||
     typeof operation.status !== "string" ||
@@ -768,18 +1112,22 @@ function normalizeOperation(
     throw invalidOperation();
   }
 
-  const normalized: ControlledWriteOperation = {
-    schemaVersion: 1,
-    plan: normalizePlan(operation.plan),
+  const plan = normalizePlan(operation.plan);
+  if (plan.schemaVersion !== operation.schemaVersion) {
+    throw invalidOperation();
+  }
+  const fields: ControlledWriteOperationFields = {
     version: operation.version as number,
     status:
       operation.status as ControlledWriteOperationStatus,
     approval: normalizeApproval(operation.approval),
     submission: normalizeSubmission(
-      operation.submission
+      operation.submission,
+      plan.schemaVersion
     ),
     reconciliation: normalizeReconciliation(
-      operation.reconciliation
+      operation.reconciliation,
+      plan.schemaVersion
     ),
     diagnosticCode:
       operation.diagnosticCode === null
@@ -790,6 +1138,18 @@ function normalizeOperation(
     createdAt: normalizeTimestamp(operation.createdAt),
     updatedAt: normalizeTimestamp(operation.updatedAt)
   };
+  const normalized: ControlledWriteOperation =
+    plan.schemaVersion === 1
+      ? {
+          schemaVersion: 1,
+          plan,
+          ...fields
+        }
+      : {
+          schemaVersion: 2,
+          plan,
+          ...fields
+        };
 
   validateOperationSemantics(normalized);
   return normalized;
@@ -910,6 +1270,10 @@ function validateOperationSemantics(
       approval?.decision === "approved" &&
       completedWithIssue &&
       submission.issue?.id === plan.clientRequestId &&
+      issuePlacementMatchesPlan(
+        submission.issue,
+        plan
+      ) &&
       reconciliation === null &&
       diagnosticCode === null &&
       updatedAt === submission.completedAt
@@ -1005,7 +1369,12 @@ function validateOperationSemantics(
     const validResult =
       status === "reconciled"
         ? reconciliation?.result === "found" &&
-          reconciliation.issue?.id === plan.clientRequestId
+          reconciliation.issue?.id ===
+            plan.clientRequestId &&
+          issuePlacementMatchesPlan(
+            reconciliation.issue,
+            plan
+          )
         : reconciliation?.result === "absent" &&
           reconciliation.issue === null;
     if (
@@ -1025,6 +1394,28 @@ function validateOperationSemantics(
       throw invalidOperation();
     }
   }
+}
+
+function issuePlacementMatchesPlan(
+  issue:
+    | ControlledWriteIssueIdentity
+    | ControlledWriteIssueIdentityV2
+    | null
+    | undefined,
+  plan: ControlledWriteOperationPlan
+): boolean {
+  if (plan.schemaVersion === 1) {
+    return true;
+  }
+  return (
+    issue !== null &&
+    issue !== undefined &&
+    Object.hasOwn(issue, "placement") &&
+    canonicalizeJson(
+      (issue as ControlledWriteIssueIdentityV2)
+        .placement
+    ) === canonicalizeJson(plan.resolvedTarget)
+  );
 }
 
 function normalizeConfiguredTarget(
@@ -1068,6 +1459,172 @@ function normalizeResolvedTarget(
       false
     ),
     teamId: normalizeUuid(target.teamId, false)
+  };
+}
+
+function normalizeConfiguredTargetV2(
+  value: unknown
+): ControlledWriteConfiguredTargetV2 {
+  const target = readExactRecord(value, [
+    "kind",
+    "key",
+    "workspace",
+    "team",
+    "project",
+    "state"
+  ]);
+  const workspace =
+    normalizeConfiguredReference(
+      target.workspace
+    );
+  const team = normalizeConfiguredReference(
+    target.team
+  );
+  const project =
+    normalizeConfiguredReference(
+      target.project
+    );
+  const state = normalizeConfiguredReference(
+    target.state
+  );
+  const key = normalizeTrimmedString(
+    target.key,
+    MAX_TARGET_KEY_LENGTH,
+    false,
+    {
+      maximumBytes: 2_048,
+      multiline: false
+    }
+  );
+  const expectedKey =
+    "linear:project-state-ref:" +
+    [workspace, team, project, state]
+      .map((part) => encodeURIComponent(part))
+      .join("/");
+
+  if (
+    target.kind !== "project_state" ||
+    key !== expectedKey
+  ) {
+    throw invalidOperation();
+  }
+
+  return {
+    kind: "project_state",
+    key,
+    workspace,
+    team,
+    project,
+    state
+  };
+}
+
+function normalizeConfiguredReference(
+  value: unknown
+): string {
+  return normalizeTrimmedString(
+    value,
+    128,
+    false,
+    {
+      maximumBytes: 512,
+      multiline: false
+    }
+  );
+}
+
+function normalizeResolvedTargetV2(
+  value: unknown
+): ControlledWriteResolvedTargetV2 {
+  const target = readExactRecord(value, [
+    "organizationId",
+    "teamId",
+    "projectId",
+    "stateId",
+    "parentIssueId"
+  ]);
+
+  return {
+    organizationId: normalizeUuid(
+      target.organizationId,
+      false
+    ),
+    teamId: normalizeUuid(target.teamId, false),
+    projectId: normalizeUuid(
+      target.projectId,
+      false
+    ),
+    stateId: normalizeUuid(
+      target.stateId,
+      false
+    ),
+    parentIssueId:
+      target.parentIssueId === null
+        ? null
+        : normalizeUuid(
+            target.parentIssueId,
+            false
+          )
+  };
+}
+
+function normalizeSourceIntentV2(
+  value: unknown
+): ControlledWriteSourceIntentV2 {
+  const intent = readExactRecord(value, [
+    "kind",
+    "source",
+    "sourceTicket",
+    "idempotencyKey",
+    "draftPayloadDigest"
+  ]);
+  const source = normalizeTrimmedString(
+    intent.source,
+    1_024,
+    false,
+    {
+      maximumBytes: 4_096,
+      multiline: false
+    }
+  );
+  const sourceTicket = normalizeTrimmedString(
+    intent.sourceTicket,
+    64,
+    false,
+    {
+      maximumBytes: 256,
+      multiline: false
+    }
+  );
+  const segments = source.split("/");
+
+  if (
+    intent.kind !==
+      "taskseal.linear-ticket-draft" ||
+    source.startsWith("/") ||
+    source.includes("\\") ||
+    source.includes(":") ||
+    segments.some(
+      (segment) =>
+        segment.length === 0 ||
+        segment === "." ||
+        segment === ".."
+    ) ||
+    !/^T\d+(?:\.\d+)?$/.test(sourceTicket)
+  ) {
+    throw invalidOperation();
+  }
+
+  return {
+    kind: "taskseal.linear-ticket-draft",
+    source,
+    sourceTicket,
+    idempotencyKey: normalizeDigest(
+      intent.idempotencyKey
+    ),
+    draftPayloadDigest: normalizeDigest(
+      intent.draftPayloadDigest
+    )
   };
 }
 
@@ -1163,7 +1720,8 @@ function normalizeApproval(
 }
 
 function normalizeSubmission(
-  value: unknown
+  value: unknown,
+  schemaVersion: 1 | 2
 ): ControlledWriteSubmission {
   const submission = readExactRecord(value, [
     "attempt",
@@ -1191,12 +1749,16 @@ function normalizeSubmission(
     issue:
       submission.issue === null
         ? null
-        : normalizeIssue(submission.issue)
+        : normalizeIssue(
+            submission.issue,
+            schemaVersion
+          )
   };
 }
 
 function normalizeReconciliation(
-  value: unknown
+  value: unknown,
+  schemaVersion: 1 | 2
 ): ControlledWriteReconciliation | null {
   if (value === null) {
     return null;
@@ -1235,11 +1797,99 @@ function normalizeReconciliation(
     issue:
       reconciliation.issue === null
         ? null
-        : normalizeIssue(reconciliation.issue)
+        : normalizeIssue(
+            reconciliation.issue,
+            schemaVersion
+          )
   };
 }
 
 function normalizeIssue(
+  value: unknown,
+  schemaVersion: 1 | 2
+):
+  | ControlledWriteIssueIdentity
+  | ControlledWriteIssueIdentityV2 {
+  const issue = readExactRecord(
+    value,
+    schemaVersion === 1
+      ? ["id", "identifier"]
+      : ["id", "identifier", "placement"]
+  );
+  const identifier = normalizeTrimmedString(
+    issue.identifier,
+    32,
+    false,
+    {
+      maximumBytes: 128,
+      multiline: false
+    }
+  );
+
+  if (!ISSUE_IDENTIFIER_PATTERN.test(identifier)) {
+    throw invalidOperation();
+  }
+
+  const identity = {
+    id: normalizeUuid(issue.id, false),
+    identifier
+  };
+
+  return schemaVersion === 1
+    ? identity
+    : {
+        ...identity,
+        placement:
+          normalizeObservedPlacementV2(
+            issue.placement
+          )
+      };
+}
+
+function normalizeObservedIssue(
+  value: unknown,
+  observedPlacementValue: unknown,
+  plan: ControlledWriteOperationPlan
+):
+  | ControlledWriteIssueIdentity
+  | ControlledWriteIssueIdentityV2 {
+  const identity = normalizeIssueIdentity(value);
+
+  if (identity.id !== plan.clientRequestId) {
+    throw transitionInvalid();
+  }
+
+  if (plan.schemaVersion === 1) {
+    const observedTeamId = normalizeUuid(
+      observedPlacementValue,
+      false
+    );
+    if (
+      observedTeamId !==
+      plan.resolvedTarget.teamId
+    ) {
+      throw transitionInvalid();
+    }
+    return identity;
+  }
+
+  const placement =
+    normalizeObservedPlacementV2(
+      observedPlacementValue
+    );
+  if (
+    canonicalizeJson(placement) !==
+    canonicalizeJson(plan.resolvedTarget)
+  ) {
+    throw transitionInvalid();
+  }
+  return {
+    ...identity,
+    placement
+  };
+}
+
+function normalizeIssueIdentity(
   value: unknown
 ): ControlledWriteIssueIdentity {
   const issue = readExactRecord(value, [
@@ -1266,24 +1916,41 @@ function normalizeIssue(
   };
 }
 
-function normalizeObservedIssue(
-  value: unknown,
-  observedTeamIdValue: unknown,
-  plan: ControlledWriteOperationPlan
-): ControlledWriteIssueIdentity {
-  const issue = normalizeIssue(value);
-  const observedTeamId = normalizeUuid(
-    observedTeamIdValue,
-    false
-  );
-
-  if (
-    issue.id !== plan.clientRequestId ||
-    observedTeamId !== plan.resolvedTarget.teamId
-  ) {
-    throw transitionInvalid();
-  }
-  return issue;
+function normalizeObservedPlacementV2(
+  value: unknown
+): ControlledWriteObservedPlacementV2 {
+  const placement = readExactRecord(value, [
+    "organizationId",
+    "teamId",
+    "projectId",
+    "stateId",
+    "parentIssueId"
+  ]);
+  return {
+    organizationId: normalizeUuid(
+      placement.organizationId,
+      false
+    ),
+    teamId: normalizeUuid(
+      placement.teamId,
+      false
+    ),
+    projectId: normalizeUuid(
+      placement.projectId,
+      false
+    ),
+    stateId: normalizeUuid(
+      placement.stateId,
+      false
+    ),
+    parentIssueId:
+      placement.parentIssueId === null
+        ? null
+        : normalizeUuid(
+            placement.parentIssueId,
+            false
+          )
+  };
 }
 
 function normalizeDiagnosticCode(
@@ -1415,6 +2082,17 @@ function requireReconciliation(
   return operation.reconciliation;
 }
 
+function requireV2Issue(
+  issue:
+    | ControlledWriteIssueIdentity
+    | ControlledWriteIssueIdentityV2
+): ControlledWriteIssueIdentityV2 {
+  if (!Object.hasOwn(issue, "placement")) {
+    throw transitionInvalid();
+  }
+  return issue as ControlledWriteIssueIdentityV2;
+}
+
 function finalizeTransition(
   operation: ControlledWriteOperation
 ): ControlledWriteOperation {
@@ -1499,9 +2177,9 @@ function requireExactKeys(
   }
 }
 
-function freezeOperation(
-  operation: ControlledWriteOperation
-): ControlledWriteOperation {
+function freezeOperation<
+  T extends ControlledWriteOperation
+>(operation: T): T {
   return deepFreeze(operation);
 }
 

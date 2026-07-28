@@ -1006,12 +1006,22 @@ function createObservationFingerprint(
 }
 
 function isControlledOperationTarget(value) {
+  if (
+    !isPlainRecord(value) ||
+    !hasExactKeys(value, ["kind", "key"]) ||
+    !isTrimmedString(value.key, MAX_KEY_LENGTH)
+  ) {
+    return false;
+  }
+
+  if (value.kind === "team") {
+    return /^linear:team-ref:[^\s/]+\/[^\s/]+$/.test(
+      value.key
+    );
+  }
   return (
-    isPlainRecord(value) &&
-    hasExactKeys(value, ["kind", "key"]) &&
-    value.kind === "team" &&
-    isTrimmedString(value.key, MAX_KEY_LENGTH) &&
-    /^linear:team-ref:[^\s/]+\/[^\s/]+$/.test(
+    value.kind === "project_state" &&
+    /^linear:project-state-ref:[^\s/]+\/[^\s/]+\/[^\s/]+\/[^\s/]+$/.test(
       value.key
     )
   );
