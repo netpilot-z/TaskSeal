@@ -6,8 +6,17 @@ import type {
   ServerResponse
 } from "node:http";
 
+import {
+  AttemptRunCoordinator,
+  AttemptRunCoordinatorError
+} from "./application/attempt-run-coordinator.ts";
 import { projectDashboard } from "./dashboard/projection.ts";
 import { replayDemoSteps } from "./demo/scenario.ts";
+import type {
+  AttemptRunCoordinatorSnapshot,
+  AttemptRunTerminalization,
+  AttemptRunView
+} from "./application/attempt-run-coordinator.ts";
 import type {
   ProviderSyncQueryPort
 } from "./application/provider-sync-projection.ts";
@@ -36,6 +45,7 @@ export interface RunWorkItemOptions {
   prompt: string;
   sandbox: "read-only" | "workspace-write";
   signal: AbortSignal;
+  terminalization: AttemptRunTerminalization;
 }
 
 export type RunWorkItem = (
@@ -48,12 +58,14 @@ export interface DemoTaskSealServerOptions {
   service?: never;
   providerStatus?: never;
   runWorkItem?: never;
+  maxConcurrentRuns?: never;
 }
 
 export interface PersistentTaskSealServerOptions {
   service: PersistentServicePort;
   providerStatus: ProviderSyncQueryPort;
   runWorkItem: RunWorkItem;
+  maxConcurrentRuns?: number | undefined;
   steps?: never;
   initialStep?: never;
 }
@@ -78,15 +90,11 @@ interface PersistentRuntime {
   service: PersistentServicePort;
   providerStatus: ProviderSyncQueryPort;
   runWorkItem: RunWorkItem;
+  maxConcurrentRuns: number;
   csrfToken: string;
 }
 
 type ServerRuntime = DemoRuntime | PersistentRuntime;
-
-interface ActiveRun {
-  controller: AbortController;
-  execution: Promise<unknown> | null;
-}
 
 interface RuntimeError {
   code: string;
@@ -116,6 +124,7 @@ interface DemoSnapshot extends DashboardProjection {
   capabilities: {
     demo: true;
     runAttempt: false;
+    cancelAttempt: false;
   };
   demo: {
     currentStep: number;
@@ -136,9 +145,19 @@ interface PersistentSnapshot extends DashboardProjection {
   capabilities: {
     demo: false;
     runAttempt: true;
+    cancelAttempt: true;
   };
   runtime: {
     activeWorkItemIds: string[];
+    capacity: Omit<
+      AttemptRunCoordinatorSnapshot,
+      "runs"
+    >;
+    runs: Array<
+      AttemptRunView & {
+        attemptId: string | null;
+      }
+    >;
     errors: Record<string, RuntimeError>;
   };
   security: {
@@ -188,9 +207,14 @@ export function createTaskSealServer(
   options: TaskSealServerOptions
 ): TaskSealServer {
   const runtime = createServerRuntime(options);
-  const activeRuns = new Map<string, ActiveRun>();
+  const attemptRuns =
+    runtime.mode === "persistent"
+      ? new AttemptRunCoordinator({
+          maxConcurrentRuns:
+            runtime.maxConcurrentRuns
+        })
+      : null;
   const lastErrors = new Map<string, RuntimeError>();
-  let acceptingRuns = true;
   let shutdownPromise: Promise<void> | null = null;
 
   const server = createServer(async (request, response) => {
@@ -216,7 +240,7 @@ export function createTaskSealServer(
           runtime.mode === "persistent"
             ? buildPersistentSnapshot(
                 runtime.service,
-                activeRuns,
+                requireAttemptRuns(attemptRuns),
                 lastErrors,
                 runtime.csrfToken
               )
@@ -245,14 +269,6 @@ export function createTaskSealServer(
         /^\/api\/work-items\/([^/]+)\/run$/.exec(pathname);
 
       if (runMatch && runtime.mode === "persistent") {
-        if (!acceptingRuns) {
-          throw new HttpError(
-            503,
-            "SERVER_SHUTTING_DOWN",
-            "TaskSeal is shutting down and cannot accept new runs."
-          );
-        }
-
         validatePersistentWriteRequest(
           request,
           runtime.csrfToken
@@ -273,33 +289,15 @@ export function createTaskSealServer(
           await readJsonBody(request)
         );
 
-        if (!acceptingRuns) {
-          throw new HttpError(
-            503,
-            "SERVER_SHUTTING_DOWN",
-            "TaskSeal is shutting down and cannot accept new runs."
-          );
-        }
-
-        if (activeRuns.has(workItemId)) {
-          throw new HttpError(
-            409,
-            "ATTEMPT_ALREADY_ACTIVE",
-            `TaskSeal work item ${workItemId} already has an active run.`
-          );
-        }
-
         lastErrors.delete(workItemId);
-        const controller = new AbortController();
-        const entry: ActiveRun = {
-          controller,
-          execution: null
-        };
-        activeRuns.set(workItemId, entry);
-        let execution: Promise<unknown>;
-
-        try {
-          execution = Promise.resolve(
+        const run = requireAttemptRuns(
+          attemptRuns
+        ).start({
+          workItemId,
+          execute: ({
+            signal,
+            terminalization
+          }) =>
             runtime.runWorkItem({
               workItemId,
               prompt: body.prompt,
@@ -307,38 +305,72 @@ export function createTaskSealServer(
                 body.readOnly === false
                   ? "workspace-write"
                   : "read-only",
-              signal: controller.signal
+              signal,
+              terminalization
             })
-          );
-        } catch (error) {
-          activeRuns.delete(workItemId);
-          throw error;
-        }
-
-        entry.execution = execution;
-        execution
-          .catch((error) => {
-            lastErrors.set(workItemId, {
-              code: readSafeErrorCode(
-                error,
-                "RUNNER_FAILED"
-              ),
-              message: "TaskSeal run failed.",
-              recordedAt: new Date().toISOString()
-            });
-          })
-          .finally(() => {
-            if (activeRuns.get(workItemId) === entry) {
-              activeRuns.delete(workItemId);
-            }
+        });
+        void run.execution.catch((error) => {
+          lastErrors.set(workItemId, {
+            code: readSafeErrorCode(
+              error,
+              "RUNNER_FAILED"
+            ),
+            message: "TaskSeal run failed.",
+            recordedAt: new Date().toISOString()
           });
+        });
 
         return writeJson(
           response,
           202,
           buildPersistentSnapshot(
             runtime.service,
-            activeRuns,
+            requireAttemptRuns(attemptRuns),
+            lastErrors,
+            runtime.csrfToken
+          )
+        );
+      }
+
+      const cancelMatch =
+        runtime.mode === "persistent" &&
+        request.method === "POST" &&
+        /^\/api\/work-items\/([^/]+)\/cancel$/.exec(
+          pathname
+        );
+
+      if (cancelMatch && runtime.mode === "persistent") {
+        validatePersistentWriteRequest(
+          request,
+          runtime.csrfToken
+        );
+        const workItemId = decodePathSegment(
+          cancelMatch[1]
+        );
+        const workItem =
+          runtime.service.getWorkItem(workItemId);
+
+        if (!workItem) {
+          throw new HttpError(
+            404,
+            "WORK_ITEM_NOT_FOUND",
+            `TaskSeal work item ${workItemId} does not exist.`
+          );
+        }
+
+        validateCancelBody(
+          await readJsonBody(request)
+        );
+        requireAttemptRuns(attemptRuns).cancel(
+          workItemId
+        );
+
+        return writeJson(
+          response,
+          202,
+          buildPersistentSnapshot(
+            runtime.service,
+            requireAttemptRuns(attemptRuns),
             lastErrors,
             runtime.csrfToken
           )
@@ -418,23 +450,15 @@ export function createTaskSealServer(
     }
 
     shutdownPromise = (async () => {
-      acceptingRuns = false;
       const closePromise = server.listening
         ? new Promise<void>((resolve) =>
             server.close(() => resolve())
           )
         : Promise.resolve();
-      const entries = [...activeRuns.values()];
-      const executions: Promise<unknown>[] = [];
 
-      for (const entry of entries) {
-        entry.controller.abort();
-        if (entry.execution) {
-          executions.push(entry.execution);
-        }
+      if (attemptRuns) {
+        await attemptRuns.shutdown();
       }
-
-      await Promise.allSettled(executions);
 
       server.closeAllConnections();
       await closePromise;
@@ -476,6 +500,8 @@ function createServerRuntime(
       service,
       providerStatus: options.providerStatus,
       runWorkItem: options.runWorkItem,
+      maxConcurrentRuns:
+        options.maxConcurrentRuns ?? 1,
       csrfToken: randomBytes(32).toString("base64url")
     };
   }
@@ -551,7 +577,8 @@ function buildDemoSnapshot(
     mode: "demo",
     capabilities: {
       demo: true,
-      runAttempt: false
+      runAttempt: false,
+      cancelAttempt: false
     },
     demo: {
       currentStep,
@@ -570,25 +597,63 @@ function buildDemoSnapshot(
 
 function buildPersistentSnapshot(
   service: PersistentServicePort,
-  activeRuns: ReadonlyMap<string, ActiveRun>,
+  attemptRuns: AttemptRunCoordinator,
   lastErrors: ReadonlyMap<string, RuntimeError>,
   csrfToken: string
 ): PersistentSnapshot {
+  const dashboard = service.snapshot();
+  const coordination = attemptRuns.snapshot();
+  const attemptIds = new Map(
+    dashboard.workItems.map((workItem) => [
+      workItem.id,
+      workItem.activeAttempt?.status === "running"
+        ? workItem.activeAttempt.id
+        : null
+    ])
+  );
+
   return {
-    ...service.snapshot(),
+    ...dashboard,
     mode: "persistent",
     capabilities: {
       demo: false,
-      runAttempt: true
+      runAttempt: true,
+      cancelAttempt: true
     },
     runtime: {
-      activeWorkItemIds: [...activeRuns.keys()],
+      activeWorkItemIds: coordination.runs.map(
+        (run) => run.workItemId
+      ),
+      capacity: {
+        maxConcurrentRuns:
+          coordination.maxConcurrentRuns,
+        activeCount: coordination.activeCount,
+        availableSlots:
+          coordination.availableSlots
+      },
+      runs: coordination.runs.map((run) => ({
+        ...run,
+        attemptId:
+          attemptIds.get(run.workItemId) ?? null
+      })),
       errors: Object.fromEntries(lastErrors)
     },
     security: {
       csrfToken
     }
   };
+}
+
+function requireAttemptRuns(
+  value: AttemptRunCoordinator | null
+): AttemptRunCoordinator {
+  if (!value) {
+    throw new TypeError(
+      "Persistent TaskSeal runtime requires execution control."
+    );
+  }
+
+  return value;
 }
 
 function clampStep(value: number, maximum: number): number {
@@ -797,6 +862,19 @@ function validateRunBody(body: unknown): RunRequestBody {
   };
 }
 
+function validateCancelBody(body: unknown): void {
+  if (
+    !isRecord(body) ||
+    Object.keys(body).length !== 0
+  ) {
+    throw new HttpError(
+      400,
+      "INVALID_CANCEL_REQUEST",
+      "TaskSeal cancel request must be an empty JSON object."
+    );
+  }
+}
+
 function decodePathSegment(value: unknown): string {
   if (typeof value !== "string") {
     throw new HttpError(
@@ -823,6 +901,19 @@ function normalizeResponseError(
   if (error instanceof HttpError) {
     return {
       statusCode: error.statusCode,
+      code: error.code,
+      message: error.message
+    };
+  }
+
+  if (error instanceof AttemptRunCoordinatorError) {
+    return {
+      statusCode:
+        error.code === "RUN_CAPACITY_REACHED"
+          ? 429
+          : error.code === "SERVER_SHUTTING_DOWN"
+            ? 503
+            : 409,
       code: error.code,
       message: error.message
     };

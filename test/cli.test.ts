@@ -438,7 +438,8 @@ test("persistent start wires one service and runner into the Control Room", asyn
     output,
     environment: {
       HOST: "127.0.0.1",
-      PORT: "0"
+      PORT: "0",
+      TASKSEAL_MAX_CONCURRENT_RUNS: "2"
     },
     signalSource,
     initialize: async () => {
@@ -460,6 +461,7 @@ test("persistent start wires one service and runner into the Control Room", asyn
   assert.equal(server instanceof FakeServer, true);
   assert.ok(serverOptions);
   assert.equal(serverOptions.service, service);
+  assert.equal(serverOptions.maxConcurrentRuns, 2);
   const providerProjection =
     await serverOptions.providerStatus.list();
   assert.equal(
@@ -475,11 +477,17 @@ test("persistent start wires one service and runner into the Control Room", asyn
     []
   );
   const signal = new AbortController().signal;
+  const terminalization = {
+    begin: () => ({
+      cancellationAccepted: false
+    })
+  };
   await serverOptions.runWorkItem({
     workItemId: "TS-1",
     prompt: "Run from the Control Room.",
     sandbox: "read-only",
-    signal
+    signal,
+    terminalization
   });
   assert.deepEqual(calls, [
     { port: 0, host: "127.0.0.1" },
@@ -488,6 +496,7 @@ test("persistent start wires one service and runner into the Control Room", asyn
       prompt: "Run from the Control Room.",
       sandbox: "read-only",
       signal,
+      terminalization,
       cwd,
       approvalPolicy: "never"
     }
@@ -516,6 +525,32 @@ test("persistent start refuses non-loopback binding", async (t) => {
     }),
     /loopback/
   );
+});
+
+test("persistent start rejects an invalid bounded concurrency setting before initialization", async (t) => {
+  const cwd = await createTemporaryDirectory(t);
+
+  for (const value of ["0", "-1", "1.5", "9", "many"]) {
+    let initialized = false;
+
+    await assert.rejects(
+      startPersistentControlRoom({
+        cwd,
+        output: createOutput(),
+        environment: {
+          HOST: "127.0.0.1",
+          PORT: "0",
+          TASKSEAL_MAX_CONCURRENT_RUNS: value
+        },
+        initialize: async () => {
+          initialized = true;
+        },
+        signalSource: new EventEmitter()
+      }),
+      /between 1 and 8/
+    );
+    assert.equal(initialized, false);
+  }
 });
 
 test("run delegates one work item to Codex with an explicit safety mode", async (t) => {

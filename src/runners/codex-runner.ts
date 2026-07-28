@@ -7,6 +7,7 @@ import type {
   AttemptTerminalOutcome,
   WorkItem
 } from "../domain/workflow.ts";
+import type { AttemptRunTerminalization } from "../application/attempt-run-coordinator.ts";
 import type {
   CodexApprovalPolicy,
   CodexSandbox
@@ -50,6 +51,7 @@ export interface CodexRunnerRunOptions {
   sandbox?: CodexSandbox | undefined;
   approvalPolicy?: CodexApprovalPolicy | undefined;
   signal?: AbortSignal | undefined;
+  terminalization?: AttemptRunTerminalization | undefined;
 }
 
 export interface CodexRunnerResult
@@ -97,7 +99,8 @@ export class CodexRunner {
     prompt,
     sandbox = "workspace-write",
     approvalPolicy = "never",
-    signal
+    signal,
+    terminalization
   }: CodexRunnerRunOptions): Promise<CodexRunnerResult> {
     const workItem = this.service.getWorkItem(workItemId);
 
@@ -154,30 +157,62 @@ export class CodexRunner {
         signal
       });
     } catch (error) {
+      const cancellationAccepted =
+        beginTerminalization({
+          signal,
+          terminalization
+        });
+      const outcome = cancellationAccepted
+        ? "interrupted"
+        : "failed";
+      const summary = boundedMessage(error);
       await this.service.append(
         createFinishedEvent({
           attemptId,
           workItemId,
           occurredAt: this.now().toISOString(),
-          outcome: signal?.aborted ? "interrupted" : "failed",
-          summary: boundedMessage(error)
+          outcome,
+          summary
         })
       );
+
+      if (cancellationAccepted) {
+        return {
+          attemptId,
+          outcome,
+          summary
+        };
+      }
+
       throw error;
     }
 
+    const cancellationAccepted =
+      beginTerminalization({
+        signal,
+        terminalization
+      });
+    const terminalResult: CodexRunnerClientResult =
+      cancellationAccepted
+        ? {
+            outcome: "interrupted",
+            summary: boundedInterruptionMessage(
+              signal
+            )
+          }
+        : result;
     await this.service.append(
       createFinishedEvent({
         attemptId,
         workItemId,
         occurredAt: this.now().toISOString(),
-        ...result
+        ...terminalResult
       })
     );
 
     return {
       attemptId,
-      ...result
+      ...terminalResult
     };
   }
 }
@@ -283,6 +318,33 @@ function boundedMessage(error: unknown): string {
       ? error.message
       : "Codex runner failed.";
   return message.slice(0, 2_000);
+}
+
+function beginTerminalization({
+  signal,
+  terminalization
+}: {
+  signal: AbortSignal | undefined;
+  terminalization:
+    | AttemptRunTerminalization
+    | undefined;
+}): boolean {
+  const decision =
+    terminalization?.begin();
+  return (
+    decision?.cancellationAccepted === true ||
+    signal?.aborted === true
+  );
+}
+
+function boundedInterruptionMessage(
+  signal: AbortSignal | undefined
+): string {
+  if (signal?.reason !== undefined) {
+    return boundedMessage(signal.reason);
+  }
+
+  return "Codex runner was interrupted.";
 }
 
 function isRecord(

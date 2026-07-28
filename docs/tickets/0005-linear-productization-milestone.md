@@ -48,14 +48,14 @@
 
 ## T17 — 补齐 Control Room 执行控制
 
-- 状态：待执行。
+- 状态：已完成；由 Linear `NP-5` 跟踪。
 - 目的：让操作者选择任务、查看 owner 并安全控制运行。
 - 范围：任务选择、单任务 cancel、bounded concurrency、per-run status、重试生成新 Attempt。
 - 不包含：远程多租户、任意 shell 或无限并发。
 - 依赖：T16。
 - 验收标准：不再固定选择第一条 WorkItem；一个运行不会全局锁死无关任务；cancel/retry 保留可复核历史。
 - 验证：server/application tests、并发/取消状态机、浏览器键盘与移动端检查。
-- 风险与回退：默认并发 1；出现调度异常时可退回串行显式派发。
+- 风险与回退：application-owned coordinator 只保证单 Control Room 进程；默认并发 1，可通过 `TASKSEAL_MAX_CONCURRENT_RUNS` 显式设置 1～8。terminalization fence 明确区分已接受取消与已锁定终态，持久化失败会留在 runtime error 中。出现调度异常时移除覆盖即可退回串行显式派发。
 
 ## T18 — 自动收集 GitHub Artifact 与 Evidence
 

@@ -16,6 +16,7 @@ interface RunCallObservation {
   prompt: string;
   sandbox: "read-only" | "workspace-write";
   hasAbortSignal: boolean;
+  hasTerminalization: boolean;
 }
 
 interface RawHttpResponse {
@@ -39,6 +40,8 @@ test("the local API exposes the workflow and can run the demo to acceptance", as
   assert.equal(pageResponse.status, 200);
   assert.match(page, /TaskSeal Control Room/);
   assert.match(page, /Provider operations/);
+  assert.match(page, /id="work-item-select"/);
+  assert.match(page, /id="codex-cancel-button"/);
 
   const providerStateResponse = await fetch(
     `${baseUrl}/provider-state.js`
@@ -116,10 +119,16 @@ test("persistent API exposes journal state and runs one work item asynchronously
   const server = createTaskSealServer({
     service,
     providerStatus: createProviderStatus(),
-    runWorkItem: async ({ signal, ...options }) => {
+    runWorkItem: async ({
+      signal,
+      terminalization,
+      ...options
+    }) => {
       calls.push({
         ...options,
-        hasAbortSignal: signal instanceof AbortSignal
+        hasAbortSignal: signal instanceof AbortSignal,
+        hasTerminalization:
+          typeof terminalization.begin === "function"
       });
       status = "running";
       await runGate;
@@ -175,7 +184,8 @@ test("persistent API exposes journal state and runs one work item asynchronously
       workItemId: "TS-1",
       prompt: "Inspect the local work item.",
       sandbox: "read-only",
-      hasAbortSignal: true
+      hasAbortSignal: true,
+      hasTerminalization: true
     }
   ]);
 
@@ -549,6 +559,382 @@ test("persistent run reservation is atomic and defaults to read-only", async (t)
   releaseRun();
 });
 
+test("persistent execution control bounds unrelated work without a global item lock", async (t) => {
+  const releases = new Map<string, () => void>();
+  const calls: string[] = [];
+  const service = createPersistentService(
+    () => "running",
+    ["TS-1", "TS-2", "TS-3"]
+  );
+  const server = createTaskSealServer({
+    service,
+    providerStatus: createProviderStatus(),
+    maxConcurrentRuns: 2,
+    runWorkItem: ({ workItemId }) => {
+      calls.push(workItemId);
+      return new Promise<void>((resolve) => {
+        releases.set(workItemId, resolve);
+      });
+    }
+  });
+  const baseUrl = await listen(server, t);
+  const dashboard: unknown = await (
+    await fetch(`${baseUrl}/api/dashboard`)
+  ).json();
+  const csrfToken = readJsonString(
+    dashboard,
+    "security",
+    "csrfToken"
+  );
+  const dispatch = (workItemId: string) =>
+    fetch(`${baseUrl}/api/work-items/${workItemId}/run`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-taskseal-csrf-token": csrfToken
+      },
+      body: JSON.stringify({
+        prompt: `Run ${workItemId}.`
+      })
+    });
+
+  const first = await dispatch("TS-1");
+  const second = await dispatch("TS-2");
+  const saturated = await dispatch("TS-3");
+  const saturatedBody: unknown =
+    await saturated.json();
+
+  assert.deepEqual(
+    [first.status, second.status, saturated.status],
+    [202, 202, 429]
+  );
+  assert.equal(
+    readJsonPath(saturatedBody, "error"),
+    "RUN_CAPACITY_REACHED"
+  );
+  assert.deepEqual(calls, ["TS-1", "TS-2"]);
+
+  const active: unknown = await (
+    await fetch(`${baseUrl}/api/dashboard`)
+  ).json();
+  assert.deepEqual(
+    readJsonPath(active, "runtime", "capacity"),
+    {
+      maxConcurrentRuns: 2,
+      activeCount: 2,
+      availableSlots: 0
+    }
+  );
+  assert.deepEqual(
+    readJsonPath(active, "runtime", "runs"),
+    [
+      {
+        workItemId: "TS-1",
+        phase: "running",
+        attemptId: null,
+        startedAt: readJsonPath(
+          active,
+          "runtime",
+          "runs",
+          0,
+          "startedAt"
+        ),
+        cancelRequestedAt: null
+      },
+      {
+        workItemId: "TS-2",
+        phase: "running",
+        attemptId: null,
+        startedAt: readJsonPath(
+          active,
+          "runtime",
+          "runs",
+          1,
+          "startedAt"
+        ),
+        cancelRequestedAt: null
+      }
+    ]
+  );
+
+  releases.get("TS-1")?.();
+  await waitFor(async () => {
+    const snapshot: unknown = await (
+      await fetch(`${baseUrl}/api/dashboard`)
+    ).json();
+    return (
+      readJsonPath(
+        snapshot,
+        "runtime",
+        "capacity",
+        "availableSlots"
+      ) === 1
+    );
+  });
+  const third = await dispatch("TS-3");
+  assert.equal(third.status, 202);
+  assert.deepEqual(calls, ["TS-1", "TS-2", "TS-3"]);
+
+  releases.get("TS-2")?.();
+  releases.get("TS-3")?.();
+});
+
+test("persistent cancel targets one work item and keeps cancellation visible until settlement", async (t) => {
+  const signals = new Map<string, AbortSignal>();
+  const releases = new Map<string, () => void>();
+  const service = createPersistentService(
+    () => "running",
+    ["TS-1", "TS-2"]
+  );
+  const server = createTaskSealServer({
+    service,
+    providerStatus: createProviderStatus(),
+    maxConcurrentRuns: 2,
+    runWorkItem: ({ workItemId, signal }) => {
+      signals.set(workItemId, signal);
+      return new Promise<void>((resolve) => {
+        releases.set(workItemId, resolve);
+      });
+    }
+  });
+  const baseUrl = await listen(server, t);
+  const dashboard: unknown = await (
+    await fetch(`${baseUrl}/api/dashboard`)
+  ).json();
+  const csrfToken = readJsonString(
+    dashboard,
+    "security",
+    "csrfToken"
+  );
+  const headers = {
+    "content-type": "application/json",
+    "x-taskseal-csrf-token": csrfToken
+  };
+
+  for (const workItemId of ["TS-1", "TS-2"]) {
+    const response = await fetch(
+      `${baseUrl}/api/work-items/${workItemId}/run`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          prompt: `Run ${workItemId}.`
+        })
+      }
+    );
+    assert.equal(response.status, 202);
+  }
+
+  const cancelled = await fetch(
+    `${baseUrl}/api/work-items/TS-1/cancel`,
+    {
+      method: "POST",
+      headers,
+      body: "{}"
+    }
+  );
+  const cancelling: unknown = await cancelled.json();
+
+  assert.equal(cancelled.status, 202);
+  assert.equal(signals.get("TS-1")?.aborted, true);
+  assert.equal(signals.get("TS-2")?.aborted, false);
+  assert.equal(
+    readJsonPath(
+      cancelling,
+      "runtime",
+      "runs",
+      0,
+      "phase"
+    ),
+    "cancelling"
+  );
+  assert.equal(
+    readJsonPath(
+      cancelling,
+      "runtime",
+      "capacity",
+      "availableSlots"
+    ),
+    0
+  );
+
+  const repeated = await fetch(
+    `${baseUrl}/api/work-items/TS-1/cancel`,
+    {
+      method: "POST",
+      headers,
+      body: "{}"
+    }
+  );
+  assert.equal(repeated.status, 202);
+
+  releases.get("TS-1")?.();
+  await waitFor(async () => {
+    const snapshot: unknown = await (
+      await fetch(`${baseUrl}/api/dashboard`)
+    ).json();
+    return !readJsonStringArray(
+      snapshot,
+      "runtime",
+      "activeWorkItemIds"
+    ).includes("TS-1");
+  });
+
+  const inactive = await fetch(
+    `${baseUrl}/api/work-items/TS-1/cancel`,
+    {
+      method: "POST",
+      headers,
+      body: "{}"
+    }
+  );
+  const inactiveBody: unknown = await inactive.json();
+  const settled: unknown = await (
+    await fetch(`${baseUrl}/api/dashboard`)
+  ).json();
+
+  assert.equal(inactive.status, 409);
+  assert.equal(
+    readJsonPath(inactiveBody, "error"),
+    "RUN_NOT_ACTIVE"
+  );
+  assert.deepEqual(
+    readJsonPath(settled, "runtime", "errors"),
+    {}
+  );
+
+  releases.get("TS-2")?.();
+});
+
+test("persistent cancel exposes a terminal persistence failure instead of swallowing it", async (t) => {
+  const service = createPersistentService(() => "running");
+  const server = createTaskSealServer({
+    service,
+    providerStatus: createProviderStatus(),
+    runWorkItem: ({ signal, terminalization }) =>
+      new Promise<never>((_resolve, reject) => {
+        signal.addEventListener(
+          "abort",
+          () => {
+            terminalization.begin();
+            reject(
+              Object.assign(
+                new Error("Terminal append failed."),
+                { code: "JOURNAL_WRITE_FAILED" }
+              )
+            );
+          },
+          { once: true }
+        );
+      })
+  });
+  const baseUrl = await listen(server, t);
+  const dashboard: unknown = await (
+    await fetch(`${baseUrl}/api/dashboard`)
+  ).json();
+  const csrfToken = readJsonString(
+    dashboard,
+    "security",
+    "csrfToken"
+  );
+  const headers = {
+    "content-type": "application/json",
+    "x-taskseal-csrf-token": csrfToken
+  };
+
+  const run = await fetch(
+    `${baseUrl}/api/work-items/TS-1/run`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "Wait for cancellation." })
+    }
+  );
+  assert.equal(run.status, 202);
+
+  const cancel = await fetch(
+    `${baseUrl}/api/work-items/TS-1/cancel`,
+    {
+      method: "POST",
+      headers,
+      body: "{}"
+    }
+  );
+  assert.equal(cancel.status, 202);
+
+  await waitFor(async () => {
+    const snapshot: unknown = await (
+      await fetch(`${baseUrl}/api/dashboard`)
+    ).json();
+    return (
+      readJsonPath(
+        snapshot,
+        "runtime",
+        "errors",
+        "TS-1",
+        "code"
+      ) === "JOURNAL_WRITE_FAILED"
+    );
+  });
+});
+
+test("persistent cancel uses the same JSON, origin, and CSRF boundary as run", async (t) => {
+  const service = createPersistentService(() => "running");
+  const server = createTaskSealServer({
+    service,
+    providerStatus: createProviderStatus(),
+    runWorkItem: async () => {}
+  });
+  const baseUrl = await listen(server, t);
+  const dashboard: unknown = await (
+    await fetch(`${baseUrl}/api/dashboard`)
+  ).json();
+  const token = readJsonString(
+    dashboard,
+    "security",
+    "csrfToken"
+  );
+  const endpoint =
+    `${baseUrl}/api/work-items/TS-1/cancel`;
+
+  const [textResponse, originResponse, tokenResponse] =
+    await Promise.all([
+      fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "content-type": "text/plain",
+          "x-taskseal-csrf-token": token
+        },
+        body: "{}"
+      }),
+      fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "origin": "https://attacker.invalid",
+          "x-taskseal-csrf-token": token
+        },
+        body: "{}"
+      }),
+      fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: "{}"
+      })
+    ]);
+
+  assert.deepEqual(
+    [
+      textResponse.status,
+      originResponse.status,
+      tokenResponse.status
+    ],
+    [415, 403, 403]
+  );
+});
+
 test("server shutdown aborts active runs before closing", async (t) => {
   const service = createPersistentService(() => "running");
   let aborted = false;
@@ -859,10 +1245,10 @@ function createProviderStatus() {
 }
 
 async function waitFor(
-  predicate: () => boolean
+  predicate: () => boolean | Promise<boolean>
 ): Promise<void> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    if (predicate()) {
+    if (await predicate()) {
       return;
     }
 

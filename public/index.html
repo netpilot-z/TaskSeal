@@ -65,6 +65,20 @@
             aria-label="Codex runner controls"
             hidden
           >
+            <div class="runner-target-row">
+              <label class="runner-target" for="work-item-select">
+                <span>Selected work item</span>
+                <select id="work-item-select"></select>
+              </label>
+              <p
+                class="runner-status"
+                id="runner-status"
+                role="status"
+                aria-live="polite"
+              >
+                Waiting for a work item
+              </p>
+            </div>
             <label class="prompt-field" for="runner-prompt">
               <span>Codex assignment</span>
               <textarea
@@ -78,13 +92,23 @@
                 <input id="read-only-input" type="checkbox" checked />
                 <span>Read-only validation</span>
               </label>
-              <button
-                class="button button-primary"
-                id="codex-run-button"
-                type="button"
-              >
-                Run Codex
-              </button>
+              <div class="runner-command-buttons">
+                <button
+                  class="button button-secondary"
+                  id="codex-cancel-button"
+                  type="button"
+                  disabled
+                >
+                  Cancel selected
+                </button>
+                <button
+                  class="button button-primary"
+                  id="codex-run-button"
+                  type="button"
+                >
+                  Run Codex
+                </button>
+              </div>
             </div>
           </div>
         </section>

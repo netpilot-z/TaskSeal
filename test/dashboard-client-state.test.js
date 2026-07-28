@@ -3,7 +3,10 @@ import test from "node:test";
 
 import {
   createAccessibleSnapshotState,
+  createRunControlState,
   DashboardRequestGate,
+  PromptDraftStore,
+  reconcileSelectedWorkItemId,
   semanticSnapshotKey,
   shouldPollDashboard
 } from "../public/dashboard-state.js";
@@ -124,3 +127,252 @@ test("accessible snapshot state changes when evidence changes without a status c
     )
   );
 });
+
+test("work item selection survives polling and falls back only when the item disappears", () => {
+  const initial = [
+    { id: "TS-1", title: "First" },
+    { id: "TS-2", title: "Second" }
+  ];
+
+  assert.equal(
+    reconcileSelectedWorkItemId(null, initial),
+    "TS-1"
+  );
+  assert.equal(
+    reconcileSelectedWorkItemId("TS-2", [...initial].reverse()),
+    "TS-2"
+  );
+  assert.equal(
+    reconcileSelectedWorkItemId("TS-2", [initial[0]]),
+    "TS-1"
+  );
+  assert.equal(
+    reconcileSelectedWorkItemId("TS-2", []),
+    null
+  );
+});
+
+test("prompt drafts survive switching work items and temporary empty state", () => {
+  const drafts = new PromptDraftStore();
+  const first = {
+    id: "TS-1",
+    title: "First"
+  };
+  const second = {
+    id: "TS-2",
+    title: "Second"
+  };
+  const firstDefault = drafts.switchTo(
+    first,
+    ""
+  );
+
+  assert.match(firstDefault, /TS-1: First/);
+  const secondDefault = drafts.switchTo(
+    second,
+    "Custom TS-1 assignment"
+  );
+  assert.match(secondDefault, /TS-2: Second/);
+  assert.equal(
+    drafts.switchTo(
+      first,
+      "Custom TS-2 assignment"
+    ),
+    "Custom TS-1 assignment"
+  );
+  assert.equal(
+    drafts.switchTo(
+      null,
+      "Updated TS-1 assignment"
+    ),
+    ""
+  );
+  assert.equal(
+    drafts.switchTo(first, ""),
+    "Updated TS-1 assignment"
+  );
+});
+
+test("run controls allow an unrelated item while bounded capacity remains", () => {
+  const snapshot = createPersistentSnapshot({
+    activeIds: ["TS-1"],
+    availableSlots: 1,
+    runs: [
+      {
+        workItemId: "TS-1",
+        phase: "running",
+        attemptId: "attempt-1"
+      }
+    ]
+  });
+  const control = createRunControlState(
+    snapshot,
+    "TS-2"
+  );
+
+  assert.equal(control.canRun, true);
+  assert.equal(control.canCancel, false);
+  assert.equal(control.runLabel, "Run Codex");
+  assert.match(control.statusLabel, /TS-2/);
+});
+
+test("run controls enforce capacity and expose selected cancellation phase", () => {
+  const full = createPersistentSnapshot({
+    activeIds: ["TS-1"],
+    availableSlots: 0,
+    runs: [
+      {
+        workItemId: "TS-1",
+        phase: "running",
+        attemptId: "attempt-1"
+      }
+    ]
+  });
+
+  assert.deepEqual(
+    createRunControlState(full, "TS-1"),
+    {
+      canRun: false,
+      canCancel: true,
+      runLabel: "Codex running…",
+      cancelLabel: "Cancel selected",
+      statusLabel:
+        "TS-1 · attempt attempt-1 is running",
+      selectedWorkItemId: "TS-1",
+      selectedRunPhase: "running"
+    }
+  );
+  assert.equal(
+    createRunControlState(full, "TS-2").canRun,
+    false
+  );
+  assert.match(
+    createRunControlState(
+      full,
+      "TS-2"
+    ).statusLabel,
+    /capacity is full; retry/
+  );
+
+  const cancelling = {
+    ...full,
+    runtime: {
+      ...full.runtime,
+      runs: [
+        {
+          workItemId: "TS-1",
+          phase: "cancelling",
+          attemptId: "attempt-1"
+        }
+      ]
+    }
+  };
+  const cancellingControl =
+    createRunControlState(cancelling, "TS-1");
+
+  assert.equal(cancellingControl.canCancel, false);
+  assert.equal(
+    cancellingControl.runLabel,
+    "Cancelling…"
+  );
+  assert.match(
+    cancellingControl.statusLabel,
+    /cancellation requested/
+  );
+
+  const terminalizing = {
+    ...full,
+    runtime: {
+      ...full.runtime,
+      runs: [
+        {
+          workItemId: "TS-1",
+          phase: "terminalizing",
+          attemptId: "attempt-1",
+          cancelRequestedAt: null
+        }
+      ]
+    }
+  };
+  const terminalizingControl =
+    createRunControlState(
+      terminalizing,
+      "TS-1"
+    );
+
+  assert.equal(
+    terminalizingControl.canCancel,
+    false
+  );
+  assert.equal(
+    terminalizingControl.runLabel,
+    "Saving outcome…"
+  );
+  assert.equal(
+    terminalizingControl.cancelLabel,
+    "Outcome locked"
+  );
+  assert.match(
+    terminalizingControl.statusLabel,
+    /cancellation is no longer available/
+  );
+});
+
+test("a terminal attempt is presented as an auditable retry", () => {
+  const snapshot = createPersistentSnapshot({
+    activeIds: [],
+    availableSlots: 1,
+    runs: []
+  });
+  snapshot.workItems[1].attempts.push({
+    id: "attempt-old",
+    status: "interrupted",
+    agentId: "codex-app-server",
+    startedAt: "2026-07-28T09:00:00.000Z",
+    completedAt: "2026-07-28T09:01:00.000Z"
+  });
+
+  const control = createRunControlState(
+    snapshot,
+    "TS-2"
+  );
+
+  assert.equal(control.canRun, true);
+  assert.equal(control.runLabel, "Retry Codex");
+  assert.match(control.statusLabel, /interrupted/);
+});
+
+function createPersistentSnapshot({
+  activeIds,
+  availableSlots,
+  runs
+}) {
+  return {
+    mode: "persistent",
+    capabilities: {
+      runAttempt: true,
+      cancelAttempt: true
+    },
+    runtime: {
+      activeWorkItemIds: activeIds,
+      capacity: {
+        maxConcurrentRuns: 2,
+        activeCount: activeIds.length,
+        availableSlots
+      },
+      runs
+    },
+    workItems: [
+      {
+        id: "TS-1",
+        title: "First",
+        attempts: []
+      },
+      {
+        id: "TS-2",
+        title: "Second",
+        attempts: []
+      }
+    ]
+  };
+}
