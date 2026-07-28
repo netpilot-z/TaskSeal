@@ -1,6 +1,9 @@
 import {
   createAccessibleSnapshotState,
+  createRunControlState,
   DashboardRequestGate,
+  PromptDraftStore,
+  reconcileSelectedWorkItemId,
   semanticSnapshotKey,
   shouldPollDashboard
 } from "/dashboard-state.js";
@@ -54,12 +57,17 @@ const elements = {
   timeline: document.querySelector("#timeline"),
   demoControls: document.querySelector("#demo-controls"),
   runnerControls: document.querySelector("#runner-controls"),
+  workItemSelect: document.querySelector("#work-item-select"),
+  runnerStatus: document.querySelector("#runner-status"),
   resetButton: document.querySelector("#reset-button"),
   nextButton: document.querySelector("#next-button"),
   runButton: document.querySelector("#run-button"),
   promptInput: document.querySelector("#runner-prompt"),
   readOnlyInput: document.querySelector("#read-only-input"),
   codexRunButton: document.querySelector("#codex-run-button"),
+  codexCancelButton: document.querySelector(
+    "#codex-cancel-button"
+  ),
   liveStatus: document.querySelector("#live-status"),
   toast: document.querySelector("#toast")
 };
@@ -74,15 +82,17 @@ const statusLabels = {
 let demoComplete = false;
 let mode = null;
 let selectedWorkItemId = null;
-let promptInitializedFor = null;
+const promptDrafts = new PromptDraftStore();
 let busy = false;
 let polling = false;
 let lastRuntimeErrorKey = null;
-let activeRunCount = 0;
 let csrfToken = null;
 let renderedWorkItemsKey = null;
+let renderedWorkItemSelectorKey = null;
 let renderedTimelineKey = null;
 let announcedStateKey = null;
+let lastRunnerStatusLabel = null;
+let latestSnapshot = null;
 let providerInitialized = false;
 let providerPanelState = createProviderPanelState();
 let renderedProviderKey = null;
@@ -100,6 +110,27 @@ elements.runButton.addEventListener("click", () =>
   mutateDemo("/api/demo/run-all")
 );
 elements.codexRunButton.addEventListener("click", runCodex);
+elements.codexCancelButton.addEventListener(
+  "click",
+  cancelCodex
+);
+elements.workItemSelect.addEventListener(
+  "change",
+  () => selectWorkItem(elements.workItemSelect.value)
+);
+elements.workItems.addEventListener("click", (event) => {
+  if (!(event.target instanceof Element)) {
+    return;
+  }
+
+  const button = event.target.closest(
+    "[data-select-work-item]"
+  );
+
+  if (button) {
+    selectWorkItem(button.dataset.selectWorkItem);
+  }
+});
 elements.providerRefresh.addEventListener(
   "click",
   () => requestProviderSnapshot()
@@ -124,8 +155,9 @@ async function mutateDemo(path) {
 
 async function runCodex() {
   const prompt = elements.promptInput.value.trim();
+  const workItemId = selectedWorkItemId;
 
-  if (!selectedWorkItemId) {
+  if (!workItemId) {
     showToast("No TaskSeal work item is available to run.");
     return;
   }
@@ -144,7 +176,7 @@ async function runCodex() {
   setBusy(true);
   try {
     const dispatched = await requestSnapshot(
-      `/api/work-items/${encodeURIComponent(selectedWorkItemId)}/run`,
+      `/api/work-items/${encodeURIComponent(workItemId)}/run`,
       {
         method: "POST",
         headers: {
@@ -164,6 +196,66 @@ async function runCodex() {
   } finally {
     setBusy(false);
   }
+}
+
+async function cancelCodex() {
+  const workItemId = selectedWorkItemId;
+
+  if (!workItemId || !csrfToken) {
+    showToast(
+      "Select an active work item before cancelling."
+    );
+    return;
+  }
+
+  setBusy(true);
+  try {
+    const cancelled = await requestSnapshot(
+      `/api/work-items/${encodeURIComponent(
+        workItemId
+      )}/cancel`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-taskseal-csrf-token": csrfToken
+        },
+        body: "{}"
+      }
+    );
+
+    if (cancelled) {
+      await requestSnapshot(
+        "/api/dashboard",
+        { method: "GET" }
+      );
+    }
+  } finally {
+    setBusy(false);
+  }
+}
+
+function selectWorkItem(workItemId) {
+  const workItems = latestSnapshot?.workItems ?? [];
+  const selected =
+    reconcileSelectedWorkItemId(
+      workItemId,
+      workItems
+    );
+
+  if (!selected || selected === selectedWorkItemId) {
+    return;
+  }
+
+  selectedWorkItemId = selected;
+  renderWorkItemSelector(workItems);
+  initializePrompt(
+    workItems.find(
+      (workItem) => workItem.id === selected
+    )
+  );
+  renderWorkItems(workItems);
+  applyRunControls();
 }
 
 async function pollPersistentDashboard() {
@@ -282,9 +374,14 @@ async function requestSnapshot(path, options, { silent = false } = {}) {
 function render(snapshot) {
   const isDemo =
     snapshot.capabilities?.demo ?? Boolean(snapshot.demo);
+  latestSnapshot = snapshot;
   mode = isDemo ? "demo" : "persistent";
   demoComplete = isDemo && snapshot.demo.complete;
-  selectedWorkItemId = snapshot.workItems[0]?.id ?? null;
+  selectedWorkItemId =
+    reconcileSelectedWorkItemId(
+      selectedWorkItemId,
+      snapshot.workItems
+    );
   csrfToken = snapshot.security?.csrfToken ?? csrfToken;
 
   elements.snapshotTime.textContent = `Snapshot ${formatTime(
@@ -315,17 +412,22 @@ function render(snapshot) {
     renderTimeline(snapshot.demo.timeline);
   } else {
     const activeIds = snapshot.runtime?.activeWorkItemIds ?? [];
-    const hasActiveRun = activeIds.length > 0;
-    activeRunCount = activeIds.length;
-    elements.stepCounter.textContent = hasActiveRun
-      ? `${activeIds.length} Codex run active`
-      : "Journal online";
-    elements.codexRunButton.disabled =
-      busy || hasActiveRun || !selectedWorkItemId;
-    elements.codexRunButton.textContent = hasActiveRun
-      ? "Codex running…"
-      : "Run Codex";
-    initializePrompt(snapshot.workItems[0]);
+    const limit =
+      snapshot.runtime?.capacity?.maxConcurrentRuns ?? 1;
+    elements.stepCounter.textContent =
+      activeIds.length > 0
+        ? `${activeIds.length} / ${limit} Codex runs active`
+        : `Journal online · ${limit} run slot${
+            limit === 1 ? "" : "s"
+          }`;
+    renderWorkItemSelector(snapshot.workItems);
+    initializePrompt(
+      snapshot.workItems.find(
+        (workItem) =>
+          workItem.id === selectedWorkItemId
+      )
+    );
+    applyRunControls();
     renderTimeline(createAttemptTimeline(snapshot.workItems));
     revealRuntimeError(snapshot.runtime?.errors);
   }
@@ -694,17 +796,80 @@ function announceProviderPanel() {
   elements.providerLiveStatus.textContent = summary;
 }
 
-function initializePrompt(workItem) {
-  if (!workItem || promptInitializedFor === workItem.id) {
+function renderWorkItemSelector(workItems) {
+  const selectorKey = semanticSnapshotKey(
+    workItems.map(({ id, title }) => ({
+      id,
+      title
+    }))
+  );
+
+  if (selectorKey !== renderedWorkItemSelectorKey) {
+    renderedWorkItemSelectorKey = selectorKey;
+    elements.workItemSelect.innerHTML =
+      workItems.length > 0
+        ? workItems
+            .map(
+              (workItem) =>
+                `<option value="${escapeAttribute(
+                  workItem.id
+                )}">${escapeHtml(
+                  `${workItem.id} · ${workItem.title}`
+                )}</option>`
+            )
+            .join("")
+        : '<option value="">No work items</option>';
+  }
+
+  elements.workItemSelect.value =
+    selectedWorkItemId ?? "";
+  elements.workItemSelect.disabled =
+    workItems.length === 0 || busy;
+}
+
+function applyRunControls() {
+  if (!latestSnapshot || mode !== "persistent") {
     return;
   }
 
-  elements.promptInput.value = [
-    `Work on TaskSeal work item ${workItem.id}: ${workItem.title}.`,
-    "Stay inside this project and report a concise result.",
-    "Do not access or modify external issue trackers."
-  ].join("\n");
-  promptInitializedFor = workItem.id;
+  const control = createRunControlState(
+    latestSnapshot,
+    selectedWorkItemId,
+    busy
+  );
+  elements.codexRunButton.disabled = !control.canRun;
+  elements.codexRunButton.textContent = control.runLabel;
+  elements.codexCancelButton.disabled =
+    !control.canCancel;
+  elements.codexCancelButton.textContent =
+    control.cancelLabel;
+  if (
+    control.statusLabel !==
+    lastRunnerStatusLabel
+  ) {
+    lastRunnerStatusLabel =
+      control.statusLabel;
+    elements.runnerStatus.textContent =
+      control.statusLabel;
+  }
+  elements.workItemSelect.disabled =
+    latestSnapshot.workItems.length === 0 ||
+    busy;
+}
+
+function initializePrompt(workItem) {
+  if (
+    promptDrafts.currentWorkItemId ===
+    (workItem?.id ?? null)
+  ) {
+    return;
+  }
+
+  elements.promptInput.value =
+    promptDrafts.switchTo(
+      workItem,
+      elements.promptInput.value
+    );
 }
 
 function createAttemptTimeline(workItems) {
@@ -737,7 +902,9 @@ function createAttemptTimeline(workItems) {
     number: index + 1,
     source: attempt.agentId,
     label: [
-      `${workItem.id} · ${statusLabels[attempt.status] ?? attempt.status}`,
+      `${workItem.id} · ${attempt.id} · ${
+        statusLabels[attempt.status] ?? attempt.status
+      }`,
       attempt.summary
     ]
       .filter(Boolean)
@@ -766,25 +933,67 @@ function revealRuntimeError(errors) {
 }
 
 function renderWorkItems(workItems) {
-  const renderKey = semanticSnapshotKey(workItems);
+  const renderKey = semanticSnapshotKey({
+    busy,
+    selectedWorkItemId,
+    workItems
+  });
 
   if (renderKey === renderedWorkItemsKey) {
     return;
   }
 
   renderedWorkItemsKey = renderKey;
+  const focusedWorkItemId =
+    document.activeElement?.dataset
+      ?.selectWorkItem ?? null;
 
   if (workItems.length === 0) {
     elements.workItems.innerHTML = `
-      <div class="empty-state">
+      <div
+        class="empty-state"
+        data-work-items-empty
+        tabindex="-1"
+        aria-label="No work items available"
+      >
         <strong>No work items yet</strong>
         <p>Run the first event to ingest a task.</p>
       </div>
     `;
+    if (focusedWorkItemId) {
+      elements.workItems
+        .querySelector("[data-work-items-empty]")
+        ?.focus();
+    }
     return;
   }
 
   elements.workItems.innerHTML = workItems.map(renderWorkItem).join("");
+
+  if (focusedWorkItemId) {
+    const selectionButtons = [
+      ...elements.workItems.querySelectorAll(
+        "[data-select-work-item]"
+      )
+    ];
+    const focusTarget =
+      selectionButtons.find(
+        (button) =>
+          button.dataset.selectWorkItem ===
+          focusedWorkItemId
+      ) ??
+      selectionButtons.find(
+        (button) =>
+          button.dataset.selectWorkItem ===
+          selectedWorkItemId
+      );
+
+    if (focusTarget) {
+      focusTarget.focus();
+    } else {
+      elements.workItemSelect.focus();
+    }
+  }
 }
 
 function renderWorkItem(item) {
@@ -792,18 +1001,34 @@ function renderWorkItem(item) {
   const currentArtifact = item.activeArtifact;
   const decision = item.acceptanceDecision;
   const decisionView = getDecisionView(decision);
+  const isSelected =
+    item.id === selectedWorkItemId;
 
   return `
-    <article class="work-item-card">
+    <article
+      class="work-item-card${isSelected ? " is-selected" : ""}"
+      aria-label="Work item ${escapeAttribute(item.id)}"
+    >
       <div class="work-item-header">
         <div>
           <div class="work-id">${escapeHtml(item.id)}</div>
           <h3>${escapeHtml(item.title)}</h3>
         </div>
-        <span class="status status-${escapeAttribute(item.status)}">
-          <span aria-hidden="true"></span>
-          ${escapeHtml(statusLabels[item.status] ?? item.status)}
-        </span>
+        <div class="work-item-heading-actions">
+          <span class="status status-${escapeAttribute(item.status)}">
+            <span aria-hidden="true"></span>
+            ${escapeHtml(statusLabels[item.status] ?? item.status)}
+          </span>
+          <button
+            class="work-item-select"
+            type="button"
+            data-select-work-item="${escapeAttribute(item.id)}"
+            aria-pressed="${String(isSelected)}"
+            ${busy ? "disabled" : ""}
+          >
+            ${isSelected ? "Selected" : "Select"}
+          </button>
+        </div>
       </div>
 
       <div class="progress-row">
@@ -835,6 +1060,8 @@ function renderWorkItem(item) {
         </div>
       </div>
 
+      ${renderAttemptHistory(item.attempts)}
+
       <div class="evidence-row">
         <span class="detail-label">Required evidence</span>
         <div class="evidence-list">
@@ -854,6 +1081,59 @@ function renderWorkItem(item) {
         </div>
       </div>
     </article>
+  `;
+}
+
+function renderAttemptHistory(attempts) {
+  if (attempts.length === 0) {
+    return `
+      <section class="attempt-history" aria-label="Attempt history">
+        <span class="detail-label">Attempt history</span>
+        <p>No attempts have been dispatched.</p>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="attempt-history" aria-label="Attempt history">
+      <span class="detail-label">Attempt history</span>
+      <ol>
+        ${attempts
+          .toReversed()
+          .map(
+            (attempt) => `
+              <li>
+                <div>
+                  <strong>${escapeHtml(attempt.id)}</strong>
+                  <span>${escapeHtml(attempt.agentId)}</span>
+                </div>
+                <div>
+                  <span class="attempt-status attempt-${escapeAttribute(
+                    attempt.status
+                  )}">
+                    ${escapeHtml(
+                      statusLabels[attempt.status] ??
+                        attempt.status
+                    )}
+                  </span>
+                  <time datetime="${escapeAttribute(
+                    attempt.completedAt ??
+                      attempt.startedAt
+                  )}">
+                    ${escapeHtml(
+                      formatTime(
+                        attempt.completedAt ??
+                          attempt.startedAt
+                      )
+                    )}
+                  </time>
+                </div>
+              </li>
+            `
+          )
+          .join("")}
+      </ol>
+    </section>
   `;
 }
 
@@ -992,13 +1272,10 @@ function setBusy(isBusy) {
   elements.resetButton.disabled = isBusy;
   elements.nextButton.disabled = isBusy || demoComplete;
   elements.runButton.disabled = isBusy || demoComplete;
-  elements.codexRunButton.disabled =
-    isBusy || activeRunCount > 0 || !selectedWorkItemId;
-  elements.codexRunButton.textContent = isBusy
-    ? "Dispatching…"
-    : activeRunCount > 0
-      ? "Codex running…"
-      : "Run Codex";
+  if (latestSnapshot?.workItems) {
+    renderWorkItems(latestSnapshot.workItems);
+  }
+  applyRunControls();
 }
 
 function showToast(message) {

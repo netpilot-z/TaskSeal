@@ -424,6 +424,7 @@ interface StartPersistentControlRoomOptions {
         options: {
           service: PersistentServicePort;
           providerStatus: ProviderSyncQueryPort;
+          maxConcurrentRuns: number;
           runWorkItem: (
             options: RunWorkItemOptions
           ) => unknown | Promise<unknown>;
@@ -2124,6 +2125,10 @@ export async function startPersistentControlRoom({
 > {
   const host = environment.HOST ?? "127.0.0.1";
   const port = Number(environment.PORT ?? 4317);
+  const maxConcurrentRuns =
+    readMaxConcurrentRuns(
+      environment.TASKSEAL_MAX_CONCURRENT_RUNS
+    );
 
   if (
     typeof host !== "string" ||
@@ -2158,6 +2163,7 @@ export async function startPersistentControlRoom({
   const server = serverFactory({
     service,
     providerStatus,
+    maxConcurrentRuns,
     runWorkItem: (options) =>
       runner.run({
         ...options,
@@ -2178,6 +2184,22 @@ export async function startPersistentControlRoom({
   });
   output.write(`TaskSeal Control Room: http://${host}:${port}\n`);
   return server;
+}
+
+function readMaxConcurrentRuns(
+  value: string | undefined
+): number {
+  if (value === undefined) {
+    return 1;
+  }
+
+  if (!/^[1-8]$/.test(value)) {
+    throw new TypeError(
+      "TaskSeal max concurrent runs must be between 1 and 8."
+    );
+  }
+
+  return Number(value);
 }
 
 function installShutdownHandlers({

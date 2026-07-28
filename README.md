@@ -44,7 +44,7 @@ npm start
 
 `doctor` 会检查项目配置、Codex 可执行文件和登录状态。在 Windows 上，TaskSeal 会比较 PATH 与本机 Codex App 的可用版本并选择较新的版本；也可通过 `TASKSEAL_CODEX_BIN` 显式指定。
 
-启动后访问 `http://127.0.0.1:4317`。Control Room 会读取 `.taskseal/events.jsonl` 的持久交付状态，并可从界面派发一个 Codex Attempt。Provider 面板独立轮询只读的 `GET /api/providers`：它组合 `.taskseal/provider-observations.json` 的配置、scope、snapshot、mapping、缺失证据和诊断状态，以及 `.taskseal/provider-operations.json` 的脱敏 latest 审批、提交、未知结果与对账状态。刷新失败或 source version 回退时保留最后一次已知完整结果并明确标记 stale；三个存储不会互相重放，浏览器没有审批、submit 或 reconcile 写入口。
+启动后访问 `http://127.0.0.1:4317`。Control Room 会读取 `.taskseal/events.jsonl` 的持久交付状态，可选择具体 WorkItem 派发、取消或人工重试 Codex Attempt，并展示 owner、当前运行与历史 Attempt。并发默认 `1`，可用 `TASKSEAL_MAX_CONCURRENT_RUNS=2`～`8` 显式增加；达到容量会拒绝而不会建立隐式队列。Provider 面板独立轮询只读的 `GET /api/providers`：它组合 `.taskseal/provider-observations.json` 的配置、scope、snapshot、mapping、缺失证据和诊断状态，以及 `.taskseal/provider-operations.json` 的脱敏 latest 审批、提交、未知结果与对账状态。刷新失败或 source version 回退时保留最后一次已知完整结果并明确标记 stale；三个存储不会互相重放，浏览器没有审批、submit 或 reconcile 写入口。
 
 当前 HTTP 控制面只允许 loopback；远程团队访问需要后续先补认证、TLS、租户权限与审计，不能通过修改 `HOST` 直接暴露。
 
@@ -158,6 +158,7 @@ node src/cli.ts sync linear --dry-run
 18. Provider status v2 已通过独立 query ports 组合 Observation 与 Operation Journal 的安全 latest projection；Control Room 展示 10 种受控写状态、operation-only target 和 source-local 防回退，任一 source 失败固定 503 并保留浏览器 last-known，且没有新增写 route。
 19. Linear Tracker Bootstrap 已显式配置 Project/Backlog State，通过分页只读 resolver 验证 Organization/Team/Project/State 关系，并以固定 endpoint、单凭证、15 秒 timeout、128 KiB request 和 64 KiB streaming response 的真实 HTTP exchange 完成只读 smoke；Operation v2 schema introspection 也确认 create/query 所需字段存在，但 exchange 仍未注入真实写链。
 20. Linear Ready Work 已显式配置 Todo/Done、50×20 有界 Issue 分页、客户端 scope 对账、native/declared blocker union 与实时 Done 门禁；bootstrap map target 必须绑定 resolved Organization/Team/Project，正确 scope 中未覆盖的新 Issue 由完整 native relation 判定。CLI 只接受 UUID 单票，提供 list→preview→apply，list 不读取 journal，本地 create/link 复用 Snapshot Import、provenance、atomic batch 和离线 receipt replay；依赖索引拒绝 ADS/路径逃逸并有 512 KiB 上限，真实 smoke 为 0 候选且 journal hash 不变。
+21. Control Room 已由 application-owned coordinator 提供任务选择、单项 cancel、默认 1/最大 8 的有界并发和安全容量投影；选择不会被轮询重置，有可用槽位时无关任务可并行，取消在 Attempt terminal 写完前保持 `cancelling`，人工 retry 生成新 Attempt 并保留旧历史。
 
 ## 项目结构
 

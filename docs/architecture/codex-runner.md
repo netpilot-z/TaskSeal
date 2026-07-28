@@ -57,6 +57,7 @@ TaskSealService ───────► Dashboard projection
 - 对 project root 与 cwd 执行 canonical containment；不存在或无法解析的路径在预留 Attempt 前失败。
 - 将 App Server 生命周期映射为 runner result。
 - 通过 service 记录 Attempt 事件。
+- 在提交 `attempt.finished` 前调用 coordinator terminalization fence；已接受取消覆盖 client 的 completed 结果，晚到取消不能改写已选终态。
 - 默认不处理或批准 App Server 权限请求。
 
 ### CLI 与 HTTP
@@ -81,6 +82,7 @@ TaskSealService ───────► Dashboard projection
 
 - journal 追加失败：不启动或不提交下一状态。
 - `attempt.started` 成功但 Codex 启动失败：追加 failed finish，留下可审计 Attempt。
+- 取消成功且 interrupted finish 已落盘：Runner 返回结构化 interrupted result；finish 写入失败则传播 journal/service error，HTTP 投影安全诊断。
 - cwd 不存在、无法解析或 canonical path 越界：在 `attempt.started` 前返回固定错误，不持久化机器路径。
 - App Server 未知通知：忽略并可记录摘要；未知 response ID 或无效 JSON：协议错误。
 - App Server error response 只暴露 method 与整数错误码，不传播不可信服务端 message。
@@ -108,6 +110,8 @@ TaskSealService ───────► Dashboard projection
 - Runner 将校验后的 canonical cwd 传给子进程；不存在的 cwd 不再推迟到 spawn 阶段处理。
 - Control Room 写入口只接受 loopback、same-origin、`application/json` 与启动时随机 CSRF token，界面默认 read-only。
 - 同一 WorkItem 的 Attempt 由 application service 原子预留；并发 HTTP 或 runner 调用只能有一个成功。
+- Control Room 的易失运行控制由 application coordinator 拥有：默认并发 1、显式上限 8，每项独立 Abort，cancel 直到 terminal append 完成才释放容量；同步 terminalization fence 保证取消接受与持久终态一致；不同 WorkItem 在容量内可并行。
+- HTTP `202` 只表示进程内 dispatch accepted；Runner 完成 cwd 校验和 `attempt.started` append 前，运行投影的 Attempt ID 可以为空。
 - shutdown 会停止接单、Abort 活跃 turn 并等待终态；重启时遗留 running Attempt 被归一为 interrupted。
 
 ## 替代方案与取舍
