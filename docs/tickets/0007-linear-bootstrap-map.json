@@ -16,6 +16,34 @@
     "identity": "clientRequestId",
     "descriptionNormalization": "linear-markdown-unordered-list-marker"
   },
+  "relationBootstrap": {
+    "status": "blocked_permission",
+    "diagnosticCode": "LINEAR_WRITE_SCOPE_REQUIRED"
+  },
+  "parentComment": {
+    "clientRequestId": "1b4c0005-84e6-4fb7-818b-accc3eacd3c5",
+    "body": "TaskSeal 产品待办已完成 Linear 初始化与读后核验。\n\n- 已创建：NP-2 至 NP-12，共 11 张子任务，均绑定 Team `netpilot`、Project `TaskSeal`、父任务 NP-1。\n- 当前执行：NP-2（Linear Operation v2）进入 In Progress；NP-4（ready work 读取）进入 Todo。\n- GitHub 规划 Issue 已迁移：#7 → NP-3、#25 → NP-11、#32 → NP-10，均已留下链接并以 not planned 关闭。\n- 依赖关系仍待处理：`issueRelationCreate` 要求额外的 Linear `write` scope，当前凭证返回 `LINEAR_WRITE_SCOPE_REQUIRED`；描述中的依赖不会被当作已建立的原生关系。\n- 审计映射：`docs/tickets/0007-linear-bootstrap-map.json`。",
+    "payloadDigest": "sha256:ed612e2afa23fa6862d013ec85b2dfed9ab70730900241f0986650ae94a698e8",
+    "linearCommentId": null,
+    "status": "planned"
+  },
+  "githubMigrations": [
+    {
+      "githubIssue": 7,
+      "linearIdentifier": "NP-3",
+      "status": "closed_not_planned"
+    },
+    {
+      "githubIssue": 25,
+      "linearIdentifier": "NP-11",
+      "status": "closed_not_planned"
+    },
+    {
+      "githubIssue": 32,
+      "linearIdentifier": "NP-10",
+      "status": "closed_not_planned"
+    }
+  ],
   "entries": [
     {
       "sourceTicket": "T15.2",
