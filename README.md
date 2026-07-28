@@ -118,7 +118,7 @@ node src/cli.ts sync linear --dry-run
 6. GitHub REST 与 Linear GraphQL 只读客户端使用固定契约、精确 scope 和显式映射；mocked-real snapshot 可以内存重放。
 7. Linear `NP-1` 与 GitHub Issue `#1` → Draft PR `#2` → `tests` Check 的真实只读 snapshot 均已成功；GitHub 实际 Evidence 为 passed，但没有 Owner acceptance 时仍保持 `reviewing`。
 8. Linear ticket dry-run 对当前 manifest 中未完成、未映射的条目确定性生成草案，网络请求与外部写入均为零。
-9. TaskSeal runtime 仍没有自动外部 mutation；Linear 已成为内部任务主账本，`NP-1` 与 `NP-2`～`NP-12` 已完成管理性 bootstrap 和读后核验。Issue 创建、更新、评论权限可用，但原生依赖关系接口仍缺少通用 `write` scope；Operation v2 fake 闭环已完成，真实单票提交仍需显式 composition 与再次验真。
+9. TaskSeal runtime 仍没有自动外部 mutation；Linear 已成为内部任务主账本，`NP-1` 与 `NP-2`～`NP-12` 已完成管理性 bootstrap 和读后核验。Issue 创建、更新、评论权限可用，但权限扩展后原生依赖关系接口仍返回 `FORBIDDEN`；Operation v2 fake 闭环已完成，真实单票提交仍需显式 composition 与再次验真。
 10. fixture 仍验证 revision-bound Artifact/Evidence 与幂等验收规则。
 11. Gitee 内置 AdapterManifest v1、`provider.health` 与 `work-item.read` 已实现，并用公共 `oschina/git-osc#I4` 完成匿名 smoke；本地 preview/apply 只有在 trusted registry 与精确 per-scope policy 同时允许时可用，candidate direct append 固定拒绝，飞书保留为后续异构压力测试。
 12. Provider Observation v1 已建立独立、有界、原子替换的 JSON 读模型；按 operation start freshness 拒绝乱序覆盖，通过 observed snapshot-import façade 组合真实 preview/apply，并以 persistent-only `GET /api/providers` 暴露 `configured`、`scope_mismatch`、`sample_missing`、`snapshot_ready` 与 `sync_failed`。

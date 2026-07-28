@@ -26,7 +26,7 @@
 
 ## T15.3 — Bootstrap 未完成待办并迁移 GitHub 规划 Issue
 
-- 状态：由 Linear `NP-3` 跟踪；子任务创建、回读核验、GitHub 规划 Issue 迁移和 Operation v2 已完成，原生依赖关系仍待额外 `write` scope。
+- 状态：已完成；由 Linear `NP-3` 跟踪。11 张子任务、稳定映射、GitHub 规划 Issue 迁移和 Operation v2 均已核验；原生依赖关系作为已记录的权限限制留给后续配置处理。
 - 目的：把当前内部产品待办切换到 Linear，并建立稳定 source ticket ↔ Linear UUID/identifier 映射。
 - 范围：只含未完成项的 manifest、batch digest、prepare-only preview、单票 pilot、逐项 approve/submit/reconcile；迁移 GitHub `#7`、`#25`、`#32`。
 - 不包含：按标题去重、无人审批、遇到 unknown 后继续派发或迁移已关闭历史 Issue。
