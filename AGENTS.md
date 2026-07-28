@@ -19,3 +19,11 @@ TaskSeal 是 AI 交付控制平台的技术验证项目。当前阶段只验证�
 - Linear workspace：`netpilot-z`
 - Linear team：`netpilot`
 - Linear project：`TaskSeal`
+
+## 工作跟踪
+
+- 内部产品方向、Feature、Research、Refactor 和 Task 以 Linear 为权威来源。
+- GitHub Issue 只用于外部 Bug、兼容性问题、公开 Feature Request 和仓库级维护问题；分支、PR、Review、CI 与 Release 继续使用 GitHub。
+- 分支使用 `feature/np-<number>-<slug>`、`fix/np-<number>-<slug>` 等类型前缀，PR 必须关联对应 Linear identifier。
+- Agent completed 不等于 Linear Done；只有 Artifact、Required Evidence 和人工 AcceptanceDecision 全部通过后才可迁移完成状态。
+- 详细规则与历史迁移边界见 `docs/standards/work-tracking.md`。

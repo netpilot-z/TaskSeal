@@ -24,6 +24,7 @@ TaskSeal 是一个 AI Delivery Control Plane 技术验证项目。它把外部�
 - 当前保持单 package 和 framework-free core；NestJS 与 monorepo 只在出现独立部署或远程平台后端需求时引入。
 - 默认不访问真实凭证，不向外部系统写入数据。
 - 当前结果用于验证技术和产品假设，不代表生产就绪。
+- 内部研发任务以 Linear 为权威来源；GitHub Issue 面向外部 Bug/反馈，GitHub PR/Review/CI 承载代码交付。
 
 ## 本地运行
 
@@ -103,7 +104,9 @@ Gitee 首版只支持匿名公开仓库，配置为 `config/project.json` 中的
 node src/cli.ts sync linear --dry-run
 ```
 
-输出明确标记 `mutationReady: false`、`networkRequests: 0` 和 `externalWrites: 0`。它不会连接 Linear，更不会创建、更新或关闭 Issue。真实同步需要先修正 scope、完成 UUID/幂等对账设计，并由操作者另行明确授权。
+输出明确标记 `mutationReady: false`、`networkRequests: 0` 和 `externalWrites: 0`。它不会连接 Linear，更不会创建、更新或关闭 Issue。当前已能只读精确解析 Organization、Team、Project 和 Backlog State，并具备未接线的 bounded GraphQL HTTP exchange；Linear 凭证的 Issue 创建、更新和评论权限已由操作者配置，并用 `NP-1` 更新/读后核验确认，但 TaskSeal 真实同步仍需 Operation v2 把 Project/State/source intent 纳入审批与 journal。
+
+默认 dry-run 只读取 `docs/tickets/0006-linear-bootstrap-manifest.md` 中尚未完成且尚未映射的条目；已完成状态会被过滤。内部任务、GitHub Issue 的职责分工、分支命名和迁移规则见 `docs/standards/work-tracking.md`；完整路线见 `docs/tickets/0005-linear-productization-milestone.md`。
 
 ## 当前可验证结果
 
@@ -114,8 +117,8 @@ node src/cli.ts sync linear --dry-run
 5. Control Room 可观察 running/reviewing/blocked、活跃 Agent 和历史 Attempt。
 6. GitHub REST 与 Linear GraphQL 只读客户端使用固定契约、精确 scope 和显式映射；mocked-real snapshot 可以内存重放。
 7. Linear `NP-1` 与 GitHub Issue `#1` → Draft PR `#2` → `tests` Check 的真实只读 snapshot 均已成功；GitHub 实际 Evidence 为 passed，但没有 Owner acceptance 时仍保持 `reviewing`。
-8. Linear ticket dry-run 对相同输入确定性输出八个草案，网络请求与外部写入均为零。
-9. Linear、GitHub、Gitee 与飞书仍无真实写入；仓库 tickets 不会自动同步到 Linear。
+8. Linear ticket dry-run 对当前 manifest 中未完成、未映射的条目确定性生成草案，网络请求与外部写入均为零。
+9. TaskSeal runtime 仍没有自动外部 mutation；Linear 已成为内部任务主账本，获授权的 `NP-1` 管理性更新已验证写权限，产品待办先生成可审查 bootstrap 输入，再经受控写合同同步。
 10. fixture 仍验证 revision-bound Artifact/Evidence 与幂等验收规则。
 11. Gitee 内置 AdapterManifest v1、`provider.health` 与 `work-item.read` 已实现，并用公共 `oschina/git-osc#I4` 完成匿名 smoke；本地 preview/apply 只有在 trusted registry 与精确 per-scope policy 同时允许时可用，candidate direct append 固定拒绝，飞书保留为后续异构压力测试。
 12. Provider Observation v1 已建立独立、有界、原子替换的 JSON 读模型；按 operation start freshness 拒绝乱序覆盖，通过 observed snapshot-import façade 组合真实 preview/apply，并以 persistent-only `GET /api/providers` 暴露 `configured`、`scope_mismatch`、`sample_missing`、`snapshot_ready` 与 `sync_failed`。
@@ -125,6 +128,7 @@ node src/cli.ts sync linear --dry-run
 16. Fake Linear Write Transport v1 已提供 application-owned create/query port、固定 client UUID/Team correlation、128 KiB request 与 64 KiB response guard，以及 created/not-dispatched/outcome-unknown/found/absent/failed/ambiguous 分类；只接受显式注入的内存 fake exchange，没有 global fetch、凭证或真实 Linear 请求。
 17. Controlled Write Coordinator v1 已跑通 prepare→approve/reject→submit→reconcile：只有 committed submitting version 能消费一次 fake create permit，并覆盖并发幂等、response-lost UUID 对账、absent 显式重查、journal unknown 零派发和 file-backed restart recovery；仍无 CLI/HTTP 或真实 Linear mutation。
 18. Provider status v2 已通过独立 query ports 组合 Observation 与 Operation Journal 的安全 latest projection；Control Room 展示 10 种受控写状态、operation-only target 和 source-local 防回退，任一 source 失败固定 503 并保留浏览器 last-known，且没有新增写 route。
+19. Linear Tracker Bootstrap 已显式配置 Project/Backlog State，通过分页只读 resolver 验证 Organization/Team/Project/State 关系，并以固定 endpoint、单凭证、15 秒 timeout、128 KiB request 和 64 KiB streaming response 的真实 HTTP exchange 完成只读 smoke；exchange 尚未注入 v1 写链。
 
 ## 项目结构
 
@@ -148,4 +152,4 @@ test/          领域、连接器、集成和 HTTP 测试
 
 计划内 Node.js 服务端源码已迁移到 TypeScript；浏览器原生脚本 `public/` 暂不进入 TypeScript 构建。当前 `private: true` 包只支持源码 checkout 运行，尚不把 `bin: src/cli.ts` 视为可安装 npm 发布物。TypeScript、NestJS 与 monorepo 的取舍见 `docs/adr/0002-typescript-repository-strategy.md`，迁移规格见 `docs/specs/0005-typescript-migration.md`。
 
-实验结果见 `docs/experiments/`，Runner 设计见 `docs/architecture/codex-runner.md`，连接器演进方向见 `docs/architecture/connectors.md`，现有 Provider 契约见 `docs/research/0001-github-linear-read-contracts.md`，第二 Provider 选择证据见 `docs/research/0002-gitee-feishu-provider-probe.md` 与 `docs/adr/0003-select-gitee-as-second-provider.md`。Provider Observation 的边界与持久化决策见 `docs/specs/0007-provider-observation-read-model.md` 和 `docs/adr/0004-provider-observation-read-model.md`；受控写状态、Operation Journal、fake Linear transport、coordinator、安全 UI 投影、持久化边界与 Linear correlation 证据见 `docs/specs/0009-controlled-linear-write-operation.md`、`docs/specs/0010-provider-operation-journal.md`、`docs/specs/0011-fake-linear-write-transport.md`、`docs/specs/0012-controlled-write-coordinator.md`、`docs/specs/0013-provider-operation-projection.md`、`docs/adr/0005-controlled-write-operation-journal.md` 和 `docs/research/0003-linear-controlled-write-correlation.md`。
+实验结果见 `docs/experiments/`，Runner 设计见 `docs/architecture/codex-runner.md`，连接器演进方向见 `docs/architecture/connectors.md`，工作跟踪规则见 `docs/standards/work-tracking.md`，当前产品化路线见 `docs/tickets/0005-linear-productization-milestone.md`。现有 Provider 契约见 `docs/research/0001-github-linear-read-contracts.md`，第二 Provider 选择证据见 `docs/research/0002-gitee-feishu-provider-probe.md` 与 `docs/adr/0003-select-gitee-as-second-provider.md`。Provider Observation 的边界与持久化决策见 `docs/specs/0007-provider-observation-read-model.md` 和 `docs/adr/0004-provider-observation-read-model.md`；受控写状态、Operation Journal、fake Linear transport、coordinator、安全 UI 投影、持久化边界、Linear correlation 与 tracker bootstrap 见 `docs/specs/0009-controlled-linear-write-operation.md`、`docs/specs/0010-provider-operation-journal.md`、`docs/specs/0011-fake-linear-write-transport.md`、`docs/specs/0012-controlled-write-coordinator.md`、`docs/specs/0013-provider-operation-projection.md`、`docs/specs/0016-linear-tracker-bootstrap.md`、`docs/adr/0005-controlled-write-operation-journal.md` 和 `docs/research/0003-linear-controlled-write-correlation.md`。

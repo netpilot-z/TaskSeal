@@ -7,6 +7,7 @@ import test, { type TestContext } from "node:test";
 import {
   getGiteeCoordinates,
   getGitHubCoordinates,
+  getLinearBootstrapCoordinates,
   getLinearCoordinates,
   readProjectConfiguration
 } from "../src/config/project-config.ts";
@@ -17,7 +18,12 @@ test("project configuration exposes validated non-secret provider coordinates", 
     project: "TaskSeal",
     github: { repository: "netpilot-z/TaskSeal" },
     gitee: { repository: "NetPilot-Z/TaskSeal" },
-    linear: { workspace: "TaskSeal", team: "netpilot" },
+    linear: {
+      workspace: "TaskSeal",
+      team: "netpilot",
+      project: "TaskSeal Delivery",
+      backlogState: "Backlog"
+    },
     mode: "persistent"
   });
 
@@ -34,6 +40,15 @@ test("project configuration exposes validated non-secret provider coordinates", 
     workspace: "TaskSeal",
     team: "netpilot"
   });
+  assert.deepEqual(
+    getLinearBootstrapCoordinates(configuration),
+    {
+      workspace: "TaskSeal",
+      team: "netpilot",
+      project: "TaskSeal Delivery",
+      backlogState: "Backlog"
+    }
+  );
   assert.doesNotMatch(JSON.stringify(configuration), new RegExp(escapeRegExp(cwd)));
 });
 
@@ -62,6 +77,39 @@ test("project configuration reports invalid JSON and provider coordinates safely
     () => getLinearCoordinates(configuration),
     hasCode("LINEAR_CONFIG_INVALID")
   );
+
+  for (const linear of [
+    {
+      workspace: "TaskSeal",
+      team: "netpilot"
+    },
+    {
+      workspace: "TaskSeal",
+      team: "netpilot",
+      project: "TaskSeal"
+    },
+    {
+      workspace: " TaskSeal",
+      team: "netpilot",
+      project: "TaskSeal",
+      backlogState: "Backlog"
+    },
+    {
+      workspace: "TaskSeal",
+      team: "netpilot",
+      project: "TaskSeal",
+      backlogState: " "
+    }
+  ]) {
+    assert.throws(
+      () =>
+        getLinearBootstrapCoordinates({
+          project: "TaskSeal",
+          linear
+        }),
+      hasCode("LINEAR_CONFIG_INVALID")
+    );
+  }
 
   for (const gitee of [
     { repository: "../private" },
