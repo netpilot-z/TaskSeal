@@ -1,10 +1,10 @@
 # 里程碑 0005：Linear 驱动的产品交付闭环
 
-这些 tickets 是当前产品化路线的仓库内可审查拆分。Linear 是在线执行状态的权威来源；写权限已配置，只同步未完成项并保存稳定映射，不按标题创建重复 Issue。
+这些 tickets 是当前产品化路线的仓库内可审查拆分。Linear 是在线执行状态的权威来源；未完成项已同步到 `NP-2`～`NP-12`，稳定映射见 `0007-linear-bootstrap-map.json`，不按标题创建重复 Issue。
 
 ## T15.1 — 建立 Linear Tracker Bootstrap 基础
 
-- 状态：实现中；由 Linear `NP-1` 跟踪。
+- 状态：已完成；由 Linear `NP-1` 汇总跟踪，代码已合并至 `master`。
 - 目的：在不修改 v1 journal 和不执行 mutation 的前提下，精确解析真实 Project/Backlog placement。
 - 范围：工作跟踪规范、`linear.project/backlogState` 配置、Project/State resolver、bounded HTTP exchange、dry-run Project 修正、真实只读 smoke。
 - 不包含：Operation v2、真实 Issue create、CLI 写命令或状态迁移。
@@ -15,7 +15,7 @@
 
 ## T15.2 — 引入 reader-first 的 Linear Operation v2
 
-- 状态：待执行。
+- 状态：执行中；由 Linear `NP-2` 跟踪。
 - 目的：让真实 placement 和 source intent 成为不可漂移的审批内容。
 - 范围：v1/v2 union reader、v2 plan digest、configured/resolved Project/State、source intent、project-aware transport input、placement observation。
 - 不包含：通用多 Provider write abstraction、批量自动提交或状态关闭。
@@ -26,18 +26,18 @@
 
 ## T15.3 — Bootstrap 未完成待办并迁移 GitHub 规划 Issue
 
-- 状态：写权限已验证；等待 T15.2 后执行受控 bootstrap。
+- 状态：由 Linear `NP-3` 跟踪；子任务创建、回读核验和 GitHub 规划 Issue 迁移已完成，Operation v2 与原生依赖关系仍待完成。
 - 目的：把当前内部产品待办切换到 Linear，并建立稳定 source ticket ↔ Linear UUID/identifier 映射。
 - 范围：只含未完成项的 manifest、batch digest、prepare-only preview、单票 pilot、逐项 approve/submit/reconcile；迁移 GitHub `#7`、`#25`、`#32`。
 - 不包含：按标题去重、无人审批、遇到 unknown 后继续派发或迁移已关闭历史 Issue。
-- 依赖：T15.2、可写凭证、操作者对精确草案的审批。
+- 依赖：T15.2；Issue 创建、更新和评论权限可用，原生依赖关系另需通用 `write` scope。
 - 验收标准：pilot 创建后 Team/Project/State/payload 读后核验；每个 source 只有一个稳定映射；GitHub 仅在 Linear 对象核验后留链接并关闭。
 - 验证：fake crash/restart、真实单票 smoke、read-after-write、mapping replay 和迁移审计。
 - 风险与回退：任一 unknown/placement drift 立即停止；已创建 Issue 不删除，由人工决定状态。
 
 ## T16 — 从 Linear 领取 ready work
 
-- 状态：待执行。
+- 状态：Todo；由 Linear `NP-4` 跟踪。
 - 目的：让 TaskSeal 从 Linear Project 读取可执行任务，而不是依赖本地第一条 WorkItem。
 - 范围：精确 Project + Todo scope、分页、stable UUID mapping、依赖/阻塞信息、选择一张 ready Issue 创建或关联本地 WorkItem。
 - 不包含：自动修改 Linear、模糊标题匹配或无限队列抓取。

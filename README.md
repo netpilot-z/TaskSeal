@@ -106,7 +106,7 @@ node src/cli.ts sync linear --dry-run
 
 输出明确标记 `mutationReady: false`、`networkRequests: 0` 和 `externalWrites: 0`。它不会连接 Linear，更不会创建、更新或关闭 Issue。当前已能只读精确解析 Organization、Team、Project 和 Backlog State，并具备未接线的 bounded GraphQL HTTP exchange；Linear 凭证的 Issue 创建、更新和评论权限已由操作者配置，并用 `NP-1` 更新/读后核验确认，但 TaskSeal 真实同步仍需 Operation v2 把 Project/State/source intent 纳入审批与 journal。
 
-默认 dry-run 只读取 `docs/tickets/0006-linear-bootstrap-manifest.md` 中尚未完成且尚未映射的条目；已完成状态会被过滤。内部任务、GitHub Issue 的职责分工、分支命名和迁移规则见 `docs/standards/work-tracking.md`；完整路线见 `docs/tickets/0005-linear-productization-milestone.md`。
+默认 dry-run 只读取 `docs/tickets/0006-linear-bootstrap-manifest.md` 中尚未完成且尚未映射的条目；当前 backlog 已完成映射，因此默认结果为 0 张草案，稳定 UUID/identifier 审计见 `docs/tickets/0007-linear-bootstrap-map.json`。内部任务、GitHub Issue 的职责分工、分支命名和迁移规则见 `docs/standards/work-tracking.md`；完整路线见 `docs/tickets/0005-linear-productization-milestone.md`。
 
 ## 当前可验证结果
 
@@ -118,7 +118,7 @@ node src/cli.ts sync linear --dry-run
 6. GitHub REST 与 Linear GraphQL 只读客户端使用固定契约、精确 scope 和显式映射；mocked-real snapshot 可以内存重放。
 7. Linear `NP-1` 与 GitHub Issue `#1` → Draft PR `#2` → `tests` Check 的真实只读 snapshot 均已成功；GitHub 实际 Evidence 为 passed，但没有 Owner acceptance 时仍保持 `reviewing`。
 8. Linear ticket dry-run 对当前 manifest 中未完成、未映射的条目确定性生成草案，网络请求与外部写入均为零。
-9. TaskSeal runtime 仍没有自动外部 mutation；Linear 已成为内部任务主账本，获授权的 `NP-1` 管理性更新已验证写权限，产品待办先生成可审查 bootstrap 输入，再经受控写合同同步。
+9. TaskSeal runtime 仍没有自动外部 mutation；Linear 已成为内部任务主账本，`NP-1` 与 `NP-2`～`NP-12` 已完成管理性 bootstrap 和读后核验。Issue 创建、更新、评论权限可用，但原生依赖关系接口仍缺少通用 `write` scope；产品内自动提交继续等待 Operation v2。
 10. fixture 仍验证 revision-bound Artifact/Evidence 与幂等验收规则。
 11. Gitee 内置 AdapterManifest v1、`provider.health` 与 `work-item.read` 已实现，并用公共 `oschina/git-osc#I4` 完成匿名 smoke；本地 preview/apply 只有在 trusted registry 与精确 per-scope policy 同时允许时可用，candidate direct append 固定拒绝，飞书保留为后续异构压力测试。
 12. Provider Observation v1 已建立独立、有界、原子替换的 JSON 读模型；按 operation start freshness 拒绝乱序覆盖，通过 observed snapshot-import façade 组合真实 preview/apply，并以 persistent-only `GET /api/providers` 暴露 `configured`、`scope_mismatch`、`sample_missing`、`snapshot_ready` 与 `sync_failed`。

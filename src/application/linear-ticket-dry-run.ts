@@ -14,6 +14,8 @@ import {
 
 const DEFAULT_SOURCE =
   "docs/tickets/0006-linear-bootstrap-manifest.md";
+const EMPTY_BOOTSTRAP_MARKER =
+  "<!-- taskseal-linear-bootstrap:empty -->";
 
 type RequiredTicketField =
   | "状态"
@@ -234,9 +236,14 @@ async function resolveProjectSource({
 function parseTickets(content: string): ParsedTicket[] {
   const tickets: ParsedTicket[] = [];
   const seen = new Set<string>();
+  let emptyMarkerCount = 0;
   let current: ParsedTicket | null = null;
 
   for (const line of content.split(/\r?\n/)) {
+    if (line.trim() === EMPTY_BOOTSTRAP_MARKER) {
+      emptyMarkerCount += 1;
+    }
+
     const isLevelTwoHeading = /^##\s+/.test(line);
     const heading =
       /^##\s+(T\d+(?:\.\d+)?)\s+[—–-]\s+(.+?)\s*$/.exec(
@@ -290,6 +297,23 @@ function parseTickets(content: string): ParsedTicket[] {
 
       current.fields[fieldName] = fieldValue;
     }
+  }
+
+  if (
+    emptyMarkerCount > 1 ||
+    (emptyMarkerCount === 1 && tickets.length > 0)
+  ) {
+    throw dryRunError(
+      "TICKET_SOURCE_INVALID",
+      "Ticket source contains a conflicting empty bootstrap marker."
+    );
+  }
+
+  if (
+    tickets.length === 0 &&
+    emptyMarkerCount === 1
+  ) {
+    return [];
   }
 
   if (tickets.length === 0) {
