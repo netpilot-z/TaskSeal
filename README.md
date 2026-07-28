@@ -7,7 +7,7 @@ TaskSeal 是一个 AI Delivery Control Plane 技术验证项目。它把外部�
 当前原型已验证两条互补链路：
 
 - fixture 证据链：`Linear → Codex → GitHub → Acceptance`
-- 真实运行链：`Local WorkItem → Codex App Server → Attempt terminal state → Control Room`
+- 真实运行链：`Local WorkItem → Managed Runner Host → Codex App Server Adapter → Attempt terminal state → Control Room`
 - provider 只读链：`Provider Observation + Operation Journal → safe projection → Control Room API`
 - 人工验收写链：`current Attempt/Artifact/Evidence → human AcceptanceDecision → Transition Operation v3 → exact Linear Done readback`
 
@@ -45,7 +45,7 @@ npm start
 
 `doctor` 会检查项目配置、Codex 可执行文件和登录状态。在 Windows 上，TaskSeal 会比较 PATH 与本机 Codex App 的可用版本并选择较新的版本；也可通过 `TASKSEAL_CODEX_BIN` 显式指定。
 
-启动后访问 `http://127.0.0.1:4317`。Control Room 会读取 `.taskseal/events.jsonl` 的持久交付状态，可选择具体 WorkItem 派发、取消或人工重试 Codex Attempt，并展示 owner、当前运行与历史 Attempt。并发默认 `1`，可用 `TASKSEAL_MAX_CONCURRENT_RUNS=2`～`8` 显式增加；达到容量会拒绝而不会建立隐式队列。Provider 面板独立轮询只读的 `GET /api/providers`：它组合 `.taskseal/provider-observations.json` 的配置、scope、snapshot、mapping、缺失证据和诊断状态，以及 `.taskseal/provider-operations.json` 的脱敏 latest 审批、提交、未知结果与对账状态。刷新失败或 source version 回退时保留最后一次已知完整结果并明确标记 stale；三个存储不会互相重放。浏览器只开放 WorkItem 人工 accept/reject 与未知 Linear transition 的显式 reconcile，不开放任意 Provider create/update 控制台。
+启动后访问 `http://127.0.0.1:4317`。Control Room 会读取 `.taskseal/events.jsonl` 的持久交付状态，可选择具体 WorkItem 派发、取消或人工重试 Attempt，并展示 owner、当前运行与历史 Attempt。当前内置数字员工是 Codex App Server Adapter；Attempt 生命周期由通用 Managed Runner Host 统一管理。并发默认 `1`，可用 `TASKSEAL_MAX_CONCURRENT_RUNS=2`～`8` 显式增加；达到容量会拒绝而不会建立隐式队列。Provider 面板独立轮询只读的 `GET /api/providers`：它组合 `.taskseal/provider-observations.json` 的配置、scope、snapshot、mapping、缺失证据和诊断状态，以及 `.taskseal/provider-operations.json` 的脱敏 latest 审批、提交、未知结果与对账状态。刷新失败或 source version 回退时保留最后一次已知完整结果并明确标记 stale；三个存储不会互相重放。浏览器只开放 WorkItem 人工 accept/reject 与未知 Linear transition 的显式 reconcile，不开放任意 Provider create/update 控制台。
 
 当前 HTTP 控制面只允许 loopback；远程团队访问需要后续先补认证、TLS、租户权限与审计，不能通过修改 `HOST` 直接暴露。
 本地人工验收还需要设置稳定的非敏感操作者 ID，例如 `TASKSEAL_HUMAN_ACTOR=operator.jeffrey`。该值不会由浏览器提交，也不会传入 Codex Runner。它只代表可信本机边界内的 accountable identity，不等同于远程认证。
@@ -206,6 +206,11 @@ node src/cli.ts sync linear --dry-run
 21. Control Room 已由 application-owned coordinator 提供任务选择、单项 cancel、默认 1/最大 8 的有界并发和安全容量投影；选择不会被轮询重置，有可用槽位时无关任务可并行，取消在 Attempt terminal 写完前保持 `cancelling`，人工 retry 生成新 Attempt 并保留旧历史。
 22. GitHub DeliveryMapping 已把 Linear UUID、WorkItem、target PR、fork-aware head branch 与最多七项 Check/Review criteria/selector identity 显式绑定；CLI 提供 read-only preview 与 local atomic apply，head fence、missing Evidence、重复对账、exact provenance、selector tamper、旧/当前 head receipt replay 和 disabled/foreign-target 零网络均有自动化验证，且没有 GitHub/Linear mutation。Review batch 使用 PolicyBinding v3；首条 v3 record 落盘后只能回退到具备 v3 union reader 的版本。
 23. Acceptance Decision v2 绑定 current Attempt/Artifact/review revision 并保留历史；Transition Operation v3 绑定同一 Linear UUID、Organization/Team/Project、expected state/revision、target state 与 acceptance digest。Control Room 已接入 server-owned actor、exact body/CSRF、local-vs-Linear 双事实、响应丢失 reconcile 和 accepted 后普通 Retry 门禁；功能关闭时凭证字段读取与网络请求均为零。
+24. Runner Contract v1 已建立 capability manifest、独立且默认只读的 Host policy、
+    冻结 input、严格 output decoder、application-owned Attempt Host、
+    deadline/cancel 后的 bounded cleanup 与 Host fence、bounded untrusted handoff
+    claim 和显式子进程环境 allowlist；Codex Adapter 与第二个 deterministic fake
+    Runner 通过同一 contract kit，Domain/journal 无需为第二种 Runner 修改。
 
 ## 项目结构
 
@@ -215,18 +220,18 @@ docs/          实验、架构和后续接入说明
 fixtures/      匿名外部系统夹具
 public/        本地 Control Room
 src/
-  application/ TaskSeal 写入与重放服务
+  application/ TaskSeal 写入、重放与 Managed Runner Host
   config/      非敏感项目配置读取与校验
   connectors/  平台事件归一
   dashboard/   只读总览投影
   demo/        可重复演示编排
   domain/      状态与验收不变量
-  runners/     Codex App Server transport 与生命周期
+  runners/     Runner v1 合同、Codex Adapter 与 App Server transport
   storage/     canonical journal 与独立只读投影存储
-test-support/  fake App Server
+test-support/  fake App Server、fake Runner 与 contract kit
 test/          领域、连接器、集成和 HTTP 测试
 ```
 
 计划内 Node.js 服务端源码已迁移到 TypeScript；浏览器原生脚本 `public/` 暂不进入 TypeScript 构建。当前 `private: true` 包只支持源码 checkout 运行，尚不把 `bin: src/cli.ts` 视为可安装 npm 发布物。TypeScript、NestJS 与 monorepo 的取舍见 `docs/adr/0002-typescript-repository-strategy.md`，迁移规格见 `docs/specs/0005-typescript-migration.md`。
 
-实验结果见 `docs/experiments/`，Runner 设计见 `docs/architecture/codex-runner.md`，连接器演进方向见 `docs/architecture/connectors.md`，工作跟踪规则见 `docs/standards/work-tracking.md`，当前产品化路线见 `docs/tickets/0005-linear-productization-milestone.md`。现有 Provider 契约见 `docs/research/0001-github-linear-read-contracts.md`，第二 Provider 选择证据见 `docs/research/0002-gitee-feishu-provider-probe.md` 与 `docs/adr/0003-select-gitee-as-second-provider.md`。Provider Observation 的边界与持久化决策见 `docs/specs/0007-provider-observation-read-model.md` 和 `docs/adr/0004-provider-observation-read-model.md`；人工验收与 Linear Done 见 `docs/specs/0021-human-acceptance-linear-transition.md`、`docs/adr/0012-linear-acceptance-transition-operation.md` 与 `docs/research/0004-linear-issue-transition-cas.md`。
+实验结果见 `docs/experiments/`，Runner 设计见 `docs/architecture/codex-runner.md`、`docs/specs/0022-stable-runner-contract.md` 与 `docs/adr/0013-application-owned-runner-host.md`，连接器演进方向见 `docs/architecture/connectors.md`，工作跟踪规则见 `docs/standards/work-tracking.md`，当前产品化路线见 `docs/tickets/0005-linear-productization-milestone.md`。现有 Provider 契约见 `docs/research/0001-github-linear-read-contracts.md`，第二 Provider 选择证据见 `docs/research/0002-gitee-feishu-provider-probe.md` 与 `docs/adr/0003-select-gitee-as-second-provider.md`。Provider Observation 的边界与持久化决策见 `docs/specs/0007-provider-observation-read-model.md` 和 `docs/adr/0004-provider-observation-read-model.md`；人工验收与 Linear Done 见 `docs/specs/0021-human-acceptance-linear-transition.md`、`docs/adr/0012-linear-acceptance-transition-operation.md` 与 `docs/research/0004-linear-issue-transition-cas.md`。

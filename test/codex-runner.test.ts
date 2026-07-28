@@ -12,15 +12,58 @@ import test, { type TestContext } from "node:test";
 
 import { AttemptRunCoordinator } from "../src/application/attempt-run-coordinator.ts";
 import { TaskSealService } from "../src/application/taskseal-service.ts";
-import { CodexRunner } from "../src/runners/codex-runner.ts";
+import {
+  CodexAppServerRunnerAdapter,
+  CodexRunner
+} from "../src/runners/codex-runner.ts";
+import {
+  CodexAppServerError
+} from "../src/runners/codex-app-server-client.ts";
 import type { CodexRunnerRunOptions } from "../src/runners/codex-runner.ts";
 import { FileEventJournal } from "../src/storage/event-journal.ts";
+import {
+  registerRunnerAdapterContract
+} from "../test-support/runner-contract-kit.ts";
 
 interface RunnerTestContext {
   directory: string;
   journal: FileEventJournal;
   service: TaskSealService;
 }
+
+registerRunnerAdapterContract({
+  name: "Codex App Server runner adapter",
+  createAdapter(scenario) {
+    return new CodexAppServerRunnerAdapter({
+      clientFactory: () => ({
+        runTurn({ signal }) {
+          if (scenario === "completed") {
+            return Promise.resolve({
+              outcome: "completed",
+              threadId: "contract-thread",
+              turnId: "contract-turn",
+              summary:
+                "Codex contract complete."
+            });
+          }
+
+          return new Promise<never>(
+            (_resolve, reject) => {
+              signal?.addEventListener(
+                "abort",
+                () =>
+                  reject(
+                    signal.reason
+                  ),
+                { once: true }
+              );
+            }
+          );
+        }
+      })
+    });
+  }
+});
 
 test("runner persists a completed Codex attempt through the service", async (t) => {
   const context = await createContext(t);
@@ -69,7 +112,7 @@ test("runner persists a blocked attempt when Codex fails to start", async (t) =>
     now: createClock(),
     clientFactory: () => ({
       async runTurn() {
-        throw new TestCodedError(
+        throw new CodexAppServerError(
           "CODEX_NOT_AVAILABLE",
           "Codex executable unavailable."
         );
@@ -97,6 +140,46 @@ test("runner persists a blocked attempt when Codex fails to start", async (t) =>
     "Codex executable unavailable."
   );
   assert.equal((await context.journal.readAll()).length, 3);
+});
+
+test("Codex adapter maps process cleanup failure to the stable Runner contract code", async () => {
+  const adapter =
+    new CodexAppServerRunnerAdapter({
+      clientFactory: () => ({
+        async runTurn() {
+          throw new CodexAppServerError(
+            "CODEX_PROCESS_CLEANUP_FAILED",
+            "Codex cleanup failed."
+          );
+        }
+      })
+    });
+
+  await assert.rejects(
+    adapter.execute(
+      {
+        schemaVersion: "1",
+        attemptId: "cleanup-attempt",
+        workItemId: "TS-1",
+        instruction:
+          "Surface cleanup failure.",
+        workspace: {
+          root: "workspace",
+          cwd: "workspace",
+          access: "read-only"
+        },
+        deadlineAt:
+          "2026-07-28T12:00:00.000Z"
+      },
+      {
+        signal:
+          new AbortController().signal
+      }
+    ),
+    hasCode(
+      "RUNNER_PROCESS_CLEANUP_FAILED"
+    )
+  );
 });
 
 test("runner rejects missing work items and cwd outside the project", async (t) => {
@@ -226,7 +309,7 @@ test("runner fails closed before reservation when cwd cannot be resolved", async
     }),
     hasError(
       "RUNNER_CWD_UNAVAILABLE",
-      "Codex runner could not resolve its project root or cwd."
+      "Managed runner could not resolve its project root or cwd."
     )
   );
 

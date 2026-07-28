@@ -23,7 +23,7 @@ import type {
   CommandRunner,
   OutputPort
 } from "../src/cli.ts";
-import type { CodexRunnerRunOptions } from "../src/runners/codex-runner.ts";
+import type { ManagedRunnerRunOptions } from "../src/application/managed-attempt-runner.ts";
 import type {
   PersistentServicePort,
   PersistentTaskSealServerOptions
@@ -385,7 +385,7 @@ test("persistent start wires one service and runner into the Control Room", asyn
     }
   };
   const runner = {
-    async run(options: CodexRunnerRunOptions) {
+    async run(options: ManagedRunnerRunOptions) {
       calls.push(options);
       return { outcome: "completed" };
     }
@@ -548,12 +548,12 @@ test("persistent start wires one service and runner into the Control Room", asyn
     { port: 0, host: "127.0.0.1" },
     {
       workItemId: "TS-1",
-      prompt: "Run from the Control Room.",
-      sandbox: "read-only",
+      instruction:
+        "Run from the Control Room.",
+      workspaceAccess: "read-only",
       signal,
       terminalization,
-      cwd,
-      approvalPolicy: "never"
+      cwd
     }
   ]);
   assert.match(output.text(), /http:\/\/127\.0\.0\.1:0/);
@@ -628,8 +628,10 @@ test("run delegates one work item to Codex with an explicit safety mode", async 
       return {
         attemptId: "attempt-9",
         outcome: "completed",
-        threadId: "thread-9",
-        turnId: "turn-9",
+        runtimeRefs: {
+          sessionId: "thread-9",
+          executionId: "turn-9"
+        },
         summary: "Ready."
       };
     }
@@ -646,6 +648,14 @@ test("run delegates one work item to Codex with an explicit safety mode", async 
   ]);
   assert.match(output.text(), /attempt-9/);
   assert.match(output.text(), /completed/);
+  assert.match(
+    output.text(),
+    /Runner session: thread-9/
+  );
+  assert.match(
+    output.text(),
+    /Runner execution: turn-9/
+  );
   assert.match(output.text(), /Ready\./);
 });
 

@@ -1,23 +1,33 @@
-import { randomUUID } from "node:crypto";
-import { realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import {
+  ManagedAttemptRunner
+} from "../application/managed-attempt-runner.ts";
 import type {
-  AttemptFinishedEvent,
-  AttemptStartedEvent,
-  AttemptTerminalOutcome,
-  WorkItem
+  ManagedAttemptRunnerOptions,
+  ManagedRunnerResult
+} from "../application/managed-attempt-runner.ts";
+import type {
+  AttemptRunTerminalization
+} from "../application/attempt-run-coordinator.ts";
+import type {
+  AttemptTerminalOutcome
 } from "../domain/workflow.ts";
-import type { AttemptRunTerminalization } from "../application/attempt-run-coordinator.ts";
+import {
+  parseRunnerManifest,
+  RunnerContractError,
+  RunnerExecutionError
+} from "./runner-contract.ts";
+import {
+  CodexAppServerError
+} from "./codex-app-server-client.ts";
+import type {
+  DigitalEmployeeAdapter,
+  RunnerExecutionContext,
+  RunnerExecutionInput
+} from "./runner-contract.ts";
 import type {
   CodexApprovalPolicy,
   CodexSandbox
 } from "./codex-app-server-client.ts";
-
-interface CodexRunnerServicePort {
-  getWorkItem(workItemId: string): WorkItem | null;
-  startAttemptIfIdle(event: AttemptStartedEvent): Promise<unknown>;
-  append(event: AttemptFinishedEvent): Promise<unknown>;
-}
 
 interface CodexRunnerClientResult {
   outcome: AttemptTerminalOutcome;
@@ -30,18 +40,132 @@ interface CodexRunnerClientPort {
   runTurn(options: {
     cwd: string;
     prompt: string;
-    sandbox: CodexSandbox;
-    approvalPolicy: CodexApprovalPolicy;
+    sandbox:
+      | "read-only"
+      | "workspace-write";
+    approvalPolicy: "never";
     signal?: AbortSignal | undefined;
-  }): Promise<CodexRunnerClientResult>;
+  }): unknown | Promise<unknown>;
 }
 
-export interface CodexRunnerOptions {
-  service: CodexRunnerServicePort;
-  projectRoot: string;
+export const CODEX_APP_SERVER_RUNNER_MANIFEST =
+  parseRunnerManifest({
+    schemaVersion: "1",
+    runnerId: "codex-app-server",
+    displayName: "Codex App Server",
+    capabilities: {
+      workspaceAccess: [
+        "read-only",
+        "workspace-write"
+      ],
+      cancellation: true,
+      timeout: true,
+      handoffKinds: []
+    }
+  });
+
+export interface CodexAppServerRunnerAdapterOptions {
   clientFactory: () => CodexRunnerClientPort;
-  idFactory?: (() => string) | undefined;
-  now?: (() => Date) | undefined;
+}
+
+export class CodexAppServerRunnerAdapter
+  implements DigitalEmployeeAdapter
+{
+  readonly manifest =
+    CODEX_APP_SERVER_RUNNER_MANIFEST;
+  readonly clientFactory:
+    () => CodexRunnerClientPort;
+
+  constructor({
+    clientFactory
+  }: CodexAppServerRunnerAdapterOptions) {
+    if (
+      typeof clientFactory !== "function"
+    ) {
+      throw new TypeError(
+        "Codex runner adapter requires a clientFactory."
+      );
+    }
+    this.clientFactory = clientFactory;
+  }
+
+  async execute(
+    input: RunnerExecutionInput,
+    { signal }: RunnerExecutionContext
+  ): Promise<unknown> {
+    try {
+      const result = decodeCodexClientResult(
+        await this.clientFactory().runTurn({
+          cwd: input.workspace.cwd,
+          prompt: input.instruction,
+          sandbox:
+            input.workspace.access,
+          approvalPolicy: "never",
+          signal
+        })
+      );
+
+      return {
+        schemaVersion: "1",
+        attemptId: input.attemptId,
+        outcome: result.outcome,
+        ...(result.summary === undefined
+          ? {}
+          : {
+              summary:
+                result.summary
+            }),
+        ...(result.threadId === undefined &&
+        result.turnId === undefined
+          ? {}
+          : {
+              runtimeRefs: {
+                ...(result.threadId ===
+                undefined
+                  ? {}
+                  : {
+                      sessionId:
+                        result.threadId
+                    }),
+                ...(result.turnId ===
+                undefined
+                  ? {}
+                  : {
+                      executionId:
+                        result.turnId
+                    })
+              }
+            })
+      };
+    } catch (error) {
+      if (error instanceof RunnerExecutionError) {
+        throw error;
+      }
+      if (error instanceof CodexAppServerError) {
+        const cleanupFailed =
+          error.code ===
+          "CODEX_PROCESS_CLEANUP_FAILED";
+        throw new RunnerExecutionError(
+          cleanupFailed
+            ? "RUNNER_PROCESS_CLEANUP_FAILED"
+            : error.code,
+          cleanupFailed
+            ? "Runner process cleanup could not be confirmed."
+            : error.message.slice(0, 2_000),
+          { cause: error }
+        );
+      }
+      throw error;
+    }
+  }
+}
+
+export interface CodexRunnerOptions
+  extends Omit<
+    ManagedAttemptRunnerOptions,
+    "adapter"
+  > {
+  clientFactory: () => CodexRunnerClientPort;
 }
 
 export interface CodexRunnerRunOptions {
@@ -49,9 +173,14 @@ export interface CodexRunnerRunOptions {
   cwd?: string | undefined;
   prompt: string;
   sandbox?: CodexSandbox | undefined;
-  approvalPolicy?: CodexApprovalPolicy | undefined;
+  approvalPolicy?:
+    | CodexApprovalPolicy
+    | undefined;
+  timeoutMs?: number | undefined;
   signal?: AbortSignal | undefined;
-  terminalization?: AttemptRunTerminalization | undefined;
+  terminalization?:
+    | AttemptRunTerminalization
+    | undefined;
 }
 
 export interface CodexRunnerResult
@@ -60,299 +189,217 @@ export interface CodexRunnerResult
 }
 
 export class CodexRunner {
-  readonly service: CodexRunnerServicePort;
-  readonly projectRoot: string;
-  readonly clientFactory: () => CodexRunnerClientPort;
-  readonly idFactory: () => string;
-  readonly now: () => Date;
+  readonly managed: ManagedAttemptRunner;
 
   constructor({
-    service,
-    projectRoot,
     clientFactory,
-    idFactory = () => randomUUID(),
-    now = () => new Date()
+    allowedWorkspaceAccess = [
+      "read-only",
+      "workspace-write"
+    ],
+    ...options
   }: CodexRunnerOptions) {
-    if (
-      !service ||
-      typeof service.getWorkItem !== "function" ||
-      typeof service.append !== "function" ||
-      typeof service.startAttemptIfIdle !== "function"
-    ) {
-      throw new TypeError("Codex runner requires a TaskSeal service.");
-    }
-
-    if (typeof clientFactory !== "function") {
-      throw new TypeError("Codex runner requires a clientFactory.");
-    }
-
-    this.service = service;
-    this.projectRoot = resolve(projectRoot);
-    this.clientFactory = clientFactory;
-    this.idFactory = idFactory;
-    this.now = now;
+    this.managed =
+      new ManagedAttemptRunner({
+        ...options,
+        allowedWorkspaceAccess,
+        adapter:
+          new CodexAppServerRunnerAdapter({
+            clientFactory
+          })
+      });
   }
 
   async run({
     workItemId,
-    cwd = this.projectRoot,
+    cwd,
     prompt,
     sandbox = "workspace-write",
     approvalPolicy = "never",
+    timeoutMs,
     signal,
     terminalization
   }: CodexRunnerRunOptions): Promise<CodexRunnerResult> {
-    const workItem = this.service.getWorkItem(workItemId);
-
-    if (!workItem) {
-      throw new CodexRunnerError(
-        "WORK_ITEM_NOT_FOUND",
-        `TaskSeal work item ${workItemId} does not exist.`
+    if (
+      sandbox !== "read-only" &&
+      sandbox !== "workspace-write"
+    ) {
+      throw new RunnerContractError(
+        "RUNNER_CAPABILITY_MISSING",
+        "Codex managed runner does not expose danger-full-access."
       );
     }
 
-    const activeAttempt = workItem.attempts.find(
-      (attempt) =>
-        attempt.id === workItem.activeAttemptId &&
-        attempt.status === "running"
-    );
-
-    if (activeAttempt) {
-      throw new CodexRunnerError(
-        "ATTEMPT_ALREADY_ACTIVE",
-        `TaskSeal work item ${workItemId} already has an active attempt.`
+    if (approvalPolicy !== "never") {
+      throw new RunnerContractError(
+        "RUNNER_CAPABILITY_MISSING",
+        "Codex managed runner fixes approval policy to never."
       );
     }
 
-    const runCwd = await resolvePathWithinProject(
-      this.projectRoot,
-      resolve(cwd)
-    );
-
-    if (typeof prompt !== "string" || prompt.trim().length === 0) {
-      throw new TypeError("Codex runner prompt must be a non-empty string.");
-    }
-
-    const attemptId = this.idFactory();
-    await this.service.startAttemptIfIdle({
-      eventId: `codex:${attemptId}:started`,
-      workItemId,
-      type: "attempt.started",
-      occurredAt: this.now().toISOString(),
-      payload: {
-        attemptId,
-        agentId: "codex-app-server"
-      }
-    });
-
-    let result: CodexRunnerClientResult;
-
-    try {
-      const client = this.clientFactory();
-      result = await client.runTurn({
-        cwd: runCwd,
-        prompt,
-        sandbox,
-        approvalPolicy,
-        signal
-      });
-    } catch (error) {
-      const cancellationAccepted =
-        beginTerminalization({
-          signal,
-          terminalization
-        });
-      const outcome = cancellationAccepted
-        ? "interrupted"
-        : "failed";
-      const summary = boundedMessage(error);
-      await this.service.append(
-        createFinishedEvent({
-          attemptId,
-          workItemId,
-          occurredAt: this.now().toISOString(),
-          outcome,
-          summary
-        })
-      );
-
-      if (cancellationAccepted) {
-        return {
-          attemptId,
-          outcome,
-          summary
-        };
-      }
-
-      throw error;
-    }
-
-    const cancellationAccepted =
-      beginTerminalization({
-        signal,
-        terminalization
-      });
-    const terminalResult: CodexRunnerClientResult =
-      cancellationAccepted
-        ? {
-            outcome: "interrupted",
-            summary: boundedInterruptionMessage(
-              signal
-            )
-          }
-        : result;
-    await this.service.append(
-      createFinishedEvent({
-        attemptId,
+    const result =
+      await this.managed.run({
         workItemId,
-        occurredAt: this.now().toISOString(),
-        ...terminalResult
-      })
-    );
+        ...(cwd === undefined
+          ? {}
+          : { cwd }),
+        instruction: prompt,
+        workspaceAccess: sandbox,
+        ...(timeoutMs === undefined
+          ? {}
+          : { timeoutMs }),
+        ...(signal === undefined
+          ? {}
+          : { signal }),
+        ...(terminalization === undefined
+          ? {}
+          : {
+              terminalization
+            })
+      });
 
-    return {
-      attemptId,
-      ...terminalResult
-    };
+    return toCodexRunnerResult(result);
   }
 }
 
-export class CodexRunnerError extends Error {
-  readonly code: string;
+export {
+  RunnerContractError as CodexRunnerError
+};
 
-  constructor(
-    code: string,
-    message: string,
-    options?: ErrorOptions
-  ) {
-    super(message, options);
-    this.name = "CodexRunnerError";
-    this.code = code;
-  }
-}
-
-function createFinishedEvent({
-  attemptId,
-  workItemId,
-  occurredAt,
-  outcome,
-  threadId,
-  turnId,
-  summary
-}: {
-  attemptId: string;
-  workItemId: string;
-  occurredAt: string;
-  outcome: AttemptTerminalOutcome;
-  threadId?: string | undefined;
-  turnId?: string | undefined;
-  summary?: string | null | undefined;
-}): AttemptFinishedEvent {
+function toCodexRunnerResult(
+  result: ManagedRunnerResult
+): CodexRunnerResult {
   return {
-    eventId: `codex:${attemptId}:finished`,
-    workItemId,
-    type: "attempt.finished",
-    occurredAt,
-    payload: {
-      attemptId,
-      outcome,
-      ...(threadId ? { threadId } : {}),
-      ...(turnId ? { turnId } : {}),
-      ...(summary ? { summary: summary.slice(0, 2_000) } : {})
-    }
+    attemptId: result.attemptId,
+    outcome: result.outcome,
+    ...(result.runtimeRefs?.sessionId
+      ? {
+          threadId:
+            result.runtimeRefs.sessionId
+        }
+      : {}),
+    ...(result.runtimeRefs?.executionId
+      ? {
+          turnId:
+            result.runtimeRefs.executionId
+        }
+      : {}),
+    ...(result.summary === undefined
+      ? {}
+      : {
+          summary: result.summary
+        })
   };
 }
 
-async function resolvePathWithinProject(
-  projectRoot: string,
-  candidate: string
-): Promise<string> {
-  assertLexicalPathWithinProject(projectRoot, candidate);
-
-  let canonicalProjectRoot: string;
-  let canonicalCandidate: string;
-
-  try {
-    [canonicalProjectRoot, canonicalCandidate] = await Promise.all([
-      realpath(projectRoot),
-      realpath(candidate)
-    ]);
-  } catch (error) {
-    throw new CodexRunnerError(
-      "RUNNER_CWD_UNAVAILABLE",
-      "Codex runner could not resolve its project root or cwd.",
-      { cause: error }
-    );
+function decodeCodexClientResult(
+  value: unknown
+): CodexRunnerClientResult {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !==
+      Object.prototype
+  ) {
+    throw invalidCodexResult();
   }
 
-  assertLexicalPathWithinProject(
-    canonicalProjectRoot,
-    canonicalCandidate
-  );
-  return canonicalCandidate;
-}
+  const keys = Reflect.ownKeys(value);
+  const allowedKeys = [
+    "outcome",
+    "threadId",
+    "turnId",
+    "summary"
+  ];
+  if (
+    keys.some(
+      (key) =>
+        typeof key !== "string" ||
+        !allowedKeys.includes(key)
+    ) ||
+    !keys.includes("outcome")
+  ) {
+    throw invalidCodexResult();
+  }
 
-function assertLexicalPathWithinProject(
-  projectRoot: string,
-  candidate: string
-): void {
-  const pathFromRoot = relative(projectRoot, candidate);
+  const descriptors =
+    Object.getOwnPropertyDescriptors(value);
+  const readValue = (
+    key: string
+  ): unknown => {
+    const descriptor =
+      descriptors[key];
+    if (
+      !descriptor ||
+      !descriptor.enumerable ||
+      !("value" in descriptor)
+    ) {
+      throw invalidCodexResult();
+    }
+    return descriptor.value;
+  };
+  const outcome = readValue("outcome");
+  const threadId = keys.includes("threadId")
+    ? readValue("threadId")
+    : undefined;
+  const turnId = keys.includes("turnId")
+    ? readValue("turnId")
+    : undefined;
+  const summary = keys.includes("summary")
+    ? readValue("summary")
+    : undefined;
 
   if (
-    pathFromRoot === ".." ||
-    pathFromRoot.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) ||
-    isAbsolute(pathFromRoot)
+    outcome !== "completed" &&
+    outcome !== "failed" &&
+    outcome !== "interrupted"
   ) {
-    throw new CodexRunnerError(
-      "RUNNER_CWD_OUTSIDE_PROJECT",
-      "Codex runner cwd must stay inside the TaskSeal project root."
-    );
+    throw invalidCodexResult();
   }
-}
-
-function boundedMessage(error: unknown): string {
-  const message =
-    isRecord(error) &&
-    typeof error.message === "string" &&
-    error.message.length > 0
-      ? error.message
-      : "Codex runner failed.";
-  return message.slice(0, 2_000);
-}
-
-function beginTerminalization({
-  signal,
-  terminalization
-}: {
-  signal: AbortSignal | undefined;
-  terminalization:
-    | AttemptRunTerminalization
-    | undefined;
-}): boolean {
-  const decision =
-    terminalization?.begin();
-  return (
-    decision?.cancellationAccepted === true ||
-    signal?.aborted === true
-  );
-}
-
-function boundedInterruptionMessage(
-  signal: AbortSignal | undefined
-): string {
-  if (signal?.reason !== undefined) {
-    return boundedMessage(signal.reason);
+  if (
+    threadId !== undefined &&
+    (typeof threadId !== "string" ||
+      threadId.length === 0 ||
+      threadId.length > 512)
+  ) {
+    throw invalidCodexResult();
+  }
+  if (
+    turnId !== undefined &&
+    (typeof turnId !== "string" ||
+      turnId.length === 0 ||
+      turnId.length > 512)
+  ) {
+    throw invalidCodexResult();
+  }
+  if (
+    summary !== undefined &&
+    summary !== null &&
+    (typeof summary !== "string" ||
+      summary.length === 0 ||
+      summary.length > 2_000)
+  ) {
+    throw invalidCodexResult();
   }
 
-  return "Codex runner was interrupted.";
+  return {
+    outcome,
+    ...(threadId === undefined
+      ? {}
+      : { threadId }),
+    ...(turnId === undefined
+      ? {}
+      : { turnId }),
+    ...(summary === undefined
+      ? {}
+      : { summary })
+  };
 }
 
-function isRecord(
-  value: unknown
-): value is Record<string, unknown> {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    !Array.isArray(value)
+function invalidCodexResult(): RunnerExecutionError {
+  return new RunnerExecutionError(
+    "CODEX_PROTOCOL_ERROR",
+    "Codex App Server returned an invalid run result."
   );
 }

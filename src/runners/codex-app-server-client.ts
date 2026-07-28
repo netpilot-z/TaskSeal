@@ -5,7 +5,7 @@ import type { AttemptTerminalOutcome } from "../domain/workflow.ts";
 
 const DEFAULT_LINE_LIMIT_BYTES = 10 * 1024 * 1024;
 const RESPONSE_ERROR_MESSAGE_LIMIT = 8_192;
-const BLOCKED_ENVIRONMENT_KEYS = [
+const CONTROL_PLANE_ENVIRONMENT_KEYS = [
   /^GH_TOKEN$/i,
   /^GITHUB_TOKEN$/i,
   /^LINEAR_/i,
@@ -14,6 +14,38 @@ const BLOCKED_ENVIRONMENT_KEYS = [
   /^LARK_/i,
   /^TASKSEAL_HUMAN_ACTOR$/i
 ];
+const DEFAULT_RUNNER_ENVIRONMENT_KEYS = [
+  "PATH",
+  "PATHEXT",
+  "SYSTEMROOT",
+  "WINDIR",
+  "COMSPEC",
+  "HOME",
+  "USERPROFILE",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TERM",
+  "COLORTERM",
+  "CODEX_HOME",
+  "OPENAI_API_KEY",
+  "OPENAI_ORG_ID",
+  "OPENAI_PROJECT_ID",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "NODE_EXTRA_CA_CERTS"
+] as const;
+const MAX_TIMEOUT_MS =
+  24 * 60 * 60 * 1_000;
+const MAX_LINE_LIMIT_BYTES =
+  64 * 1024 * 1024;
 
 export type CodexSandbox =
   | "read-only"
@@ -63,6 +95,9 @@ type SpawnAppServer = (
 export interface CodexAppServerClientOptions {
   invocation: CodexAppServerInvocation;
   environment?: NodeJS.ProcessEnv | undefined;
+  environmentAllowlist?:
+    | readonly string[]
+    | undefined;
   requestTimeoutMs?: number | undefined;
   turnTimeoutMs?: number | undefined;
   shutdownGraceMs?: number | undefined;
@@ -174,6 +209,7 @@ export class CodexAppServerClient {
   constructor({
     invocation,
     environment = process.env,
+    environmentAllowlist = [],
     requestTimeoutMs = 30_000,
     turnTimeoutMs = 10 * 60_000,
     shutdownGraceMs = 1_000,
@@ -192,11 +228,30 @@ export class CodexAppServerClient {
     }
 
     this.invocation = invocation;
-    this.environment = buildRunnerEnvironment(environment);
-    this.requestTimeoutMs = requestTimeoutMs;
-    this.turnTimeoutMs = turnTimeoutMs;
-    this.shutdownGraceMs = shutdownGraceMs;
-    this.lineLimitBytes = lineLimitBytes;
+    this.environment = buildRunnerEnvironment(
+      environment,
+      environmentAllowlist
+    );
+    this.requestTimeoutMs = readPositiveInteger({
+      name: "requestTimeoutMs",
+      value: requestTimeoutMs,
+      maximum: MAX_TIMEOUT_MS
+    });
+    this.turnTimeoutMs = readPositiveInteger({
+      name: "turnTimeoutMs",
+      value: turnTimeoutMs,
+      maximum: MAX_TIMEOUT_MS
+    });
+    this.shutdownGraceMs = readPositiveInteger({
+      name: "shutdownGraceMs",
+      value: shutdownGraceMs,
+      maximum: MAX_TIMEOUT_MS
+    });
+    this.lineLimitBytes = readPositiveInteger({
+      name: "lineLimitBytes",
+      value: lineLimitBytes,
+      maximum: MAX_LINE_LIMIT_BYTES
+    });
     this.onObservation = onObservation;
     this.spawnProcess = spawnProcess;
     this.nextRequestId = 1;
@@ -739,8 +794,21 @@ export class CodexAppServerClient {
     const closed = await waitForClose(child, this.shutdownGraceMs);
 
     if (!closed && child.exitCode === null) {
-      child.kill();
-      await waitForClose(child, this.shutdownGraceMs);
+      child.kill("SIGKILL");
+      const killed = await waitForClose(
+        child,
+        this.shutdownGraceMs
+      );
+
+      if (
+        !killed &&
+        child.exitCode === null
+      ) {
+        throw new CodexAppServerError(
+          "CODEX_PROCESS_CLEANUP_FAILED",
+          "Codex App Server did not exit after bounded shutdown."
+        );
+      }
     }
   }
 }
@@ -786,13 +854,27 @@ function waitForClose(
 }
 
 export function buildRunnerEnvironment(
-  source: NodeJS.ProcessEnv
+  source: NodeJS.ProcessEnv,
+  additionalAllowedKeys:
+    readonly string[] = []
 ): NodeJS.ProcessEnv {
+  const allowedKeys = new Set(
+    [
+      ...DEFAULT_RUNNER_ENVIRONMENT_KEYS,
+      ...validateAdditionalEnvironmentKeys(
+        additionalAllowedKeys
+      )
+    ].map((key) => key.toUpperCase())
+  );
+
   return Object.fromEntries(
     Object.keys(source)
       .filter(
         (key) =>
-          !BLOCKED_ENVIRONMENT_KEYS.some(
+          allowedKeys.has(
+            key.toUpperCase()
+          ) &&
+          !CONTROL_PLANE_ENVIRONMENT_KEYS.some(
             (pattern) =>
               pattern.test(key)
           )
@@ -802,6 +884,68 @@ export function buildRunnerEnvironment(
         source[key]
       ])
   );
+}
+
+function validateAdditionalEnvironmentKeys(
+  keys: readonly string[]
+): string[] {
+  if (
+    !Array.isArray(keys) ||
+    keys.length > 32
+  ) {
+    throw new TypeError(
+      "Codex runner environment allowlist must contain at most 32 keys."
+    );
+  }
+
+  const normalized = new Set<string>();
+  const result: string[] = [];
+  for (const key of keys) {
+    if (
+      typeof key !== "string" ||
+      !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(
+        key
+      ) ||
+      CONTROL_PLANE_ENVIRONMENT_KEYS.some(
+        (pattern) =>
+          pattern.test(key)
+      )
+    ) {
+      throw new TypeError(
+        "Codex runner environment allowlist contains an invalid or control-plane key."
+      );
+    }
+
+    const normalizedKey =
+      key.toUpperCase();
+    if (normalized.has(normalizedKey)) {
+      continue;
+    }
+    normalized.add(normalizedKey);
+    result.push(key);
+  }
+  return result;
+}
+
+function readPositiveInteger({
+  name,
+  value,
+  maximum
+}: {
+  name: string;
+  value: number;
+  maximum: number;
+}): number {
+  if (
+    !Number.isSafeInteger(value) ||
+    value < 1 ||
+    value > maximum
+  ) {
+    throw new TypeError(
+      `Codex App Server ${name} must be a positive integer no greater than ${maximum}.`
+    );
+  }
+  return value;
 }
 
 export class CodexAppServerError extends Error {

@@ -232,7 +232,7 @@ test("client bounds abort cleanup when App Server ignores interrupt", async () =
   const controller = new AbortController();
   const client = createClient("uninterruptible", {
     turnTimeoutMs: 2_000,
-    shutdownGraceMs: 40
+    shutdownGraceMs: 250
   });
   const run = client.runTurn({
     cwd: process.cwd(),
@@ -255,7 +255,7 @@ test("client bounds abort cleanup before App Server initialization completes", a
   const controller = new AbortController();
   const client = createClient("initialize-timeout", {
     requestTimeoutMs: 2_000,
-    shutdownGraceMs: 40
+    shutdownGraceMs: 250
   });
   const run = client.runTurn({
     cwd: process.cwd(),
@@ -334,30 +334,37 @@ test("runner environment removes external provider credentials", () => {
   const environment = buildRunnerEnvironment({
     PATH: "safe",
     CODEX_HOME: "codex-home",
+    OPENAI_API_KEY: "runner-secret",
     GITHUB_TOKEN: "secret",
     GH_TOKEN: "secret",
     LINEAR_API_KEY: "secret",
     GITEE_TOKEN: "secret",
     FEISHU_APP_SECRET: "secret",
     LARK_APP_SECRET: "secret",
+    AWS_SECRET_ACCESS_KEY: "secret",
+    NPM_TOKEN: "secret",
+    UNRELATED_SECRET: "secret",
     TASKSEAL_HUMAN_ACTOR:
       "operator.jeffrey"
   });
 
   assert.deepEqual(environment, {
     PATH: "safe",
-    CODEX_HOME: "codex-home"
+    CODEX_HOME: "codex-home",
+    OPENAI_API_KEY: "runner-secret"
   });
 });
 
-test("runner environment filters provider and acceptance keys before reading their values", () => {
+test("runner environment filters every non-allowlisted key before reading its value", () => {
   let sensitiveReads = 0;
   const source = {
     PATH: "safe"
   } as NodeJS.ProcessEnv;
   for (const key of [
     "LINEAR_API_KEY",
-    "TASKSEAL_HUMAN_ACTOR"
+    "TASKSEAL_HUMAN_ACTOR",
+    "AWS_SECRET_ACCESS_KEY",
+    "UNRELATED_SECRET"
   ]) {
     Object.defineProperty(source, key, {
       enumerable: true,
@@ -375,7 +382,39 @@ test("runner environment filters provider and acceptance keys before reading the
   assert.equal(sensitiveReads, 0);
 });
 
-test("client removes close listeners when shutdown waits time out", async () => {
+test("runner environment admits an explicit adapter-only test key without admitting other keys", () => {
+  assert.deepEqual(
+    buildRunnerEnvironment(
+      {
+        PATH: "safe",
+        FAKE_APP_SERVER_SCENARIO:
+          "completed",
+        UNRELATED_SECRET: "secret"
+      },
+      ["FAKE_APP_SERVER_SCENARIO"]
+    ),
+    {
+      PATH: "safe",
+      FAKE_APP_SERVER_SCENARIO:
+        "completed"
+    }
+  );
+});
+
+test("runner environment cannot explicitly allowlist a control-plane credential", () => {
+  assert.throws(
+    () =>
+      buildRunnerEnvironment(
+        {
+          LINEAR_API_KEY: "secret"
+        },
+        ["LINEAR_API_KEY"]
+      ),
+    /control-plane key/
+  );
+});
+
+test("client fails when bounded shutdown cannot confirm process exit", async () => {
   const child = new NeverClosingChildProcess();
   const client = new CodexAppServerClient({
     invocation: {
@@ -391,10 +430,35 @@ test("client removes close listeners when shutdown waits time out", async () => 
   });
 
   await client.start(process.cwd());
-  await client.stop();
+  await assert.rejects(
+    client.stop(),
+    hasCode(
+      "CODEX_PROCESS_CLEANUP_FAILED"
+    )
+  );
 
   assert.equal(child.killCalls, 1);
   assert.equal(child.listenerCount("close"), 1);
+});
+
+test("client rejects invalid timeout configuration before spawning", () => {
+  for (const options of [
+    { requestTimeoutMs: 0 },
+    { turnTimeoutMs: -1 },
+    { shutdownGraceMs: Number.NaN }
+  ]) {
+    assert.throws(
+      () =>
+        new CodexAppServerClient({
+          invocation: {
+            command: "fake-codex",
+            argsPrefix: []
+          },
+          ...options
+        }),
+      /positive integer/
+    );
+  }
 });
 
 function createClient(
@@ -410,6 +474,9 @@ function createClient(
       ...process.env,
       FAKE_APP_SERVER_SCENARIO: scenario
     },
+    environmentAllowlist: [
+      "FAKE_APP_SERVER_SCENARIO"
+    ],
     requestTimeoutMs: 2_000,
     turnTimeoutMs: 2_000,
     shutdownGraceMs: 100,
