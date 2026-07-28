@@ -1,0 +1,194 @@
+{
+  "schemaVersion": 1,
+  "provider": "linear",
+  "source": "docs/tickets/0006-linear-bootstrap-manifest.md",
+  "parentIssue": {
+    "id": "224052c7-4dcb-4003-881e-8035de59d134",
+    "identifier": "NP-1"
+  },
+  "target": {
+    "organizationId": "7eb4877f-0fa0-429c-9cd2-76dfffa0f20b",
+    "teamId": "658d1189-f63d-4245-b761-0f4f2c389663",
+    "projectId": "3e1b05e6-0a14-43d4-9fed-e1bee6ef0683",
+    "stateId": "b4be78ef-bcf9-47a7-97a4-b3dc106d9bda"
+  },
+  "entries": [
+    {
+      "sourceTicket": "T15.2",
+      "clientRequestId": "807cfb48-4b4e-4d9e-9481-a83a1ac764de",
+      "idempotencyKey": "sha256:6adcf4ae9fa64d22f5fa7e321c79dd1174208d72ebb1f671602feffa7706ebec",
+      "payloadDigest": "sha256:e907c1497a05dfe4397c49ef1b70aa0eba4d13f775461577069128451baf6996",
+      "title": "[TaskSeal T15.2] 引入 reader-first 的 Linear Operation v2",
+      "dependsOnTickets": [
+        "T15.1"
+      ],
+      "linearIssue": {
+        "id": "807cfb48-4b4e-4d9e-9481-a83a1ac764de",
+        "identifier": null,
+        "url": null
+      },
+      "status": "planned"
+    },
+    {
+      "sourceTicket": "T15.3",
+      "clientRequestId": "b5c03bd9-a1a8-4b67-ae01-fc12807eac69",
+      "idempotencyKey": "sha256:0b025b1ae90ede3a7097302e96891a0417394526806289679983951cebebe69c",
+      "payloadDigest": "sha256:07f58b548c3ca6b693ea750c578e6a4b13d510c346b41e52a95a1cf822099675",
+      "title": "[TaskSeal T15.3] Bootstrap 未完成待办并迁移 GitHub 规划 Issue",
+      "dependsOnTickets": [
+        "T15.2"
+      ],
+      "linearIssue": {
+        "id": "b5c03bd9-a1a8-4b67-ae01-fc12807eac69",
+        "identifier": null,
+        "url": null
+      },
+      "status": "planned"
+    },
+    {
+      "sourceTicket": "T16",
+      "clientRequestId": "cc57a0f0-ce3b-4e26-98b0-cd01219eac4a",
+      "idempotencyKey": "sha256:aaf6ee30d2451153d6cb5a791a1ea2008605d3cf7ef0e26572d8454d76e2b814",
+      "payloadDigest": "sha256:c11fe1c85f394bb3f408aab8b425aae1720ffd073c32cc58059347a13f95bc43",
+      "title": "[TaskSeal T16] 从 Linear 领取 ready work",
+      "dependsOnTickets": [
+        "T15.1"
+      ],
+      "linearIssue": {
+        "id": "cc57a0f0-ce3b-4e26-98b0-cd01219eac4a",
+        "identifier": null,
+        "url": null
+      },
+      "status": "planned"
+    },
+    {
+      "sourceTicket": "T17",
+      "clientRequestId": "fb80f73d-3857-445a-843b-da1d13b1999c",
+      "idempotencyKey": "sha256:ff0026e247343102cb5e683140033d7d0f4ba9349bf225102eb02b91bb30e8c0",
+      "payloadDigest": "sha256:501c87eaf2b723cc3872a98e91499142e31674cdd3d8a78713b78557347cc838",
+      "title": "[TaskSeal T17] 补齐 Control Room 执行控制",
+      "dependsOnTickets": [
+        "T16"
+      ],
+      "linearIssue": {
+        "id": "fb80f73d-3857-445a-843b-da1d13b1999c",
+        "identifier": null,
+        "url": null
+      },
+      "status": "planned"
+    },
+    {
+      "sourceTicket": "T18",
+      "clientRequestId": "4f3ce2c1-5415-403b-9129-698cac96d987",
+      "idempotencyKey": "sha256:6b0a944d4f02ee4c9af3f2f46d68820a0d529f5fa599b55bec15a6861d8672aa",
+      "payloadDigest": "sha256:840ddc0913f351c118d9c42cefe22feac7a8a4f046fd591c34b6090984366e32",
+      "title": "[TaskSeal T18] 自动收集 GitHub Artifact 与 Evidence",
+      "dependsOnTickets": [
+        "T16"
+      ],
+      "linearIssue": {
+        "id": "4f3ce2c1-5415-403b-9129-698cac96d987",
+        "identifier": null,
+        "url": null
+      },
+      "status": "planned"
+    },
+    {
+      "sourceTicket": "T19",
+      "clientRequestId": "70cbe548-5e6c-4d35-b019-a570058a8cf2",
+      "idempotencyKey": "sha256:ca46ee54da1f0875918f7fc4433d76cbee66364b36f03928283bdf220e2c0063",
+      "payloadDigest": "sha256:941cfd2445a273bb6effe311c0ea27f53b04fcb26d460d222140c6ac0e3d52bb",
+      "title": "[TaskSeal T19] 人工验收并受控迁移 Linear Done",
+      "dependsOnTickets": [
+        "T15.2",
+        "T18"
+      ],
+      "linearIssue": {
+        "id": "70cbe548-5e6c-4d35-b019-a570058a8cf2",
+        "identifier": null,
+        "url": null
+      },
+      "status": "planned"
+    },
+    {
+      "sourceTicket": "T20",
+      "clientRequestId": "362d3f0e-804f-4687-95e9-13a9561760ec",
+      "idempotencyKey": "sha256:08d051e20e13517b4b5eae925612fee73defc7fdc7822701fcdb93142d44c4f8",
+      "payloadDigest": "sha256:58d510e7eee15dfc29e54171359d7b9919b08f050479b41f84a1efcb43215fc9",
+      "title": "[TaskSeal T20] 稳定 Runner / 数字员工合同",
+      "dependsOnTickets": [
+        "T17",
+        "T18"
+      ],
+      "linearIssue": {
+        "id": "362d3f0e-804f-4687-95e9-13a9561760ec",
+        "identifier": null,
+        "url": null
+      },
+      "status": "planned"
+    },
+    {
+      "sourceTicket": "T21",
+      "clientRequestId": "8c20a04b-d005-427a-8221-166551a80a1c",
+      "idempotencyKey": "sha256:16a5362db9bf4847135ec432689397e71656e7f72ab85d9a6ebe5edb7f795ba9",
+      "payloadDigest": "sha256:15bdf8b43b4d634b781a8d266d54c91198c01cb66efb3c2c5064347713864a93",
+      "title": "[TaskSeal T21] 任务拆解、依赖调度与真实可观测性",
+      "dependsOnTickets": [
+        "T20"
+      ],
+      "linearIssue": {
+        "id": "8c20a04b-d005-427a-8221-166551a80a1c",
+        "identifier": null,
+        "url": null
+      },
+      "status": "planned"
+    },
+    {
+      "sourceTicket": "T22",
+      "clientRequestId": "35aa7526-2d18-4e72-a869-1bbec7af5a98",
+      "idempotencyKey": "sha256:f0c0b5082799913007b20dd99cbbf0c295147de8cbffbcd639951766a9c05be8",
+      "payloadDigest": "sha256:aafa7733f9ac6a0838781502959ed448813bcec13042348912936553ea58c81a",
+      "title": "[TaskSeal T22] 提供可安装 CLI 与插件开发包",
+      "dependsOnTickets": [
+        "T19",
+        "T20"
+      ],
+      "linearIssue": {
+        "id": "35aa7526-2d18-4e72-a869-1bbec7af5a98",
+        "identifier": null,
+        "url": null
+      },
+      "status": "planned"
+    },
+    {
+      "sourceTicket": "T23",
+      "clientRequestId": "d417850c-add8-4f90-9793-e9530e37ec60",
+      "idempotencyKey": "sha256:d3ac0e3f1aba19bfc4affe3dcae8471b4c3a7698627201e9e8c39aad299c5690",
+      "payloadDigest": "sha256:518dd602ce112e85797fe4d3ac0d82526a6c4f58756492d4b6440a4022ffd464",
+      "title": "[TaskSeal T23] 用飞书多维表格压力测试 Adapter",
+      "dependsOnTickets": [],
+      "linearIssue": {
+        "id": "d417850c-add8-4f90-9793-e9530e37ec60",
+        "identifier": null,
+        "url": null
+      },
+      "status": "planned"
+    },
+    {
+      "sourceTicket": "T24",
+      "clientRequestId": "3fdc7f5a-27aa-40c2-9c26-8a7ab59dba07",
+      "idempotencyKey": "sha256:e19fc9ce6516572e51507dca112c7fe05cccc303e6a7cc1f7fd2e95d27cf0c06",
+      "payloadDigest": "sha256:4c3e7c972a824e030db7218ac7d25861c15907616ef9b26cd2cc69c16ece812c",
+      "title": "[TaskSeal T24] 远程团队与商业化基础",
+      "dependsOnTickets": [
+        "T19"
+      ],
+      "linearIssue": {
+        "id": "3fdc7f5a-27aa-40c2-9c26-8a7ab59dba07",
+        "identifier": null,
+        "url": null
+      },
+      "status": "planned"
+    }
+  ]
+}
