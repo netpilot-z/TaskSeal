@@ -680,6 +680,29 @@ test("Provider panel rejects malformed or unknown observation projections", () =
   );
 });
 
+test("Provider panel accepts project and state controlled-operation targets", () => {
+  const operation = controlledOperation({
+    configuredTarget: {
+      kind: "project_state",
+      key:
+        "linear:project-state-ref:netpilot-z/netpilot/TaskSeal/Todo"
+    }
+  });
+  const model = createProviderPanelModel({
+    schemaVersion: 2,
+    revision: digest("1"),
+    observationRevision: digest("3"),
+    operationRevision: digest("2"),
+    providers: [],
+    operations: [operation]
+  });
+
+  assert.deepEqual(
+    model.operations[0]?.configuredTarget,
+    operation.configuredTarget
+  );
+});
+
 test("Provider panel rejects malformed, duplicate, and semantically inconsistent operations", () => {
   const valid = controlledOperation();
   const invalidCases = [
@@ -714,6 +737,14 @@ test("Provider panel rejects malformed, duplicate, and semantically inconsistent
       configuredTarget: {
         kind: "team",
         key: "linear:not-a-team-ref"
+      }
+    },
+    {
+      ...valid,
+      configuredTarget: {
+        kind: "project_state",
+        key:
+          "linear:project-state-ref:netpilot-z/netpilot/TaskSeal"
       }
     }
   ];

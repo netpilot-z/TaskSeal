@@ -48,7 +48,7 @@ export interface ProviderOperationProjection {
   provider: "linear";
   operationKey: string;
   configuredTarget: {
-    kind: "team";
+    kind: "team" | "project_state";
     key: string;
   };
   version: number;
@@ -249,7 +249,8 @@ function projectOperation(
     operationKey:
       operation.plan.operationKey,
     configuredTarget: {
-      kind: "team",
+      kind:
+        operation.plan.configuredTarget.kind,
       key: operation.plan.configuredTarget.key
     },
     version: operation.version,
