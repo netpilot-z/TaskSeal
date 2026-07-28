@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { projectDashboard } from "../src/dashboard/projection.ts";
-import { applyEvent, createWorkflow } from "../src/domain/workflow.ts";
+import {
+  applyEvent,
+  computeAcceptanceReviewRevision,
+  createWorkflow
+} from "../src/domain/workflow.ts";
 
 test("dashboard projection does not present previous attempt evidence as current", () => {
   const workflow = [
@@ -80,4 +84,14 @@ test("dashboard projection does not present previous attempt evidence as current
   assert.equal(workItem.activeAttempt.id, "run-2");
   assert.equal(workItem.activeArtifact, null);
   assert.deepEqual(workItem.currentEvidence, []);
+  assert.equal(
+    workItem.acceptanceReviewRevision,
+    computeAcceptanceReviewRevision(
+      workflow.workItems["TS-1"]!
+    )
+  );
+  assert.deepEqual(
+    workItem.acceptanceHistory,
+    []
+  );
 });

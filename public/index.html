@@ -110,6 +110,91 @@
                 </button>
               </div>
             </div>
+            <section
+              class="acceptance-controls"
+              id="acceptance-controls"
+              aria-labelledby="acceptance-heading"
+            >
+              <div class="acceptance-heading-row">
+                <div>
+                  <span class="detail-label">HUMAN GATE</span>
+                  <h3 id="acceptance-heading">Delivery acceptance</h3>
+                </div>
+                <span id="acceptance-operator">
+                  Current operator unavailable
+                </span>
+              </div>
+              <div class="acceptance-truth-grid">
+                <div>
+                  <span class="detail-label">LOCAL ACCEPTANCE</span>
+                  <strong id="acceptance-local-status">
+                    Awaiting human decision
+                  </strong>
+                </div>
+                <div>
+                  <span class="detail-label">LINEAR DONE SYNC</span>
+                  <strong
+                    id="acceptance-linear-status"
+                    data-tone="neutral"
+                  >
+                    Not applicable
+                  </strong>
+                </div>
+              </div>
+              <div
+                class="acceptance-audit"
+                id="acceptance-audit"
+                aria-label="Acceptance audit"
+              >
+                <p>No acceptance decisions recorded.</p>
+              </div>
+              <label
+                class="prompt-field acceptance-reason-field"
+                for="acceptance-reason"
+              >
+                <span>Review reason · required</span>
+                <textarea
+                  id="acceptance-reason"
+                  rows="2"
+                  maxlength="2048"
+                  required
+                  aria-required="true"
+                  aria-describedby="acceptance-reason-help"
+                  placeholder="Record why this delivery is accepted or rejected…"
+                ></textarea>
+                <small id="acceptance-reason-help">
+                  Required for both accepting and rejecting a delivery.
+                </small>
+              </label>
+              <div class="acceptance-actions">
+                <button
+                  class="button button-secondary"
+                  id="acceptance-reconcile-button"
+                  type="button"
+                  hidden
+                >
+                  Reconcile Linear
+                </button>
+                <div class="runner-command-buttons">
+                  <button
+                    class="button button-secondary"
+                    id="acceptance-reject-button"
+                    type="button"
+                    disabled
+                  >
+                    Reject delivery
+                  </button>
+                  <button
+                    class="button button-primary"
+                    id="acceptance-accept-button"
+                    type="button"
+                    disabled
+                  >
+                    Accept delivery
+                  </button>
+                </div>
+              </div>
+            </section>
           </div>
         </section>
 

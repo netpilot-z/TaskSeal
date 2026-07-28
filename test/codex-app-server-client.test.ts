@@ -339,13 +339,40 @@ test("runner environment removes external provider credentials", () => {
     LINEAR_API_KEY: "secret",
     GITEE_TOKEN: "secret",
     FEISHU_APP_SECRET: "secret",
-    LARK_APP_SECRET: "secret"
+    LARK_APP_SECRET: "secret",
+    TASKSEAL_HUMAN_ACTOR:
+      "operator.jeffrey"
   });
 
   assert.deepEqual(environment, {
     PATH: "safe",
     CODEX_HOME: "codex-home"
   });
+});
+
+test("runner environment filters provider and acceptance keys before reading their values", () => {
+  let sensitiveReads = 0;
+  const source = {
+    PATH: "safe"
+  } as NodeJS.ProcessEnv;
+  for (const key of [
+    "LINEAR_API_KEY",
+    "TASKSEAL_HUMAN_ACTOR"
+  ]) {
+    Object.defineProperty(source, key, {
+      enumerable: true,
+      get() {
+        sensitiveReads += 1;
+        return "secret";
+      }
+    });
+  }
+
+  assert.deepEqual(
+    buildRunnerEnvironment(source),
+    { PATH: "safe" }
+  );
+  assert.equal(sensitiveReads, 0);
 });
 
 test("client removes close listeners when shutdown waits time out", async () => {

@@ -42,6 +42,26 @@ test("the local API exposes the workflow and can run the demo to acceptance", as
   assert.match(page, /Provider operations/);
   assert.match(page, /id="work-item-select"/);
   assert.match(page, /id="codex-cancel-button"/);
+  assert.match(
+    page,
+    /id="acceptance-accept-button"/
+  );
+  assert.match(
+    page,
+    /id="acceptance-linear-status"/
+  );
+  assert.match(
+    page,
+    /id="acceptance-audit"/
+  );
+  assert.match(
+    page,
+    /id="acceptance-reason"[\s\S]*required[\s\S]*aria-required="true"[\s\S]*aria-describedby="acceptance-reason-help"/
+  );
+  assert.match(
+    page,
+    /id="acceptance-reason-help"/
+  );
 
   const providerStateResponse = await fetch(
     `${baseUrl}/provider-state.js`
@@ -54,6 +74,24 @@ test("the local API exposes the workflow and can run the demo to acceptance", as
   assert.match(
     await providerStateResponse.text(),
     /createProviderPanelModel/
+  );
+  const appResponse = await fetch(
+    `${baseUrl}/app.js`
+  );
+  const appSource =
+    await appResponse.text();
+  assert.equal(appResponse.status, 200);
+  assert.match(
+    appSource,
+    /crypto\.randomUUID/
+  );
+  assert.match(
+    appSource,
+    /refreshAcceptanceTruth/
+  );
+  assert.match(
+    appSource,
+    /api\/provider-operations/
   );
 
   const initialResponse = await fetch(`${baseUrl}/api/dashboard`);
@@ -220,6 +258,329 @@ test("persistent API exposes journal state and runs one work item asynchronously
     ),
     []
   );
+});
+
+test("persistent acceptance uses a server-owned capability and exposes local and Linear truth separately", async (t) => {
+  const decisions: unknown[] = [];
+  const reconciliations: unknown[] = [];
+  const operationKey =
+    `sha256:${"3".repeat(64)}`;
+  const server = createTaskSealServer({
+    service:
+      createPersistentService(
+        () => "reviewing"
+      ),
+    providerStatus:
+      createProviderStatus(),
+    acceptance: {
+      async decide(input) {
+        decisions.push(input);
+        return {
+          local: {
+            resolution: "committed",
+            workItemId: "TS-1",
+            eventId:
+              "taskseal:acceptance:00000000-0000-4000-8000-000000000001",
+            acceptanceDigest:
+              `sha256:${"2".repeat(64)}`,
+            decision: {
+              decision: "accepted",
+              actor:
+                "operator.jeffrey",
+              reason:
+                "Evidence reviewed.",
+              decidedAt:
+                "2026-07-28T00:00:00.000Z",
+              basis: {
+                decisionId:
+                  "00000000-0000-4000-8000-000000000001",
+                reviewRevision:
+                  `sha256:${"1".repeat(64)}`,
+                attemptId: "attempt-1",
+                artifactId: "artifact-1",
+                artifactRevision:
+                  "revision-1"
+              }
+            }
+          },
+          linearSync: {
+            status: "sync_failed",
+            diagnosticCode:
+              "LINEAR_TRANSITION_PRECONDITION_STALE"
+          }
+        };
+      },
+      async reconcile(input) {
+        reconciliations.push(input);
+        return {
+          status: "reconciled",
+          operationKey,
+          version: 6,
+          diagnosticCode: null
+        };
+      }
+    },
+    acceptanceCapabilities: {
+      decideAcceptance: true,
+      linearTransition: true,
+      reconcileLinearTransition: true
+    },
+    operatorId: "operator.jeffrey",
+    runWorkItem: async () => {}
+  });
+  const baseUrl = await listen(server, t);
+  const dashboardResponse = await fetch(
+    `${baseUrl}/api/dashboard`
+  );
+  const dashboard: unknown =
+    await dashboardResponse.json();
+  const csrfToken = readJsonString(
+    dashboard,
+    "security",
+    "csrfToken"
+  );
+
+  assert.equal(
+    readJsonPath(
+      dashboard,
+      "capabilities",
+      "decideAcceptance"
+    ),
+    true
+  );
+  assert.equal(
+    readJsonPath(
+      dashboard,
+      "capabilities",
+      "linearTransition"
+    ),
+    true
+  );
+  assert.equal(
+    readJsonPath(
+      dashboard,
+      "security",
+      "operatorId"
+    ),
+    "operator.jeffrey"
+  );
+
+  const response = await fetch(
+    `${baseUrl}/api/work-items/TS-1/acceptance`,
+    {
+      method: "POST",
+      headers: {
+        "content-type":
+          "application/json",
+        "x-taskseal-csrf-token":
+          csrfToken
+      },
+      body: JSON.stringify({
+        decisionId:
+          "00000000-0000-4000-8000-000000000001",
+        decision: "accepted",
+        reason: "Evidence reviewed.",
+        expectedReviewRevision:
+          `sha256:${"1".repeat(64)}`
+      })
+    }
+  );
+  const result: unknown =
+    await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(
+    readJsonPath(
+      result,
+      "local",
+      "decision",
+      "decision"
+    ),
+    "accepted"
+  );
+  assert.equal(
+    readJsonPath(
+      result,
+      "linearSync",
+      "status"
+    ),
+    "sync_failed"
+  );
+  assert.deepEqual(decisions, [{
+    workItemId: "TS-1",
+    decisionId:
+      "00000000-0000-4000-8000-000000000001",
+    decision: "accepted",
+    reason: "Evidence reviewed.",
+    expectedReviewRevision:
+      `sha256:${"1".repeat(64)}`
+  }]);
+
+  const reconcileResponse = await fetch(
+    `${baseUrl}/api/provider-operations/${encodeURIComponent(
+      operationKey
+    )}/reconcile`,
+    {
+      method: "POST",
+      headers: {
+        "content-type":
+          "application/json",
+        "x-taskseal-csrf-token":
+          csrfToken
+      },
+      body: "{}"
+    }
+  );
+  assert.equal(
+    reconcileResponse.status,
+    200
+  );
+  assert.deepEqual(reconciliations, [{
+    operationKey
+  }]);
+});
+
+test("persistent acceptance rejects browser actor injection, stale reviews, and disabled capability", async (t) => {
+  let decideCalls = 0;
+  const createServer = (
+    enabled: boolean
+  ) =>
+    createTaskSealServer({
+      service:
+        createPersistentService(
+          () => "reviewing"
+        ),
+      providerStatus:
+        createProviderStatus(),
+      acceptance: enabled
+        ? {
+            async decide() {
+              decideCalls += 1;
+              throw Object.assign(
+                new Error("stale"),
+                {
+                  name: "DomainError",
+                  code:
+                    "ACCEPTANCE_REVIEW_STALE"
+                }
+              );
+            },
+            async reconcile() {
+              return {
+                status:
+                  "outcome_unknown" as const,
+                operationKey:
+                  `sha256:${"3".repeat(64)}`,
+                version: 1,
+                diagnosticCode:
+                  "LINEAR_WRITE_OUTCOME_UNKNOWN" as const
+              };
+            }
+          }
+        : null,
+      acceptanceCapabilities: {
+        decideAcceptance: enabled,
+        linearTransition: enabled,
+        reconcileLinearTransition:
+          enabled
+      },
+      operatorId:
+        enabled
+          ? "operator.jeffrey"
+          : null,
+      runWorkItem: async () => {}
+    });
+
+  const enabledServer =
+    createServer(true);
+  const enabledBase = await listen(
+    enabledServer,
+    t
+  );
+  const dashboard: unknown =
+    await (
+      await fetch(
+        `${enabledBase}/api/dashboard`
+      )
+    ).json();
+  const csrfToken = readJsonString(
+    dashboard,
+    "security",
+    "csrfToken"
+  );
+  const body = {
+    decisionId:
+      "00000000-0000-4000-8000-000000000001",
+    decision: "accepted",
+    reason: "Evidence reviewed.",
+    expectedReviewRevision:
+      `sha256:${"1".repeat(64)}`
+  };
+  const injected = await fetch(
+    `${enabledBase}/api/work-items/TS-1/acceptance`,
+    {
+      method: "POST",
+      headers: {
+        "content-type":
+          "application/json",
+        "x-taskseal-csrf-token":
+          csrfToken
+      },
+      body: JSON.stringify({
+        ...body,
+        actor: "browser.attacker"
+      })
+    }
+  );
+  assert.equal(injected.status, 400);
+  assert.equal(decideCalls, 0);
+
+  const stale = await fetch(
+    `${enabledBase}/api/work-items/TS-1/acceptance`,
+    {
+      method: "POST",
+      headers: {
+        "content-type":
+          "application/json",
+        "x-taskseal-csrf-token":
+          csrfToken
+      },
+      body: JSON.stringify(body)
+    }
+  );
+  assert.equal(stale.status, 409);
+
+  const disabledServer =
+    createServer(false);
+  const disabledBase = await listen(
+    disabledServer,
+    t
+  );
+  const disabledDashboard: unknown =
+    await (
+      await fetch(
+        `${disabledBase}/api/dashboard`
+      )
+    ).json();
+  const disabledToken = readJsonString(
+    disabledDashboard,
+    "security",
+    "csrfToken"
+  );
+  const disabled = await fetch(
+    `${disabledBase}/api/work-items/TS-1/acceptance`,
+    {
+      method: "POST",
+      headers: {
+        "content-type":
+          "application/json",
+        "x-taskseal-csrf-token":
+          disabledToken
+      },
+      body: JSON.stringify(body)
+    }
+  );
+  assert.equal(disabled.status, 403);
 });
 
 test("persistent health exposes a fenced service and requires reopen", async (t) => {
@@ -1219,6 +1580,9 @@ function createPersistentService(
             artifacts: [],
             evidence: [],
             acceptanceDecision: null,
+            acceptanceReviewRevision:
+              `sha256:${"0".repeat(64)}`,
+            acceptanceHistory: [],
             externalLinks: []
           }))
       };

@@ -70,6 +70,7 @@ import type {
   CodexRunnerRunOptions
 } from "./runners/codex-runner.ts";
 import type {
+  PersistentAcceptancePort,
   PersistentServicePort,
   RunWorkItemOptions
 } from "./server.ts";
@@ -109,6 +110,13 @@ import {
 import type {
   GitHubReconciliationCommandOptions
 } from "./github-reconciliation-runtime.ts";
+import {
+  createLocalLinearAcceptanceRuntime
+} from "./linear-acceptance-runtime.ts";
+import type {
+  LocalLinearAcceptanceRuntime,
+  LocalLinearAcceptanceServicePort
+} from "./linear-acceptance-runtime.ts";
 
 export type CliExitCode = 0 | 1 | 2;
 
@@ -441,11 +449,30 @@ interface StartPersistentControlRoomOptions {
         | ProviderOperationJournalQueryPort
         | Promise<ProviderOperationJournalQueryPort>)
     | undefined;
+  acceptanceRuntimeFactory?:
+    | ((options: {
+        cwd: string;
+        environment:
+          NodeJS.ProcessEnv;
+        service:
+          PersistentServicePort;
+        providerOperations:
+          ProviderOperationJournalQueryPort;
+      }) =>
+        | LocalLinearAcceptanceRuntime
+        | Promise<LocalLinearAcceptanceRuntime>)
+    | undefined;
   serverFactory?:
     | ((
         options: {
           service: PersistentServicePort;
           providerStatus: ProviderSyncQueryPort;
+          acceptance:
+            | PersistentAcceptancePort
+            | null;
+          acceptanceCapabilities:
+            LocalLinearAcceptanceRuntime["capabilities"];
+          operatorId: string | null;
           maxConcurrentRuns: number;
           runWorkItem: (
             options: RunWorkItemOptions
@@ -1129,18 +1156,30 @@ export async function createLocalProviderOperationQuery({
   cwd: string;
 }): Promise<ProviderOperationJournalQueryPort> {
   const journal =
-    await ProviderOperationJournal.open({
-    storage:
-      new FileProviderOperationJournalStorage({
-        workspaceRoot: cwd
-      })
-  });
+    await createLocalProviderOperationRuntime({
+      cwd
+    });
   return Object.freeze({
     get: journal.get.bind(journal),
     history: journal.history.bind(journal),
     listLatest:
       journal.listLatest.bind(journal)
   });
+}
+
+export async function createLocalProviderOperationRuntime({
+  cwd
+}: {
+  cwd: string;
+}): Promise<ProviderOperationJournal> {
+  const journal =
+    await ProviderOperationJournal.open({
+    storage:
+      new FileProviderOperationJournalStorage({
+        workspaceRoot: cwd
+      })
+  });
+  return journal;
 }
 
 function captureConfigurationSeedTimestamp(
@@ -2242,7 +2281,8 @@ export async function startPersistentControlRoom({
   providerObservationRuntimeFactory =
     createLocalProviderObservationRuntime,
   providerOperationQueryFactory =
-    createLocalProviderOperationQuery,
+    createLocalProviderOperationRuntime,
+  acceptanceRuntimeFactory,
   serverFactory = createTaskSealServer,
   signalSource = processSignalSource
 }: StartPersistentControlRoomOptions): Promise<
@@ -2272,11 +2312,6 @@ export async function startPersistentControlRoom({
     await providerObservationRuntimeFactory({ cwd });
   const providerOperations =
     await providerOperationQueryFactory({ cwd });
-  const providerStatus =
-    new ProviderSyncProjectionQuery({
-      observations: providerObservations,
-      operations: providerOperations
-    });
   const {
     service,
     runner
@@ -2285,9 +2320,41 @@ export async function startPersistentControlRoom({
     commandRunner,
     environment
   });
+  const acceptanceRuntime =
+    acceptanceRuntimeFactory !== undefined
+      ? await acceptanceRuntimeFactory({
+          cwd,
+          environment,
+          service,
+          providerOperations
+        })
+      : providerOperationQueryFactory ===
+          createLocalProviderOperationRuntime
+        ? await createControlRoomAcceptanceRuntime({
+            cwd,
+            environment,
+            service,
+            providerOperations
+          })
+        : disabledAcceptanceRuntime(
+            providerOperations
+          );
+  const providerStatus =
+    new ProviderSyncProjectionQuery({
+      observations: providerObservations,
+      operations:
+        acceptanceRuntime
+          .providerOperations
+    });
   const server = serverFactory({
     service,
     providerStatus,
+    acceptance:
+      acceptanceRuntime.acceptance,
+    acceptanceCapabilities:
+      acceptanceRuntime.capabilities,
+    operatorId:
+      acceptanceRuntime.operatorId,
     maxConcurrentRuns,
     runWorkItem: (options) =>
       runner.run({
@@ -2309,6 +2376,59 @@ export async function startPersistentControlRoom({
   });
   output.write(`TaskSeal Control Room: http://${host}:${port}\n`);
   return server;
+}
+
+async function createControlRoomAcceptanceRuntime({
+  cwd,
+  environment,
+  service,
+  providerOperations
+}: {
+  cwd: string;
+  environment: NodeJS.ProcessEnv;
+  service: PersistentServicePort;
+  providerOperations:
+    ProviderOperationJournalQueryPort;
+}): Promise<LocalLinearAcceptanceRuntime> {
+  if (
+    !(
+      providerOperations instanceof
+      ProviderOperationJournal
+    ) ||
+    typeof Reflect.get(
+      service,
+      "decideAcceptance"
+    ) !== "function"
+  ) {
+    throw new TypeError(
+      "TaskSeal local acceptance requires the command-capable Provider operation journal."
+    );
+  }
+  return createLocalLinearAcceptanceRuntime({
+    cwd,
+    environment,
+    service:
+      service as unknown as
+        LocalLinearAcceptanceServicePort,
+    providerOperationJournal:
+      providerOperations
+  });
+}
+
+function disabledAcceptanceRuntime(
+  providerOperations:
+    ProviderOperationJournalQueryPort
+): LocalLinearAcceptanceRuntime {
+  return Object.freeze({
+    acceptance: null,
+    providerOperations,
+    capabilities: Object.freeze({
+      decideAcceptance: false,
+      linearTransition: false,
+      reconcileLinearTransition: false
+    }),
+    operatorId: null
+  });
 }
 
 function readMaxConcurrentRuns(

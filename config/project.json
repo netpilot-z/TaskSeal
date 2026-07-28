@@ -17,6 +17,9 @@
       "readyState": "Todo",
       "completedState": "Done",
       "dependencyIndex": "docs/tickets/0007-linear-bootstrap-map.json"
+    },
+    "acceptance": {
+      "enabled": false
     }
   },
   "mode": "persistent"

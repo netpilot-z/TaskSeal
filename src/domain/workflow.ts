@@ -54,6 +54,15 @@ export interface AcceptanceDecision {
   actor: string;
   reason: string;
   decidedAt: string;
+  basis?: AcceptanceDecisionBasis;
+}
+
+export interface AcceptanceDecisionBasis {
+  decisionId: string;
+  reviewRevision: string;
+  attemptId: string;
+  artifactId: string | null;
+  artifactRevision: string | null;
 }
 
 export interface ActiveArtifact {
@@ -115,6 +124,7 @@ export interface WorkItem {
   artifacts: Artifact[];
   evidence: Evidence[];
   acceptanceDecision: AcceptanceDecision | null;
+  acceptanceHistory: AcceptanceDecision[];
   externalLinks: ExternalLink[];
 }
 
@@ -215,11 +225,23 @@ interface EvidenceRecordedPayload {
   url: string;
 }
 
-interface AcceptanceDecidedPayload {
+interface LegacyAcceptanceDecidedPayload {
   decision: "accepted" | "rejected";
   actor: string;
   reason: string;
 }
+
+interface AcceptanceDecidedPayloadV2 {
+  decision: "accepted" | "rejected";
+  actor: string;
+  reason: string;
+  decisionId: string;
+  expectedReviewRevision: string;
+}
+
+type AcceptanceDecidedPayload =
+  | LegacyAcceptanceDecidedPayload
+  | AcceptanceDecidedPayloadV2;
 
 interface CanonicalEventOf<
   Type extends string,
@@ -418,6 +440,7 @@ function createWorkItem(
         artifacts: [],
         evidence: [],
         acceptanceDecision: null,
+        acceptanceHistory: [],
         externalLinks: [externalLink]
       }
     }
@@ -798,6 +821,13 @@ function startAttempt(
 ): Workflow {
   const workItem = requireWorkItem(workflow, event.workItemId);
 
+  if (workItem.status === "accepted") {
+    throw new DomainError(
+      "ACCEPTED_WORK_ITEM_IMMUTABLE",
+      "An accepted work item requires an explicit reopen before another attempt."
+    );
+  }
+
   if (
     workItem.attempts.some((attempt) => attempt.id === event.payload.attemptId)
   ) {
@@ -1124,6 +1154,12 @@ function decideAcceptance(
 ): Workflow {
   const workItem = requireWorkItem(workflow, event.workItemId);
   validateAcceptanceDecisionEvent(event);
+  const v2Payload =
+    isAcceptanceDecidedPayloadV2(
+      event.payload
+    )
+      ? event.payload
+      : null;
   const validDecision =
     event.payload.decision === "accepted" ||
     event.payload.decision === "rejected";
@@ -1137,6 +1173,68 @@ function decideAcceptance(
       "ACCEPTANCE_DECISION_INVALID",
       "Acceptance decisions require accepted/rejected, actor, and reason fields."
     );
+  }
+
+  if (v2Payload !== null) {
+    if (workItem.acceptanceDecision !== null) {
+      throw new DomainError(
+        "ACCEPTANCE_ALREADY_DECIDED",
+        "The current acceptance review already has a decision."
+      );
+    }
+
+    const reviewRevision =
+      computeAcceptanceReviewRevision(workItem);
+    if (
+      v2Payload.expectedReviewRevision !==
+      reviewRevision
+    ) {
+      throw new DomainError(
+        "ACCEPTANCE_REVIEW_STALE",
+        "The acceptance review changed before the decision was applied."
+      );
+    }
+
+    const activeAttempt = workItem.attempts.find(
+      (attempt) =>
+        attempt.id === workItem.activeAttemptId
+    );
+    if (
+      activeAttempt === undefined ||
+      activeAttempt.runtimeOutcome ===
+        undefined
+    ) {
+      throw new DomainError(
+        "ACCEPTANCE_ATTEMPT_INCOMPLETE",
+        "An acceptance decision requires a terminal active attempt."
+      );
+    }
+
+    if (
+      v2Payload.decision === "rejected" &&
+      workItem.status !== "reviewing" &&
+      workItem.status !== "blocked"
+    ) {
+      throw new DomainError(
+        "ACCEPTANCE_REJECTION_INVALID",
+        "A rejection requires a reviewable terminal attempt."
+      );
+    }
+
+    const latestFactTimestamp =
+      latestAcceptanceFactTimestamp(
+        workItem,
+        activeAttempt
+      );
+    if (
+      Date.parse(event.occurredAt) <
+      latestFactTimestamp
+    ) {
+      throw new DomainError(
+        "ACCEPTANCE_DECISION_TIME_INVALID",
+        "An acceptance decision cannot predate the review facts it binds."
+      );
+    }
   }
 
   if (event.payload.decision === "accepted") {
@@ -1164,15 +1262,41 @@ function decideAcceptance(
     }
   }
 
+  const activeArtifact = workItem.activeArtifact;
+  const decision: AcceptanceDecision = {
+    decision: event.payload.decision,
+    actor: event.payload.actor,
+    reason: event.payload.reason,
+    decidedAt: event.occurredAt,
+    ...(v2Payload !== null
+      ? {
+          basis: {
+            decisionId:
+              v2Payload.decisionId,
+            reviewRevision:
+              v2Payload
+                .expectedReviewRevision,
+            attemptId:
+              requireActiveAttemptForDecision(
+                workItem
+              ).id,
+            artifactId:
+              activeArtifact?.artifactId ??
+              null,
+            artifactRevision:
+              activeArtifact?.revision ?? null
+          }
+        }
+      : {})
+  };
   const nextWorkItem: WorkItem = {
     ...workItem,
     status: event.payload.decision === "accepted" ? "accepted" : "blocked",
-    acceptanceDecision: {
-      decision: event.payload.decision,
-      actor: event.payload.actor,
-      reason: event.payload.reason,
-      decidedAt: event.occurredAt
-    }
+    acceptanceDecision: decision,
+    acceptanceHistory: [
+      ...workItem.acceptanceHistory,
+      decision
+    ]
   };
 
   return withWorkItem(workflow, event, nextWorkItem);
@@ -1230,6 +1354,146 @@ function getLatestEvidenceByCriterion(
   }
 
   return latestEvidence;
+}
+
+export function computeAcceptanceReviewRevision(
+  workItem: WorkItem
+): string {
+  const activeAttempt = workItem.attempts.find(
+    (attempt) =>
+      attempt.id === workItem.activeAttemptId
+  );
+  const latestEvidence =
+    getLatestEvidenceByCriterion(workItem);
+  const criteria = [...workItem.requiredEvidence]
+    .sort(compareStrings)
+    .map((criterionKey) => {
+      const evidence =
+        latestEvidence.get(criterionKey);
+      return {
+        criterionKey,
+        evidence:
+          evidence === undefined
+            ? null
+            : {
+                id: evidence.id,
+                attemptId:
+                  evidence.attemptId,
+                artifactId:
+                  evidence.artifactId,
+                revision: evidence.revision,
+                outcome: evidence.outcome,
+                recordedAt:
+                  evidence.recordedAt
+              }
+      };
+    });
+  const projection = {
+    domain:
+      "taskseal.acceptance-review:v1",
+    schemaVersion: 1,
+    workItemId: workItem.id,
+    status: workItem.status,
+    acceptanceDecision:
+      workItem.acceptanceDecision === null
+        ? null
+        : {
+            decision:
+              workItem.acceptanceDecision
+                .decision,
+            actor:
+              workItem.acceptanceDecision.actor,
+            reason:
+              workItem.acceptanceDecision.reason,
+            decidedAt:
+              workItem.acceptanceDecision
+                .decidedAt,
+            basis:
+              workItem.acceptanceDecision
+                .basis ?? null
+          },
+    activeAttempt:
+      activeAttempt === undefined
+        ? null
+        : {
+            id: activeAttempt.id,
+            status: activeAttempt.status,
+            runtimeOutcome:
+              activeAttempt.runtimeOutcome ??
+              null,
+            startedAt:
+              activeAttempt.startedAt,
+            completedAt:
+              activeAttempt.completedAt ??
+              null
+          },
+    activeArtifact:
+      workItem.activeArtifact === null
+        ? null
+        : {
+            artifactId:
+              workItem.activeArtifact
+                .artifactId,
+            revision:
+              workItem.activeArtifact.revision,
+            linkedAt:
+              workItem.activeArtifact.linkedAt
+          },
+    criteria
+  };
+  return (
+    "sha256:" +
+    createHash("sha256")
+      .update(stableStringify(projection))
+      .digest("hex")
+  );
+}
+
+function latestAcceptanceFactTimestamp(
+  workItem: WorkItem,
+  activeAttempt: Attempt
+): number {
+  const latestEvidence =
+    getLatestEvidenceByCriterion(workItem);
+  const timestamps = [
+    Date.parse(
+      activeAttempt.completedAt ??
+        activeAttempt.startedAt
+    ),
+    ...(workItem.activeArtifact === null
+      ? []
+      : [
+          Date.parse(
+            workItem.activeArtifact.linkedAt
+          )
+        ]),
+    ...workItem.requiredEvidence.flatMap(
+      (criterion) => {
+        const evidence =
+          latestEvidence.get(criterion);
+        return evidence === undefined
+          ? []
+          : [Date.parse(evidence.recordedAt)];
+      }
+    )
+  ];
+  return Math.max(...timestamps);
+}
+
+function requireActiveAttemptForDecision(
+  workItem: WorkItem
+): Attempt {
+  const attempt = workItem.attempts.find(
+    (candidate) =>
+      candidate.id === workItem.activeAttemptId
+  );
+  if (attempt === undefined) {
+    throw new DomainError(
+      "ACCEPTANCE_ATTEMPT_INCOMPLETE",
+      "An acceptance decision requires an active attempt."
+    );
+  }
+  return attempt;
 }
 
 function requireActiveAttempt(
@@ -1553,6 +1817,15 @@ function validateAcceptanceDecisionEvent(
   event: AcceptanceDecisionEventCandidate
 ): asserts event is AcceptanceDecidedEvent {
   const payload = event.payload;
+  const isV2 =
+    isRecord(payload) &&
+    (
+      Object.hasOwn(payload, "decisionId") ||
+      Object.hasOwn(
+        payload,
+        "expectedReviewRevision"
+      )
+    );
 
   if (
     !isRecord(payload) ||
@@ -1566,6 +1839,65 @@ function validateAcceptanceDecisionEvent(
       "Acceptance decisions require accepted/rejected, actor, and reason fields."
     );
   }
+
+  if (!isV2) {
+    return;
+  }
+
+  const keys = Object.keys(payload).sort();
+  const expectedKeys = [
+    "actor",
+    "decision",
+    "decisionId",
+    "expectedReviewRevision",
+    "reason"
+  ].sort();
+
+  if (
+    keys.length !== expectedKeys.length ||
+    keys.some(
+      (key, index) =>
+        key !== expectedKeys[index]
+    ) ||
+    typeof payload.actor !== "string" ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(
+      payload.actor
+    ) ||
+    typeof payload.reason !== "string" ||
+    payload.reason !==
+      payload.reason.trim() ||
+    !payload.reason.isWellFormed() ||
+    codePointLength(payload.reason) > 2_048 ||
+    Buffer.byteLength(
+      payload.reason,
+      "utf8"
+    ) > 8_192 ||
+    /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029]/.test(
+      payload.reason
+    ) ||
+    typeof payload.decisionId !==
+      "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+      payload.decisionId
+    ) ||
+    !isSha256Digest(
+      payload.expectedReviewRevision
+    )
+  ) {
+    throw new DomainError(
+      "ACCEPTANCE_DECISION_INVALID",
+      "The v2 acceptance decision is invalid."
+    );
+  }
+}
+
+function isAcceptanceDecidedPayloadV2(
+  value: AcceptanceDecidedPayload
+): value is AcceptanceDecidedPayloadV2 {
+  return (
+    "decisionId" in value &&
+    "expectedReviewRevision" in value
+  );
 }
 
 function isRichExternalLink(
@@ -1866,6 +2198,13 @@ function isTitle(value: unknown): value is string {
 
 function codePointLength(value: string): number {
   return [...value].length;
+}
+
+function compareStrings(
+  left: string,
+  right: string
+): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 class DomainError extends Error {

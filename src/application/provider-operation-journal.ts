@@ -3,12 +3,12 @@ import {
   canonicalizeJson
 } from "../lib/canonical-json.ts";
 import {
-  parseControlledWriteOperation,
-  validateControlledWriteOperationTransition
-} from "./controlled-write-operation.ts";
+  parseProviderOperation,
+  validateProviderOperationTransition
+} from "./provider-operation.ts";
 import type {
-  ControlledWriteOperation
-} from "./controlled-write-operation.ts";
+  ProviderOperation
+} from "./provider-operation.ts";
 
 export const PROVIDER_OPERATION_JOURNAL_BYTE_LIMIT =
   16 * 1024 * 1024;
@@ -17,7 +17,7 @@ export const PROVIDER_OPERATION_JOURNAL_RECORD_LIMIT =
 
 export interface ProviderOperationJournalFile {
   schemaVersion: 1;
-  records: readonly ControlledWriteOperation[];
+  records: readonly ProviderOperation[];
 }
 
 export interface ProviderOperationJournalStoragePort {
@@ -31,12 +31,12 @@ export interface ProviderOperationAppendInput {
   expectedVersion: number;
   operationKey: string;
   planDigest: string;
-  next: ControlledWriteOperation;
+  next: ProviderOperation;
 }
 
 export interface ProviderOperationAppendResult {
   resolution: "committed" | "idempotent";
-  operation: ControlledWriteOperation;
+  operation: ProviderOperation;
 }
 
 export interface ProviderOperationJournalCommandPort {
@@ -48,12 +48,12 @@ export interface ProviderOperationJournalCommandPort {
 export interface ProviderOperationJournalQueryPort {
   get(
     operationKey: string
-  ): Promise<ControlledWriteOperation | null>;
+  ): Promise<ProviderOperation | null>;
   history(
     operationKey: string
-  ): Promise<readonly ControlledWriteOperation[]>;
+  ): Promise<readonly ProviderOperation[]>;
   listLatest(): Promise<
-    readonly ControlledWriteOperation[]
+    readonly ProviderOperation[]
   >;
 }
 
@@ -93,7 +93,7 @@ export class ProviderOperationJournal
 
   async get(
     operationKeyValue: string
-  ): Promise<ControlledWriteOperation | null> {
+  ): Promise<ProviderOperation | null> {
     await this.#writeQueue;
     this.assertOpen();
     const operationKey =
@@ -111,7 +111,7 @@ export class ProviderOperationJournal
 
   async history(
     operationKeyValue: string
-  ): Promise<readonly ControlledWriteOperation[]> {
+  ): Promise<readonly ProviderOperation[]> {
     await this.#writeQueue;
     this.assertOpen();
     const operationKey =
@@ -127,14 +127,14 @@ export class ProviderOperationJournal
   }
 
   async listLatest(): Promise<
-    readonly ControlledWriteOperation[]
+    readonly ProviderOperation[]
   > {
     await this.#writeQueue;
     this.assertOpen();
     const file = await this.loadCurrent();
     const latest = new Map<
       string,
-      ControlledWriteOperation
+      ProviderOperation
     >();
 
     for (const record of file.records) {
@@ -212,7 +212,7 @@ export class ProviderOperationJournal
       }
 
       try {
-        validateControlledWriteOperationTransition(
+        validateProviderOperationTransition(
           latest,
           input.next
         );
@@ -323,7 +323,7 @@ export function normalizeProviderOperationJournalFile(
       throw invalidJournal();
     }
     const records = readDenseArray(file.records).map(
-      (record) => parseControlledWriteOperation(record)
+      (record) => parseProviderOperation(record)
     );
     records.sort(compareRecords);
     validateReplay(records);
@@ -351,7 +351,7 @@ function normalizeAppendInput(
     ) {
       throw invalidJournal();
     }
-    const next = parseControlledWriteOperation(input.next);
+    const next = parseProviderOperation(input.next);
     const operationKey = normalizeDigest(
       input.operationKey
     );
@@ -382,9 +382,9 @@ function normalizeAppendInput(
 }
 
 function validateReplay(
-  records: readonly ControlledWriteOperation[]
+  records: readonly ProviderOperation[]
 ): void {
-  let previous: ControlledWriteOperation | undefined;
+  let previous: ProviderOperation | undefined;
 
   for (const record of records) {
     if (
@@ -402,7 +402,7 @@ function validateReplay(
       if (record.version === previous.version) {
         throw invalidJournal();
       }
-      validateControlledWriteOperationTransition(
+      validateProviderOperationTransition(
         previous,
         record
       );
@@ -412,8 +412,8 @@ function validateReplay(
 }
 
 function compareRecords(
-  left: ControlledWriteOperation,
-  right: ControlledWriteOperation
+  left: ProviderOperation,
+  right: ProviderOperation
 ): number {
   const keyOrder = compareStrings(
     left.plan.operationKey,
@@ -425,8 +425,8 @@ function compareRecords(
 }
 
 function operationsEqual(
-  left: ControlledWriteOperation,
-  right: ControlledWriteOperation
+  left: ProviderOperation,
+  right: ProviderOperation
 ): boolean {
   return canonicalizeJson(left) === canonicalizeJson(right);
 }

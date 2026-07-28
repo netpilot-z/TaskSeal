@@ -6,6 +6,7 @@ import {
   createProviderContentRenderKey,
   createProviderPanelModel,
   createProviderPanelState,
+  didAdoptProviderPanelModel,
   reduceProviderPanelState,
   shouldPollProviders
 } from "../public/provider-state.js";
@@ -315,6 +316,13 @@ test("Provider panel state covers loading, empty, first error, and stale last-kn
   assert.equal(loading.phase, "loading");
   assert.equal(firstError.phase, "error");
   assert.equal(empty.phase, "empty");
+  assert.equal(
+    didAdoptProviderPanelModel(
+      empty,
+      emptyModel
+    ),
+    true
+  );
   assert.equal(refreshingEmpty.phase, "refreshing");
   assert.equal(staleEmpty.phase, "stale");
   assert.equal(staleEmpty.model, emptyModel);
@@ -322,8 +330,22 @@ test("Provider panel state covers loading, empty, first error, and stale last-kn
   assert.equal(refreshing.phase, "refreshing");
   assert.equal(stale.phase, "stale");
   assert.equal(stale.model, readyModel);
+  assert.equal(
+    didAdoptProviderPanelModel(
+      stale,
+      readyModel
+    ),
+    false
+  );
   assert.equal(recovered.phase, "ready");
   assert.equal(recovered.message, null);
+  assert.equal(
+    didAdoptProviderPanelModel(
+      recovered,
+      readyModel
+    ),
+    true
+  );
 });
 
 test("Provider panel rejects source-local version regression and keeps the complete last-known v2 model", () => {
@@ -483,6 +505,13 @@ test("Provider panel rejects source-local version regression and keeps the compl
     assert.equal(stale.phase, "stale");
     assert.equal(stale.model, currentModel);
     assert.match(stale.message, /older/i);
+    assert.equal(
+      didAdoptProviderPanelModel(
+        stale,
+        incoming
+      ),
+      false
+    );
   }
 });
 
@@ -700,6 +729,101 @@ test("Provider panel accepts project and state controlled-operation targets", ()
   assert.deepEqual(
     model.operations[0]?.configuredTarget,
     operation.configuredTarget
+  );
+});
+
+test("Provider panel correlates a transition with the exact local acceptance decision", () => {
+  const operation =
+    controlledTransitionOperation();
+  const model = createProviderPanelModel({
+    schemaVersion: 2,
+    revision: digest("1"),
+    observationRevision: digest("2"),
+    operationRevision: digest("3"),
+    providers: [],
+    operations: [operation]
+  });
+
+  assert.deepEqual(
+    {
+      action: model.operations[0]?.action,
+      workItemId:
+        model.operations[0]?.workItemId,
+      acceptanceDecisionId:
+        model.operations[0]
+          ?.acceptanceDecisionId,
+      status: model.operations[0]?.status,
+      statusLabel:
+        model.operations[0]?.statusLabel
+    },
+    {
+      action: "work-item.transition",
+      workItemId: "TS-7",
+      acceptanceDecisionId:
+        "00000000-0000-4000-8000-000000000007",
+      status: "transitioned",
+      statusLabel: "Transitioned"
+    }
+  );
+});
+
+test("Provider panel keeps create and transition schemas semantically isolated", () => {
+  const invalidOperations = [
+    controlledOperation({
+      configuredTarget: {
+        kind: "issue_state",
+        key:
+          "linear:issue-state-ref:netpilot-z/netpilot/TaskSeal/Todo/Done"
+      }
+    }),
+    controlledOperation({
+      status: "transitioned"
+    }),
+    controlledTransitionOperation({
+      configuredTarget: {
+        kind: "team",
+        key:
+          "linear:team-ref:netpilot-z/netpilot"
+      }
+    }),
+    controlledTransitionOperation({
+      status: "created"
+    })
+  ];
+
+  for (const operation of invalidOperations) {
+    assert.throws(
+      () =>
+        createProviderPanelModel({
+          schemaVersion: 2,
+          revision: digest("1"),
+          observationRevision: digest("2"),
+          operationRevision: digest("3"),
+          providers: [],
+          operations: [operation]
+        }),
+      /projection is invalid/
+    );
+  }
+
+  assert.throws(
+    () =>
+      createProviderPanelModel({
+        schemaVersion: 2,
+        revision: digest("1"),
+        observationRevision: digest("2"),
+        operationRevision: digest("3"),
+        providers: [],
+        operations: [
+          controlledTransitionOperation({
+            operationKey: digest("8")
+          }),
+          controlledTransitionOperation({
+            operationKey: digest("9")
+          })
+        ]
+      }),
+    /projection is invalid/
   );
 });
 
@@ -939,6 +1063,40 @@ function controlledOperation(overrides = {}) {
       status === "approval_required"
         ? "2026-07-27T10:00:00.000Z"
         : "2026-07-27T10:00:01.000Z",
+    ...overrides
+  };
+}
+
+function controlledTransitionOperation(
+  overrides = {}
+) {
+  const status =
+    overrides.status ?? "transitioned";
+  return {
+    schemaVersion: 2,
+    provider: "linear",
+    action: "work-item.transition",
+    workItemId: "TS-7",
+    acceptanceDecisionId:
+      "00000000-0000-4000-8000-000000000007",
+    operationKey: digest("7"),
+    configuredTarget: {
+      kind: "issue_state",
+      key:
+        "linear:issue-state-ref:netpilot-z/netpilot/TaskSeal/Todo/Done"
+    },
+    version: 4,
+    status,
+    approval: {
+      decision: "approved",
+      decidedAt:
+        "2026-07-27T10:00:01.000Z"
+    },
+    diagnosticCode: null,
+    createdAt:
+      "2026-07-27T10:00:00.000Z",
+    updatedAt:
+      "2026-07-27T10:00:02.000Z",
     ...overrides
   };
 }

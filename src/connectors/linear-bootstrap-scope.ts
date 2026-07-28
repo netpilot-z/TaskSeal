@@ -1,4 +1,5 @@
 import type {
+  LinearAcceptanceCoordinates,
   LinearBootstrapCoordinates,
   LinearReadyWorkCoordinates
 } from "../config/project-config.ts";
@@ -113,6 +114,15 @@ export interface ResolvedLinearReadyWorkScope {
   readonly completedStateId: string;
 }
 
+export interface ResolvedLinearAcceptanceScope {
+  readonly organizationId: string;
+  readonly teamId: string;
+  readonly teamKey: string;
+  readonly projectId: string;
+  readonly expectedStateId: string;
+  readonly targetStateId: string;
+}
+
 interface Organization {
   readonly id: string;
   readonly name: string;
@@ -160,6 +170,22 @@ interface ResolveLinearReadyWorkScopeOptions {
     | "completedState"
   >;
   readonly exchange: LinearBootstrapGraphqlExchange;
+}
+
+interface ResolveLinearAcceptanceScopeOptions {
+  readonly configuredTarget: Pick<
+    Extract<
+      LinearAcceptanceCoordinates,
+      { enabled: true }
+    >,
+    | "workspace"
+    | "team"
+    | "project"
+    | "expectedState"
+    | "targetState"
+  >;
+  readonly exchange:
+    LinearBootstrapGraphqlExchange;
 }
 
 interface ResolvedLinearProjectScope {
@@ -289,6 +315,89 @@ export async function resolveLinearReadyWorkScope(
     projectId: project.id,
     readyStateId: readyState.id,
     completedStateId: completedState.id
+  });
+}
+
+export async function resolveLinearAcceptanceScope(
+  optionsValue: unknown
+): Promise<ResolvedLinearAcceptanceScope> {
+  const { configuredTarget, exchange } =
+    normalizeAcceptanceOptions(
+      optionsValue
+    );
+  const {
+    organization,
+    team,
+    project,
+    states
+  } = await resolveLinearProjectScope({
+    configuredTarget,
+    exchange
+  });
+  const uniqueStates = uniqueById(states);
+  const expectedState = selectUnique(
+    uniqueStates.filter((candidate) =>
+      matchesReference(
+        candidate.name,
+        configuredTarget.expectedState
+      )
+    ),
+    {
+      notFoundCode:
+        "LINEAR_ACCEPTANCE_EXPECTED_STATE_NOT_FOUND",
+      ambiguousCode:
+        "LINEAR_ACCEPTANCE_EXPECTED_STATE_AMBIGUOUS",
+      label:
+        "Linear acceptance expected state"
+    }
+  );
+  const targetState = selectUnique(
+    uniqueStates.filter((candidate) =>
+      matchesReference(
+        candidate.name,
+        configuredTarget.targetState
+      )
+    ),
+    {
+      notFoundCode:
+        "LINEAR_ACCEPTANCE_TARGET_STATE_NOT_FOUND",
+      ambiguousCode:
+        "LINEAR_ACCEPTANCE_TARGET_STATE_AMBIGUOUS",
+      label:
+        "Linear acceptance target state"
+    }
+  );
+
+  if (
+    expectedState.type !== "started" &&
+    expectedState.type !== "unstarted"
+  ) {
+    throw bootstrapError(
+      "LINEAR_ACCEPTANCE_EXPECTED_STATE_TYPE_INVALID",
+      "Configured Linear acceptance expected state is terminal."
+    );
+  }
+  if (targetState.type !== "completed") {
+    throw bootstrapError(
+      "LINEAR_ACCEPTANCE_TARGET_STATE_TYPE_INVALID",
+      "Configured Linear acceptance target state is not completed."
+    );
+  }
+  if (expectedState.id === targetState.id) {
+    throw bootstrapError(
+      "LINEAR_ACCEPTANCE_STATE_IDENTITY_CONFLICT",
+      "Linear acceptance states must be distinct."
+    );
+  }
+
+  return Object.freeze({
+    organizationId: organization.id,
+    teamId: team.id,
+    teamKey: team.key,
+    projectId: project.id,
+    expectedStateId:
+      expectedState.id,
+    targetStateId: targetState.id
   });
 }
 
@@ -839,6 +948,85 @@ function normalizeReadyOptions(
     throw bootstrapError(
       "LINEAR_BOOTSTRAP_INPUT_INVALID",
       "Linear ready-work input is invalid."
+    );
+  }
+}
+
+function normalizeAcceptanceOptions(
+  value: unknown
+): ResolveLinearAcceptanceScopeOptions {
+  try {
+    const options = readExactRecord(value, [
+      "configuredTarget",
+      "exchange"
+    ]);
+    const target = readExactRecord(
+      options.configuredTarget,
+      [
+        "workspace",
+        "team",
+        "project",
+        "expectedState",
+        "targetState"
+      ]
+    );
+    if (
+      typeof options.exchange !==
+      "function"
+    ) {
+      throw bootstrapError(
+        "LINEAR_BOOTSTRAP_INPUT_INVALID",
+        "Linear acceptance scope requires an exchange."
+      );
+    }
+    const expectedState =
+      parseReference(
+        target.expectedState
+      );
+    const targetState =
+      parseReference(target.targetState);
+    if (
+      matchesReference(
+        expectedState,
+        targetState
+      )
+    ) {
+      throw bootstrapError(
+        "LINEAR_ACCEPTANCE_STATE_IDENTITY_CONFLICT",
+        "Linear acceptance state references must be distinct."
+      );
+    }
+    return {
+      configuredTarget: {
+        workspace: parseReference(
+          target.workspace
+        ),
+        team: parseReference(target.team),
+        project:
+          parseReference(target.project),
+        expectedState,
+        targetState
+      },
+      exchange:
+        options.exchange as
+          LinearBootstrapGraphqlExchange
+    };
+  } catch (error) {
+    if (
+      error instanceof
+        LinearBootstrapScopeError &&
+      (
+        error.code ===
+          "LINEAR_ACCEPTANCE_STATE_IDENTITY_CONFLICT" ||
+        error.code ===
+          "LINEAR_BOOTSTRAP_INPUT_INVALID"
+      )
+    ) {
+      throw error;
+    }
+    throw bootstrapError(
+      "LINEAR_BOOTSTRAP_INPUT_INVALID",
+      "Linear acceptance input is invalid."
     );
   }
 }
