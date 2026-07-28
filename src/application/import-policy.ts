@@ -9,7 +9,8 @@ export type ImportProvider = "github" | "linear" | "gitee";
 export type ProviderObjectType =
   | "check"
   | "issue"
-  | "pull_request";
+  | "pull_request"
+  | "pull_request_review";
 
 export interface ProviderScopeRef {
   kind: "repository" | "team";
@@ -50,9 +51,19 @@ export interface PolicyBindingV2 {
   requiredObjectTypes: ProviderObjectType[];
 }
 
+export interface PolicyBindingV3 {
+  schemaVersion: 3;
+  capability: "snapshot.import.apply";
+  applyAllowed: boolean;
+  provider: "github";
+  scopeRef: ProviderScopeRef;
+  requiredObjectTypes: ProviderObjectType[];
+}
+
 export type PolicyBinding =
   | PolicyBindingV1
-  | PolicyBindingV2;
+  | PolicyBindingV2
+  | PolicyBindingV3;
 
 export interface BoundImportPolicy {
   previewAllowed: boolean;
@@ -63,7 +74,12 @@ export interface BoundImportPolicy {
 const PROVIDER_OBJECT_TYPES: Readonly<
   Record<ImportProvider, ReadonlySet<string>>
 > = {
-  github: new Set(["check", "issue", "pull_request"]),
+  github: new Set([
+    "check",
+    "issue",
+    "pull_request",
+    "pull_request_review"
+  ]),
   linear: new Set(["issue"]),
   gitee: new Set(["issue"])
 };
@@ -160,7 +176,15 @@ export function buildPolicyBinding({
 
   const policyBinding = normalizePolicyBinding({
     schemaVersion:
-      normalizedProvider === "gitee" ? 2 : 1,
+      normalizedProvider === "gitee"
+        ? 2
+        : normalizedProvider ===
+              "github" &&
+            normalizedTypes.includes(
+              "pull_request_review"
+            )
+          ? 3
+          : 1,
     capability: APPLY_CAPABILITY,
     applyAllowed:
       allowedScope.capabilities[APPLY_CAPABILITY],
@@ -192,7 +216,8 @@ export function normalizePolicyBinding(
     ]) ||
     (
       value.schemaVersion !== 1 &&
-      value.schemaVersion !== 2
+      value.schemaVersion !== 2 &&
+      value.schemaVersion !== 3
     ) ||
     value.capability !== APPLY_CAPABILITY ||
     typeof value.applyAllowed !== "boolean" ||
@@ -204,6 +229,33 @@ export function normalizePolicyBinding(
     (
       value.schemaVersion === 2 &&
       value.provider !== "gitee"
+    ) ||
+    (
+      value.schemaVersion === 3 &&
+      value.provider !== "github"
+    )
+  ) {
+    throw invalidPolicy();
+  }
+
+  const requiredObjectTypes =
+    normalizeObjectTypes(
+      value.provider,
+      value.requiredObjectTypes
+    );
+
+  if (
+    (
+      value.schemaVersion === 1 &&
+      requiredObjectTypes.includes(
+        "pull_request_review"
+      )
+    ) ||
+    (
+      value.schemaVersion === 3 &&
+      !requiredObjectTypes.includes(
+        "pull_request_review"
+      )
     )
   ) {
     throw invalidPolicy();
@@ -218,10 +270,7 @@ export function normalizePolicyBinding(
       value.provider,
       value.scopeRef
     ),
-    requiredObjectTypes: normalizeObjectTypes(
-      value.provider,
-      value.requiredObjectTypes
-    )
+    requiredObjectTypes
   };
 
   return normalized as PolicyBinding;
@@ -588,6 +637,7 @@ function isProviderObjectType(
   return (
     value === "check" ||
     value === "issue" ||
-    value === "pull_request"
+    value === "pull_request" ||
+    value === "pull_request_review"
   );
 }

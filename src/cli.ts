@@ -103,6 +103,12 @@ import {
 import type {
   LinearReadyWorkCommandOptions
 } from "./linear-ready-work-runtime.ts";
+import {
+  executeLocalGitHubReconciliation
+} from "./github-reconciliation-runtime.ts";
+import type {
+  GitHubReconciliationCommandOptions
+} from "./github-reconciliation-runtime.ts";
 
 export type CliExitCode = 0 | 1 | 2;
 
@@ -225,10 +231,23 @@ type CreateLinearDryRun = (
 type ExecuteLinearReadyWork = (
   options: LinearReadyWorkCommandOptions
 ) => unknown | Promise<unknown>;
+type ExecuteGitHubReconciliation = (
+  options:
+    GitHubReconciliationCommandOptions
+) => unknown | Promise<unknown>;
 type ParsedLinearReadyWorkArguments =
   LinearReadyWorkCommandOptions extends
     infer Command
     ? Command extends { readonly cwd: string }
+      ? Omit<Command, "cwd">
+      : never
+    : never;
+type ParsedGitHubReconciliationArguments =
+  GitHubReconciliationCommandOptions extends
+    infer Command
+    ? Command extends {
+        readonly cwd: string;
+      }
       ? Omit<Command, "cwd">
       : never
     : never;
@@ -264,6 +283,9 @@ export interface RunCliOptions {
   createLinearDryRun?: CreateLinearDryRun | undefined;
   executeLinearReadyWork?:
     | ExecuteLinearReadyWork
+    | undefined;
+  executeGitHubReconciliation?:
+    | ExecuteGitHubReconciliation
     | undefined;
   providerObservationCoordinatorFactory?:
     | ProviderObservationCoordinatorFactory
@@ -466,6 +488,8 @@ const USAGE = `Usage:
   taskseal ready linear
   taskseal ready linear --mode preview --issue <uuid> --work-item <id> --criterion <key>
   taskseal ready linear --mode apply --issue <uuid> --work-item <id> --criterion <key> --expected-plan-digest <sha256>
+  taskseal reconcile github --mode preview --work-item <id>
+  taskseal reconcile github --mode apply --work-item <id> --expected-plan-digest <sha256>
   taskseal sync linear --dry-run [--source <repository-relative-path>]
 `;
 
@@ -485,6 +509,7 @@ export async function runCli({
   inspectGiteeHealth,
   createLinearDryRun,
   executeLinearReadyWork,
+  executeGitHubReconciliation,
   providerObservationCoordinatorFactory
 }: RunCliOptions = {}): Promise<CliExitCode> {
   const command = args[0] ?? "start";
@@ -768,6 +793,44 @@ export async function runCli({
     } catch (error) {
       output.write(
         renderLinearReadyWorkError(error)
+      );
+      return 1;
+    }
+  }
+
+  if (command === "reconcile") {
+    if (args[1] !== "github") {
+      output.write(USAGE);
+      return 2;
+    }
+
+    const options =
+      parseGitHubReconciliationArguments(
+        args.slice(2)
+      );
+
+    if (!options) {
+      output.write(USAGE);
+      return 2;
+    }
+
+    try {
+      const execute =
+        executeGitHubReconciliation ??
+        executeLocalGitHubReconciliation;
+      const result = await execute({
+        cwd,
+        ...options
+      } as GitHubReconciliationCommandOptions);
+      output.write(
+        `${JSON.stringify(result, null, 2)}\n`
+      );
+      return 0;
+    } catch (error) {
+      output.write(
+        renderGitHubReconciliationError(
+          error
+        )
       );
       return 1;
     }
@@ -2025,6 +2088,62 @@ function parseLinearReadyWorkArguments(
   };
 }
 
+function parseGitHubReconciliationArguments(
+  args: readonly string[]
+): ParsedGitHubReconciliationArguments | null {
+  const previewValues =
+    parseNamedArguments(args, [
+      "--mode",
+      "--work-item"
+    ]);
+
+  if (
+    previewValues !== null &&
+    previewValues["--mode"] ===
+      "preview"
+  ) {
+    return {
+      mode: "preview",
+      workItemId: readNamedArgument(
+        previewValues,
+        "--work-item"
+      )
+    };
+  }
+
+  const applyValues =
+    parseNamedArguments(args, [
+      "--mode",
+      "--work-item",
+      "--expected-plan-digest"
+    ]);
+  const expectedPlanDigest =
+    applyValues?.[
+      "--expected-plan-digest"
+    ];
+
+  if (
+    applyValues === null ||
+    applyValues["--mode"] !== "apply" ||
+    typeof expectedPlanDigest !==
+      "string" ||
+    !/^sha256:[0-9a-f]{64}$/.test(
+      expectedPlanDigest
+    )
+  ) {
+    return null;
+  }
+
+  return {
+    mode: "apply",
+    workItemId: readNamedArgument(
+      applyValues,
+      "--work-item"
+    ),
+    expectedPlanDigest
+  };
+}
+
 function isReadyWorkUuid(
   value: unknown
 ): value is string {
@@ -2058,6 +2177,12 @@ function renderLinearReadyWorkError(
   _error: unknown
 ): string {
   return "TaskSeal ready failed [LINEAR_READY_FAILED]: Linear ready-work request failed.\n";
+}
+
+function renderGitHubReconciliationError(
+  _error: unknown
+): string {
+  return "TaskSeal reconcile failed [GITHUB_RECONCILE_FAILED]: GitHub delivery reconciliation failed.\n";
 }
 
 function renderErrorCode(error: unknown): string {

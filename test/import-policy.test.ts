@@ -172,7 +172,7 @@ test("Gitee repository scopes are explicit and case-normalized without widening 
   );
 });
 
-test("PolicyBinding versions keep legacy providers on v1 and introduce Gitee through v2", () => {
+test("PolicyBinding versions keep legacy providers on v1, Gitee on v2, and review evidence on an explicit v3 fence", () => {
   assert.equal(
     buildPolicyBinding({
       importPolicy: createPolicy(),
@@ -184,6 +184,39 @@ test("PolicyBinding versions keep legacy providers on v1 and introduce Gitee thr
       requiredObjectTypes: ["issue"]
     }).policyBinding.schemaVersion,
     1
+  );
+  const reviewBinding =
+    buildPolicyBinding({
+      importPolicy: createPolicy({
+        allowedScopes: [
+          createGitHubScope({
+            objectTypes: [
+              "check",
+              "pull_request",
+              "pull_request_review"
+            ]
+          })
+        ]
+      }),
+      provider: "github",
+      scopeRef: {
+        kind: "repository",
+        key: "github:repository:netpilot-z/taskseal"
+      },
+      requiredObjectTypes: [
+        "pull_request",
+        "pull_request_review"
+      ]
+    }).policyBinding;
+  assert.equal(
+    reviewBinding.schemaVersion,
+    3
+  );
+  assert.deepEqual(
+    normalizePolicyBinding(
+      reviewBinding
+    ),
+    reviewBinding
   );
 
   for (const binding of [
@@ -200,6 +233,30 @@ test("PolicyBinding versions keep legacy providers on v1 and introduce Gitee thr
     },
     {
       schemaVersion: 2,
+      capability: "snapshot.import.apply",
+      applyAllowed: true,
+      provider: "github",
+      scopeRef: {
+        kind: "repository",
+        key: "github:repository:netpilot-z/taskseal"
+      },
+      requiredObjectTypes: ["issue"]
+    },
+    {
+      schemaVersion: 1,
+      capability: "snapshot.import.apply",
+      applyAllowed: true,
+      provider: "github",
+      scopeRef: {
+        kind: "repository",
+        key: "github:repository:netpilot-z/taskseal"
+      },
+      requiredObjectTypes: [
+        "pull_request_review"
+      ]
+    },
+    {
+      schemaVersion: 3,
       capability: "snapshot.import.apply",
       applyAllowed: true,
       provider: "github",

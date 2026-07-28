@@ -1,7 +1,11 @@
 {
   "project": "TaskSeal",
   "github": {
-    "repository": "netpilot-z/TaskSeal"
+    "repository": "netpilot-z/TaskSeal",
+    "delivery": {
+      "enabled": true,
+      "mappingIndex": "config/github-delivery-map.json"
+    }
   },
   "linear": {
     "workspace": "netpilot-z",

@@ -59,14 +59,14 @@
 
 ## T18 — 自动收集 GitHub Artifact 与 Evidence
 
-- 状态：待执行。
+- 状态：已完成；由 Linear `NP-6` 跟踪。
 - 目的：从明确映射的分支/PR/Check 生成可验收交付证据，移除手工编号组合。
 - 范围：Linear UUID ↔ WorkItem ↔ branch/PR 映射、PR head revision、required checks、review evidence、read-only reconciliation。
 - 不包含：自动 merge、按标题猜 PR 或把 Agent 文本当作 Evidence。
 - 依赖：T16、现有 GitHub read/provenance 能力。
 - 验收标准：同一 revision 幂等；PR head 漂移使旧 Evidence 失效；缺少 Required Evidence 时不能接受。
-- 验证：mocked-real GitHub contract、revision race、duplicate delivery 和 provenance tests。
-- 风险与回退：保留显式映射覆盖；自动发现不可信时停止并要求人工关联。
+- 验证：mocked-real GitHub contract、mapped/fork PR、批量 Check/Review、revision race、duplicate delivery、CLI/runtime atomic apply 和 exact provenance tests。
+- 风险与回退：首版只接受 repository-owned 显式 mapping，不实现自动发现；`github.delivery.enabled: false` 时零网络，空 index 是安全 bootstrap。
 
 ## T19 — 人工验收并受控迁移 Linear Done
 

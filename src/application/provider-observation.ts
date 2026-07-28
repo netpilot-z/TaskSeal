@@ -167,7 +167,8 @@ const STATUSES = new Set<ProviderObservationStatus>([
 const OBJECT_TYPES = new Set<ProviderObjectType>([
   "issue",
   "pull_request",
-  "check"
+  "check",
+  "pull_request_review"
 ]);
 const SAFE_DIAGNOSTIC_CODES = new Set([
   "PROVIDER_OPERATION_FAILED",

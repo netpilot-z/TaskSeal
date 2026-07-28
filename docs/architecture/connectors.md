@@ -16,6 +16,7 @@ External provider
 
 - Linear、Codex 和 GitHub 的纯 normalizer。
 - GitHub Issue/PR/Check Run 的真实 REST 只读客户端。
+- GitHub repository-owned DeliveryMapping、mapped PR head、批量 Check Run、Review、selector-bound provenance、mapping/head-bound offline receipt replay 与 revision-fenced reconciliation。
 - GitHub 单 Issue 的独立只读 snapshot，用于在 PR/Check 尚未就绪时先验证 WorkItem 映射。
 - Linear Organization/Team/Issue 的真实 GraphQL 只读客户端。
 - Linear Organization/Team/Project/Backlog State 的真实分页 resolver，以及尚未接入写链的 bounded GraphQL HTTP exchange。
@@ -86,6 +87,33 @@ Snapshot import 契约已由 `docs/specs/0004-snapshot-import.md` 与 `docs/adr/
 - 先生成零写入 ImportPlan，再把 canonical events 与 ImportReceipt 作为一个 journal batch 原子提交。
 
 Atomic apply 已通过故障注入、并发、未知提交结果 fencing 和重启恢复验证；apply capability 默认关闭，只有可信 ImportPolicy 明确允许的 scope 才可写入本地 journal。GitHub/Linear 新 apply 还会在 base stale 与 Domain projection 通过后，从本次 action 绑定的精确 plan event 生成短生命周期 `ProviderFactProvenanceClaim v1`，由显式注入的只读 verifier 重查远端 stable ID、locator、scope、revision、source/event time、事件内容与 digest；Plan v1 remote no-event 失败关闭。一次最多 8 个 claim，connector 以 4 路并发、15 秒单请求上限和独立 30 秒总 deadline 读取；失败时零 journal 写入，receipt retry 与历史 replay 不访问 Provider。
+
+## 已实现阶段：GitHub delivery reconciliation
+
+T18 在既有 Snapshot Import 入口前增加 application-owned reconciliation：
+
+```text
+config github.repository
+  → safe repository-relative DeliveryMapping index
+  → exact Linear UUID / WorkItem / active Attempt gate
+  → mapped PR number + head repository/branch
+  → current head Check Runs + decisive Reviews
+  → second PR read revision fence
+  → canonical Artifact/Evidence facts
+  → ImportPlan review
+  → apply-time exact provenance
+  → atomic local journal batch
+```
+
+边界：
+
+- target repository 是 PR base scope，head repository/branch 是 fork-aware head identity，二者分别核对。
+- mapping 只声明关联意图；实时 PR、SHA、Check、Review 才是 provider facts。
+- 每个 WorkItem 必须由 mapping 中的 Linear UUID rich link唯一拥有，required evidence 必须与 selectors 完整一致。
+- Check 由 exact name + 可选 App ID选择；Review 由 exact reviewer numeric ID、current commit 和 decisive state选择。
+- 新 head 即使 Evidence pending，也先导入 Artifact，使旧 revision Evidence 退出当前 gate；pending 不伪装为 failed。
+- 采集完成后 PR identity/head 任一字段漂移均失败关闭；Check/Review apply provenance 也重读 current PR head。
+- `reconcile github` 只有 GitHub read 与 local journal apply，固定零 GitHub/Linear write；disabled 或空 index 不自动发现对象。
 
 ## 已实现阶段：Gitee 只读 Adapter 与受控本地 import
 

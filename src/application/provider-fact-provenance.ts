@@ -32,6 +32,15 @@ export type ProviderFactProvenanceLocator =
   | {
       kind: "github.check_run";
       id: string;
+      pullRequestNumber?:
+        | number
+        | undefined;
+    }
+  | {
+      kind:
+        "github.pull_request_review";
+      pullRequestNumber: number;
+      id: string;
     }
   | {
       kind: "linear.issue";
@@ -42,7 +51,11 @@ export type ProviderFactProvenanceLocator =
 interface ProviderFactProvenanceClaimContent {
   schemaVersion: 1;
   provider: "github" | "linear";
-  objectType: "issue" | "pull_request" | "check";
+  objectType:
+    | "issue"
+    | "pull_request"
+    | "check"
+    | "pull_request_review";
   providerObjectKey: string;
   externalId: string;
   scopeRef: ScopeRef;
@@ -69,6 +82,17 @@ interface ProviderFactProvenanceClaimContent {
     | {
         kind: "check";
         headRevision: string;
+        outcome: "passed" | "failed";
+      }
+    | {
+        kind:
+          "pull_request_review";
+        headRevision: string;
+        reviewerId: string;
+        state:
+          | "approved"
+          | "changes_requested"
+          | "dismissed";
         outcome: "passed" | "failed";
       };
   locator: ProviderFactProvenanceLocator;
@@ -482,9 +506,15 @@ function createClaimForEvent({
     event.type === "evidence.recorded"
   ) {
     const payload = event.payload;
+    const checkLocator =
+      readCheckEvidenceLocator({
+        evidenceId:
+          payload.evidenceId,
+        externalId:
+          identity.externalId
+      });
     if (
-      payload.evidenceId !==
-        `check-${identity.externalId}` ||
+      !checkLocator ||
       typeof payload.revision !== "string" ||
       payload.revision.length === 0 ||
       (
@@ -531,8 +561,115 @@ function createClaimForEvent({
       },
       locator: {
         kind: "github.check_run",
-        id: identity.externalId
+        id: identity.externalId,
+        ...(checkLocator
+          .pullRequestNumber ===
+        undefined
+          ? {}
+          : {
+              pullRequestNumber:
+                checkLocator
+                  .pullRequestNumber
+            })
       }
+    };
+  } else if (
+    provider === "github" &&
+    identity.objectType ===
+      "pull_request_review" &&
+    event.type === "evidence.recorded"
+  ) {
+    const payload = event.payload;
+    const reviewIdentity =
+      readReviewEvidenceIdentity({
+        evidenceId:
+          payload.evidenceId,
+        externalId:
+          identity.externalId
+      });
+    if (
+      !reviewIdentity ||
+      typeof payload.revision !==
+        "string" ||
+      payload.revision.length === 0 ||
+      (
+        payload.outcome !== "passed" &&
+        payload.outcome !== "failed"
+      ) ||
+      payload.outcome !==
+        (
+          reviewIdentity.state ===
+          "approved"
+            ? "passed"
+            : "failed"
+        ) ||
+      typeof payload.url !== "string"
+    ) {
+      throw mismatch();
+    }
+
+    const sourceObject = {
+      providerObjectKey:
+        action.sourceObjectKey,
+      provider,
+      objectType:
+        "pull_request_review" as const,
+      externalId:
+        identity.externalId,
+      url: payload.url
+    };
+    const observed: {
+      headRevision: string;
+      reviewerId: string;
+      state:
+        | "approved"
+        | "changes_requested"
+        | "dismissed";
+      outcome: "passed" | "failed";
+    } = {
+      headRevision:
+        payload.revision,
+      reviewerId:
+        reviewIdentity.reviewerId,
+      state: reviewIdentity.state,
+      outcome: payload.outcome
+    };
+    content = {
+      schemaVersion: 1,
+      provider,
+      objectType:
+        "pull_request_review",
+      providerObjectKey:
+        action.sourceObjectKey,
+      externalId:
+        identity.externalId,
+      scopeRef: cloneScopeRef(scopeRef),
+      url: payload.url,
+      sourceRevisionId:
+        action.sourceRevisionId,
+      sourceOccurredAt:
+        event.occurredAt,
+      eventType:
+        "evidence.recorded",
+      eventOccurredAt:
+        event.occurredAt,
+      contentDigest:
+        digestProviderFactContent({
+          sourceObject,
+          observed
+        }),
+      content: {
+        kind:
+          "pull_request_review",
+        ...observed
+      },
+      locator:
+        parseGitHubPullRequestReviewLocator({
+          url: payload.url,
+          externalId:
+            identity.externalId,
+          scopeRef
+        })
     };
   } else {
     throw mismatch();
@@ -544,6 +681,87 @@ function createClaimForEvent({
       computeProviderFactProvenanceClaimDigest(
         content
       )
+  };
+}
+
+function readCheckEvidenceLocator({
+  evidenceId,
+  externalId
+}: {
+  evidenceId: unknown;
+  externalId: string;
+}): {
+  pullRequestNumber?:
+    | number
+    | undefined;
+} | null {
+  if (
+    evidenceId ===
+      `check-${externalId}`
+  ) {
+    return {};
+  }
+
+  if (typeof evidenceId !== "string") {
+    return null;
+  }
+
+  const match =
+    /^check-([1-9]\d*):pr-([1-9]\d*)$/.exec(
+      evidenceId
+    );
+  const pullRequestNumber =
+    match?.[2] === undefined
+      ? Number.NaN
+      : Number(match[2]);
+
+  return (
+    match?.[1] === externalId &&
+    Number.isSafeInteger(
+      pullRequestNumber
+    ) &&
+    pullRequestNumber > 0
+  )
+    ? { pullRequestNumber }
+    : null;
+}
+
+function readReviewEvidenceIdentity({
+  evidenceId,
+  externalId
+}: {
+  evidenceId: unknown;
+  externalId: string;
+}): {
+  reviewerId: string;
+  state:
+    | "approved"
+    | "changes_requested"
+    | "dismissed";
+} | null {
+  if (typeof evidenceId !== "string") {
+    return null;
+  }
+
+  const match =
+    /^review-([1-9]\d*):reviewer-([1-9]\d*):(approved|changes_requested|dismissed)$/.exec(
+      evidenceId
+    );
+
+  if (
+    match?.[1] !== externalId ||
+    !match[2] ||
+    !match[3]
+  ) {
+    return null;
+  }
+
+  return {
+    reviewerId: match[2],
+    state: match[3] as
+      | "approved"
+      | "changes_requested"
+      | "dismissed"
   };
 }
 
@@ -826,6 +1044,75 @@ function parseGitHubPullRequestLocator(
   };
 }
 
+function parseGitHubPullRequestReviewLocator({
+  url,
+  externalId,
+  scopeRef
+}: {
+  url: string;
+  externalId: string;
+  scopeRef: ScopeRef;
+}): Extract<
+  ProviderFactProvenanceLocator,
+  {
+    kind:
+      "github.pull_request_review";
+  }
+> {
+  const repository = readScopeCoordinate(
+    scopeRef,
+    "github",
+    "repository"
+  );
+  let parsed: URL;
+
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw mismatch();
+  }
+
+  const parts = parsed.pathname.split("/");
+  const [owner, name] =
+    repository.split("/");
+  const numberText = parts[4];
+  const pullRequestNumber =
+    typeof numberText === "string" &&
+    /^\d+$/.test(numberText)
+      ? Number(numberText)
+      : Number.NaN;
+
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.port ||
+    parsed.search ||
+    parsed.hostname.toLowerCase() !==
+      "github.com" ||
+    parts.length !== 5 ||
+    parts[0] !== "" ||
+    parts[1]?.toLowerCase() !== owner ||
+    parts[2]?.toLowerCase() !== name ||
+    parts[3] !== "pull" ||
+    !Number.isSafeInteger(
+      pullRequestNumber
+    ) ||
+    pullRequestNumber <= 0 ||
+    parsed.hash !==
+      `#pullrequestreview-${externalId}`
+  ) {
+    throw mismatch();
+  }
+
+  return {
+    kind:
+      "github.pull_request_review",
+    pullRequestNumber,
+    id: externalId
+  };
+}
+
 function parseGitHubNumberLocator({
   url,
   scopeRef,
@@ -913,7 +1200,11 @@ function readSourceIdentity(
   sourceObjectKey: string,
   provider: "github" | "linear"
 ): {
-  objectType: "issue" | "pull_request" | "check";
+  objectType:
+    | "issue"
+    | "pull_request"
+    | "check"
+    | "pull_request_review";
   externalId: string;
 } | null {
   const prefix = `${provider}:`;
@@ -934,7 +1225,9 @@ function readSourceIdentity(
     (
       objectType !== "issue" &&
       objectType !== "pull_request" &&
-      objectType !== "check"
+      objectType !== "check" &&
+      objectType !==
+        "pull_request_review"
     )
   ) {
     return null;

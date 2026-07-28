@@ -18,6 +18,8 @@ import {
   digestCanonicalJson
 } from "../lib/canonical-json.ts";
 import {
+  deriveGitHubCheckSourceRevision,
+  deriveGitHubDeliveryEventId,
   digestProviderFactContent
 } from "../lib/provider-snapshot.ts";
 import type {
@@ -29,6 +31,8 @@ import type {
   ProviderObjectType,
   ProviderPullRequestFact,
   ProviderPullRequestObservation,
+  ProviderPullRequestReviewFact,
+  ProviderPullRequestReviewObservation,
   ProviderRevision,
   ProviderSnapshotMapping,
   ProviderSourceObject
@@ -144,6 +148,7 @@ const ID_LIMIT = 256;
 const PROVIDER_ID_LIMIT = 512;
 const EVIDENCE_LIMIT = 64;
 const EVIDENCE_KEY_LIMIT = 128;
+const DELIVERY_EVIDENCE_BINDING_LIMIT = 7;
 const MANAGED_FIELD_LIMIT = 8;
 const CANDIDATE_EVENT_TYPES = new Set<
   CandidateEventEnvelope["type"]
@@ -559,7 +564,10 @@ function normalizeMapping(
         "attemptId",
         "artifactId",
         "artifactRevision",
-        "criterionKey"
+        "criterionKey",
+        "deliveryBindingDigest",
+        "pullRequestNumber",
+        "evidenceBindings"
       ]
     ) ||
     !isBoundedString(mapping.workItemId, ID_LIMIT)
@@ -630,7 +638,203 @@ function normalizeMapping(
     normalized.criterionKey = mapping.criterionKey;
   }
 
+  const hasDeliveryBinding =
+    mapping.deliveryBindingDigest !==
+      undefined ||
+    mapping.evidenceBindings !== undefined;
+
+  if (
+    hasDeliveryBinding &&
+    (
+      !isDigest(
+        mapping.deliveryBindingDigest
+      ) ||
+      !Array.isArray(
+        mapping.evidenceBindings
+      ) ||
+      mapping.evidenceBindings.length >
+        DELIVERY_EVIDENCE_BINDING_LIMIT ||
+      mapping.criterionKey !== undefined ||
+      !isBoundedString(
+        normalized.attemptId,
+        ID_LIMIT
+      ) ||
+      !isBoundedString(
+        normalized.artifactId,
+        ID_LIMIT
+      ) ||
+      !isBoundedString(
+        normalized.artifactRevision,
+        ID_LIMIT
+      ) ||
+      typeof mapping.pullRequestNumber !==
+        "number" ||
+      !Number.isSafeInteger(
+        mapping.pullRequestNumber
+      ) ||
+      mapping.pullRequestNumber <= 0
+    )
+  ) {
+    throw snapshotInvalid();
+  }
+
+  if (hasDeliveryBinding) {
+    const evidenceBindings =
+      normalizeDeliveryEvidenceBindings({
+        value:
+          mapping.evidenceBindings as unknown[],
+        requiredEvidence
+      });
+    normalized.deliveryBindingDigest =
+      mapping.deliveryBindingDigest as string;
+    normalized.pullRequestNumber =
+      mapping.pullRequestNumber as number;
+    normalized.evidenceBindings =
+      evidenceBindings;
+  }
+
   return normalized;
+}
+
+function normalizeDeliveryEvidenceBindings({
+  value,
+  requiredEvidence
+}: {
+  value: unknown[];
+  requiredEvidence: readonly string[];
+}): NonNullable<
+  ProviderSnapshotMapping["evidenceBindings"]
+> {
+  const bindings = value.map(
+    (candidate) => {
+      if (
+        !isPlainRecord(candidate) ||
+        !hasExactKeys(candidate, [
+          "providerObjectKey",
+          "criterionKey",
+          "source"
+        ]) ||
+        !isBoundedString(
+          candidate.providerObjectKey,
+          PROVIDER_ID_LIMIT
+        ) ||
+        !isBoundedString(
+          candidate.criterionKey,
+          EVIDENCE_KEY_LIMIT
+        ) ||
+        !requiredEvidence.includes(
+          candidate.criterionKey
+        )
+      ) {
+        throw snapshotInvalid();
+      }
+
+      const source =
+        normalizeDeliveryEvidenceSource(
+          candidate.source
+        );
+      return {
+        providerObjectKey:
+          candidate.providerObjectKey,
+        criterionKey:
+          candidate.criterionKey,
+        source
+      };
+    }
+  );
+  const sourceKeys = bindings.map(
+    (binding) =>
+      binding.providerObjectKey
+  );
+  const criterionKeys = bindings.map(
+    (binding) => binding.criterionKey
+  );
+
+  if (
+    new Set(sourceKeys).size !==
+      sourceKeys.length ||
+    new Set(criterionKeys).size !==
+      criterionKeys.length
+  ) {
+    throw snapshotInvalid();
+  }
+
+  return bindings.sort(
+    (left, right) =>
+      compareStrings(
+        left.providerObjectKey,
+        right.providerObjectKey
+      )
+  );
+}
+
+function normalizeDeliveryEvidenceSource(
+  value: unknown
+): NonNullable<
+  ProviderSnapshotMapping["evidenceBindings"]
+>[number]["source"] {
+  if (!isPlainRecord(value)) {
+    throw snapshotInvalid();
+  }
+
+  if (
+    value.kind === "check_run" &&
+    hasAllowedAndRequiredKeys(
+      value,
+      ["kind", "name"],
+      ["appId"]
+    ) &&
+    isBoundedString(
+      value.name,
+      ID_LIMIT
+    ) &&
+    value.name === value.name.trim() &&
+    (
+      value.appId === undefined ||
+      (
+        isBoundedString(
+          value.appId,
+          ID_LIMIT
+        ) &&
+        /^[1-9]\d*$/.test(
+          value.appId
+        )
+      )
+    )
+  ) {
+    return {
+      kind: "check_run",
+      name: value.name,
+      ...(value.appId === undefined
+        ? {}
+        : { appId: value.appId })
+    };
+  }
+
+  if (
+    value.kind ===
+      "pull_request_review" &&
+    hasExactKeys(value, [
+      "kind",
+      "reviewerId"
+    ]) &&
+    isBoundedString(
+      value.reviewerId,
+      ID_LIMIT
+    ) &&
+    /^[1-9]\d*$/.test(
+      value.reviewerId
+    )
+  ) {
+    return {
+      kind:
+        "pull_request_review",
+      reviewerId:
+        value.reviewerId
+    };
+  }
+
+  throw snapshotInvalid();
 }
 
 function normalizeUniqueStrings(value: unknown, {
@@ -762,7 +966,27 @@ function normalizeFact({
       objectType: "check"
     };
     const observed =
-      normalizeCheckObservation(fact.observed);
+      normalizeCheckObservation(
+        fact.observed,
+        mapping.deliveryBindingDigest !==
+          undefined
+      );
+    if (
+      mapping.deliveryBindingDigest !==
+        undefined &&
+      revision.id !==
+        deriveGitHubCheckSourceRevision({
+          completedAt:
+            revision.occurredAt,
+          name: observed.name!,
+          appId: observed.appId!,
+          pullRequestRevisionId:
+            observed
+              .pullRequestRevisionId!
+        })
+    ) {
+      throw snapshotInvalid();
+    }
     return verifyFactDigest({
       sourceObject: checkSource,
       revision,
@@ -774,6 +998,39 @@ function normalizeFact({
         observed,
         mapping
       })
+    });
+  }
+
+  if (
+    sourceObject.provider === "github" &&
+    sourceObject.objectType ===
+      "pull_request_review"
+  ) {
+    const reviewSource:
+      ProviderPullRequestReviewFact["sourceObject"] = {
+      ...sourceObject,
+      provider: "github",
+      objectType:
+        "pull_request_review"
+    };
+    const observed =
+      normalizePullRequestReviewObservation(
+        fact.observed
+      );
+    return verifyFactDigest({
+      sourceObject: reviewSource,
+      revision,
+      observed,
+      candidateEvent:
+        normalizeEvidenceCandidate({
+          event:
+            fact.candidateEvent,
+          sourceObject:
+            reviewSource,
+          revision,
+          observed,
+          mapping
+        })
     });
   }
 
@@ -964,9 +1221,45 @@ function normalizePullRequestObservation(
 }
 
 function normalizeCheckObservation(
-  value: unknown
+  value: unknown,
+  deliveryBound: boolean
 ): ProviderCheckObservation {
   if (
+    deliveryBound &&
+    isPlainRecord(value) &&
+    hasExactKeys(value, [
+      "headRevision",
+      "outcome",
+      "name",
+      "appId",
+      "pullRequestRevisionId"
+    ]) &&
+    isBoundedString(value.headRevision, ID_LIMIT) &&
+    isEvidenceOutcome(value.outcome) &&
+    isBoundedString(value.name, ID_LIMIT) &&
+    value.name === value.name.trim() &&
+    isBoundedString(value.appId, ID_LIMIT) &&
+    /^[1-9]\d*$/.test(value.appId) &&
+    isBoundedString(
+      value.pullRequestRevisionId,
+      ID_LIMIT
+    ) &&
+    isTimestamp(
+      value.pullRequestRevisionId
+    )
+  ) {
+    return {
+      headRevision: value.headRevision,
+      outcome: value.outcome,
+      name: value.name,
+      appId: value.appId,
+      pullRequestRevisionId:
+        value.pullRequestRevisionId
+    };
+  }
+
+  if (
+    !deliveryBound &&
     isPlainRecord(value) &&
     hasExactKeys(value, ["headRevision", "outcome"]) &&
     isBoundedString(value.headRevision, ID_LIMIT) &&
@@ -974,6 +1267,54 @@ function normalizeCheckObservation(
   ) {
     return {
       headRevision: value.headRevision,
+      outcome: value.outcome
+    };
+  }
+
+  throw snapshotInvalid();
+}
+
+function normalizePullRequestReviewObservation(
+  value: unknown
+): ProviderPullRequestReviewObservation {
+  if (
+    isPlainRecord(value) &&
+    hasExactKeys(value, [
+      "headRevision",
+      "reviewerId",
+      "state",
+      "outcome"
+    ]) &&
+    isBoundedString(
+      value.headRevision,
+      ID_LIMIT
+    ) &&
+    isBoundedString(
+      value.reviewerId,
+      ID_LIMIT
+    ) &&
+    /^[1-9]\d*$/.test(
+      value.reviewerId
+    ) &&
+    (
+      value.state === "approved" ||
+      value.state ===
+        "changes_requested" ||
+      value.state === "dismissed"
+    ) &&
+    isEvidenceOutcome(value.outcome) &&
+    value.outcome ===
+      (
+        value.state === "approved"
+          ? "passed"
+          : "failed"
+      )
+  ) {
+    return {
+      headRevision:
+        value.headRevision,
+      reviewerId: value.reviewerId,
+      state: value.state,
       outcome: value.outcome
     };
   }
@@ -1155,17 +1496,43 @@ function normalizeArtifactCandidate({
   observed: ProviderPullRequestObservation;
   mapping: ProviderSnapshotMapping;
 }): ArtifactLinkedEvent {
+  const expectedEventId =
+    mapping.deliveryBindingDigest ===
+    undefined
+      ? [
+          "github",
+          `pr-${sourceObject.externalId}`,
+          observed.headRevision,
+          revision.occurredAt
+        ].join(":")
+      : deriveGitHubDeliveryEventId({
+          deliveryBindingDigest:
+            mapping.deliveryBindingDigest,
+          workItemId:
+            mapping.workItemId,
+          attemptId:
+            requireDeliveryMappingValue(
+              mapping.attemptId
+            ),
+          artifactId:
+            requireDeliveryMappingValue(
+              mapping.artifactId
+            ),
+          artifactRevision:
+            requireDeliveryMappingValue(
+              mapping.artifactRevision
+            ),
+          sourceObjectKey:
+            sourceObject.providerObjectKey,
+          sourceRevisionId:
+            observed.headRevision
+        });
   const candidate = normalizeCandidateEventEnvelope({
     event,
     mapping,
     expectedType: "artifact.linked",
     expectedOccurredAt: revision.occurredAt,
-    expectedEventId: [
-      "github",
-      `pr-${sourceObject.externalId}`,
-      observed.headRevision,
-      revision.occurredAt
-    ].join(":")
+    expectedEventId
   });
   const payload = candidate.payload;
 
@@ -1193,7 +1560,13 @@ function normalizeArtifactCandidate({
     !isBoundedString(payload.revision, ID_LIMIT) ||
     payload.revision !== observed.headRevision ||
     payload.revision !== mapping.artifactRevision ||
-    payload.url !== sourceObject.url
+    payload.url !== sourceObject.url ||
+    (mapping.deliveryBindingDigest !== undefined &&
+      !isMappedGitHubPullRequestUrl({
+        value: sourceObject.url,
+        pullRequestNumber:
+          mapping.pullRequestNumber
+      }))
   ) {
     throw snapshotInvalid();
   }
@@ -1221,21 +1594,80 @@ function normalizeEvidenceCandidate({
   mapping
 }: {
   event: unknown;
-  sourceObject: ProviderCheckFact["sourceObject"];
+  sourceObject:
+    | ProviderCheckFact["sourceObject"]
+    | ProviderPullRequestReviewFact["sourceObject"];
   revision: ProviderRevision;
-  observed: ProviderCheckObservation;
+  observed:
+    | ProviderCheckObservation
+    | ProviderPullRequestReviewObservation;
   mapping: ProviderSnapshotMapping;
 }): EvidenceRecordedEvent {
+  const criterionKey =
+    resolveEvidenceCriterion({
+      mapping,
+      sourceObjectKey:
+        sourceObject.providerObjectKey
+    });
+  const evidencePrefix =
+    sourceObject.objectType === "check"
+      ? "check"
+      : "review";
+  const reviewObserved =
+    sourceObject.objectType ===
+      "pull_request_review" &&
+    "reviewerId" in observed &&
+    "state" in observed
+      ? observed
+      : null;
+  const evidenceId =
+    sourceObject.objectType === "check"
+      ? mapping.deliveryBindingDigest ===
+        undefined
+        ? `${evidencePrefix}-${sourceObject.externalId}`
+        : `${evidencePrefix}-${sourceObject.externalId}:pr-${mapping.pullRequestNumber}`
+      : [
+          `review-${sourceObject.externalId}`,
+          `reviewer-${reviewObserved?.reviewerId ?? ""}`,
+          reviewObserved?.state ?? ""
+        ].join(":");
+  const expectedEventId =
+    mapping.deliveryBindingDigest ===
+    undefined
+      ? [
+          "github",
+          evidenceId,
+          observed.headRevision
+        ].join(":")
+      : deriveGitHubDeliveryEventId({
+          deliveryBindingDigest:
+            mapping.deliveryBindingDigest,
+          workItemId:
+            mapping.workItemId,
+          attemptId:
+            requireDeliveryMappingValue(
+              mapping.attemptId
+            ),
+          artifactId:
+            requireDeliveryMappingValue(
+              mapping.artifactId
+            ),
+          artifactRevision:
+            requireDeliveryMappingValue(
+              mapping.artifactRevision
+            ),
+          sourceObjectKey:
+            sourceObject.providerObjectKey,
+          sourceRevisionId:
+            revision.id,
+          criterionKey
+        });
   const candidate = normalizeCandidateEventEnvelope({
     event,
     mapping,
     expectedType: "evidence.recorded",
     expectedOccurredAt: revision.occurredAt,
-    expectedEventId: [
-      "github",
-      `check-${sourceObject.externalId}`,
-      observed.headRevision
-    ].join(":")
+    expectedEventId
   });
   const payload = candidate.payload;
 
@@ -1247,7 +1679,7 @@ function normalizeEvidenceCandidate({
       ID_LIMIT
     ) ||
     !isBoundedString(
-      mapping.criterionKey,
+      criterionKey,
       EVIDENCE_KEY_LIMIT
     ) ||
     !isPlainRecord(payload) ||
@@ -1261,19 +1693,32 @@ function normalizeEvidenceCandidate({
       "url"
     ]) ||
     !isBoundedString(payload.evidenceId, ID_LIMIT) ||
-    payload.evidenceId !==
-      `check-${sourceObject.externalId}` ||
+    payload.evidenceId !== evidenceId ||
     payload.attemptId !== mapping.attemptId ||
     !isBoundedString(payload.artifactId, ID_LIMIT) ||
     payload.artifactId !== mapping.artifactId ||
     !isBoundedString(payload.revision, ID_LIMIT) ||
     payload.revision !== observed.headRevision ||
     payload.revision !== mapping.artifactRevision ||
-    payload.criterionKey !== mapping.criterionKey ||
+    payload.criterionKey !== criterionKey ||
     !mapping.requiredEvidence.includes(payload.criterionKey) ||
     !isEvidenceOutcome(payload.outcome) ||
     payload.outcome !== observed.outcome ||
-    payload.url !== sourceObject.url
+    payload.url !== sourceObject.url ||
+    !deliveryEvidenceSelectorMatches({
+      mapping,
+      sourceObject,
+      observed
+    }) ||
+    (mapping.deliveryBindingDigest !== undefined &&
+      sourceObject.objectType ===
+        "pull_request_review" &&
+      !isMappedGitHubPullRequestUrl({
+        value: sourceObject.url,
+        pullRequestNumber:
+          mapping.pullRequestNumber,
+        reviewId: sourceObject.externalId
+      }))
   ) {
     throw snapshotInvalid();
   }
@@ -1293,6 +1738,159 @@ function normalizeEvidenceCandidate({
       url: sourceObject.url
     }
   };
+}
+
+function deliveryEvidenceSelectorMatches({
+  mapping,
+  sourceObject,
+  observed
+}: {
+  mapping: ProviderSnapshotMapping;
+  sourceObject:
+    | ProviderCheckFact["sourceObject"]
+    | ProviderPullRequestReviewFact["sourceObject"];
+  observed:
+    | ProviderCheckObservation
+    | ProviderPullRequestReviewObservation;
+}): boolean {
+  if (
+    mapping.deliveryBindingDigest ===
+    undefined
+  ) {
+    return true;
+  }
+
+  const binding =
+    mapping.evidenceBindings?.find(
+      (candidate) =>
+        candidate.providerObjectKey ===
+        sourceObject.providerObjectKey
+    );
+
+  if (
+    sourceObject.objectType === "check"
+  ) {
+    if (
+      !("name" in observed) ||
+      !("appId" in observed)
+    ) {
+      return false;
+    }
+
+    return (
+      binding?.source.kind ===
+        "check_run" &&
+      typeof observed.name === "string" &&
+      typeof observed.appId === "string" &&
+      observed.name ===
+        binding.source.name &&
+      (
+        binding.source.appId ===
+          undefined ||
+        observed.appId ===
+          binding.source.appId
+      )
+    );
+  }
+
+  return (
+    binding?.source.kind ===
+      "pull_request_review" &&
+    "reviewerId" in observed &&
+    observed.reviewerId ===
+      binding.source.reviewerId
+  );
+}
+
+function isMappedGitHubPullRequestUrl({
+  value,
+  pullRequestNumber,
+  reviewId
+}: {
+  value: string;
+  pullRequestNumber: number | undefined;
+  reviewId?: string;
+}): boolean {
+  if (
+    !Number.isSafeInteger(pullRequestNumber) ||
+    (pullRequestNumber ?? 0) <= 0
+  ) {
+    return false;
+  }
+
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+
+  const parts = url.pathname.split("/");
+  const pullRequestMatches =
+    url.protocol === "https:" &&
+    url.hostname.toLowerCase() === "github.com" &&
+    !url.username &&
+    !url.password &&
+    !url.port &&
+    !url.search &&
+    parts.length === 5 &&
+    parts[0] === "" &&
+    typeof parts[1] === "string" &&
+    parts[1].length > 0 &&
+    typeof parts[2] === "string" &&
+    parts[2].length > 0 &&
+    parts[3] === "pull" &&
+    parts[4] === String(pullRequestNumber);
+
+  if (!pullRequestMatches) {
+    return false;
+  }
+
+  return reviewId === undefined
+    ? !url.hash
+    : /^[1-9]\d*$/.test(reviewId) &&
+        url.hash ===
+          `#pullrequestreview-${reviewId}`;
+}
+
+function resolveEvidenceCriterion({
+  mapping,
+  sourceObjectKey
+}: {
+  mapping: ProviderSnapshotMapping;
+  sourceObjectKey: string;
+}): string {
+  if (
+    mapping.deliveryBindingDigest ===
+    undefined
+  ) {
+    return requireDeliveryMappingValue(
+      mapping.criterionKey
+    );
+  }
+
+  const binding =
+    mapping.evidenceBindings?.find(
+      (candidate) =>
+        candidate.providerObjectKey ===
+        sourceObjectKey
+    );
+
+  return requireDeliveryMappingValue(
+    binding?.criterionKey
+  );
+}
+
+function requireDeliveryMappingValue(
+  value: string | undefined
+): string {
+  if (
+    !isBoundedString(value, ID_LIMIT)
+  ) {
+    throw snapshotInvalid();
+  }
+
+  return value;
 }
 
 function normalizeGiteeScopeRef(
@@ -1374,7 +1972,14 @@ function normalizeProviderUrl({
     parsed.password ||
     parsed.port ||
     parsed.search ||
-    parsed.hash
+    (
+      parsed.hash &&
+      !(
+        provider === "github" &&
+        objectType ===
+          "pull_request_review"
+      )
+    )
   ) {
     throw snapshotInvalid();
   }
@@ -1410,10 +2015,21 @@ function normalizeProviderUrl({
         pathSegments[2] === expectedSegment &&
         typeof objectNumber === "string" &&
         /^\d+$/.test(objectNumber)
-      : objectType === "check" &&
-        pathSegments.length >= 4 &&
-        matchesRepository &&
-        pathSegments[2] === "actions";
+      : objectType === "check"
+        ? pathSegments.length >= 4 &&
+          matchesRepository &&
+          pathSegments[2] === "actions" &&
+          parsed.hash === ""
+        : objectType ===
+              "pull_request_review" &&
+            pathSegments.length === 4 &&
+            matchesRepository &&
+            pathSegments[2] === "pull" &&
+            typeof objectNumber ===
+              "string" &&
+            /^\d+$/.test(objectNumber) &&
+            parsed.hash ===
+              `#pullrequestreview-${externalId}`;
 
     if (
       parsed.hostname.toLowerCase() !== "github.com" ||
@@ -1532,7 +2148,10 @@ function planCandidateFact({
   snapshot,
   workflow
 }: {
-  fact: ProviderPullRequestFact | ProviderCheckFact;
+  fact:
+    | ProviderPullRequestFact
+    | ProviderCheckFact
+    | ProviderPullRequestReviewFact;
   snapshot: AuthorizedSnapshot;
   workflow: Workflow;
 }): PlanningResult {
@@ -2400,10 +3019,15 @@ function isProviderIssueFact(
 
 function isDeliveryFact(
   fact: ProviderFact
-): fact is ProviderPullRequestFact | ProviderCheckFact {
+): fact is
+  | ProviderPullRequestFact
+  | ProviderCheckFact
+  | ProviderPullRequestReviewFact {
   return (
     fact.sourceObject.objectType === "pull_request" ||
-    fact.sourceObject.objectType === "check"
+    fact.sourceObject.objectType === "check" ||
+    fact.sourceObject.objectType ===
+      "pull_request_review"
   );
 }
 
@@ -2433,7 +3057,8 @@ function isProviderObjectType(
   return (
     value === "issue" ||
     value === "pull_request" ||
-    value === "check"
+    value === "check" ||
+    value === "pull_request_review"
   );
 }
 

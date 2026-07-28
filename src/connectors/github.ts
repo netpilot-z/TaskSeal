@@ -1,10 +1,15 @@
 import {
+  deriveGitHubCheckSourceRevision,
+  deriveGitHubDeliveryEventId,
+  deriveGitHubReviewSourceRevision,
   digestProviderFactContent
 } from "../lib/provider-snapshot.ts";
 import type {
   ProviderCheckFact,
   ProviderIssueFact,
-  ProviderPullRequestFact
+  ProviderPullRequestFact,
+  ProviderPullRequestReviewFact,
+  ProviderPullRequestReviewState
 } from "../lib/provider-snapshot.ts";
 import type {
   ArtifactLinkedEvent,
@@ -31,6 +36,8 @@ interface GitHubPullRequestDto {
 
 interface GitHubCheckDto {
   id: string | number;
+  name: string | null;
+  appId: string | null;
   headSha: string;
   detailsUrl: string;
   completedAt: string;
@@ -46,6 +53,9 @@ interface GitHubIssueMapping {
 interface GitHubPullRequestMapping {
   workItemId: string;
   attemptId: string;
+  deliveryBindingDigest?:
+    | string
+    | undefined;
 }
 
 interface GitHubCheckMapping {
@@ -53,6 +63,32 @@ interface GitHubCheckMapping {
   attemptId: string;
   artifactId: string;
   criterionKey: string;
+  deliveryBindingDigest?:
+    | string
+    | undefined;
+  pullRequestNumber?:
+    | number
+    | undefined;
+  checkName?: string | undefined;
+  checkAppId?: string | undefined;
+  pullRequestRevisionId?:
+    | string
+    | undefined;
+}
+
+interface GitHubPullRequestReviewMapping
+  extends GitHubCheckMapping {
+  reviewerId: string;
+}
+
+interface GitHubPullRequestReviewDto {
+  id: string | number;
+  htmlUrl: string;
+  state: ProviderPullRequestReviewState;
+  reviewerId: string;
+  submittedAt: string;
+  headSha: string;
+  pullRequestUpdatedAt: string;
 }
 
 export function normalizeGitHubIssue(
@@ -204,6 +240,11 @@ export function normalizeGitHubCheckFact(
     normalizedCheck,
     normalizedMapping
   );
+  const sourceRevisionId =
+    getCheckSourceRevision({
+      check: normalizedCheck,
+      mapping: normalizedMapping
+    });
   const fact: ProviderCheckFact = {
     sourceObject: {
       providerObjectKey:
@@ -214,7 +255,7 @@ export function normalizeGitHubCheckFact(
       url: normalizedCheck.detailsUrl
     },
     revision: {
-      id: normalizedCheck.completedAt,
+      id: sourceRevisionId,
       occurredAt: normalizedCheck.completedAt,
       contentDigest: ""
     },
@@ -223,10 +264,92 @@ export function normalizeGitHubCheckFact(
       outcome:
         normalizedCheck.conclusion === "success"
           ? "passed"
-          : "failed"
+          : "failed",
+      ...(normalizedMapping
+        .deliveryBindingDigest ===
+      undefined
+        ? {}
+        : {
+            name:
+              normalizedCheck.name!,
+            appId:
+              normalizedCheck.appId!,
+            pullRequestRevisionId:
+              normalizedMapping
+                .pullRequestRevisionId!
+          })
     },
     candidateEvent
   };
+
+  fact.revision.contentDigest =
+    digestProviderFactContent(fact);
+  return fact;
+}
+
+export function normalizeGitHubPullRequestReviewFact(
+  review: unknown,
+  pullRequest: unknown,
+  mapping?: unknown
+): ProviderPullRequestReviewFact {
+  const normalizedMapping =
+    normalizePullRequestReviewMapping(
+      mapping
+    );
+  const normalizedReview =
+    normalizePullRequestReviewDto({
+      review,
+      pullRequest,
+      reviewerId:
+        normalizedMapping.reviewerId
+    });
+  const candidateEvent =
+    createPullRequestReviewEvent(
+      normalizedReview,
+      normalizedMapping
+    );
+  const sourceObject:
+    ProviderPullRequestReviewFact["sourceObject"] = {
+      providerObjectKey:
+        `github:pull_request_review:${normalizedReview.id}`,
+      provider: "github",
+      objectType:
+        "pull_request_review",
+      externalId:
+        String(normalizedReview.id),
+      url: normalizedReview.htmlUrl
+    };
+  const observed:
+    ProviderPullRequestReviewFact["observed"] = {
+      headRevision:
+        normalizedReview.headSha,
+      reviewerId:
+        normalizedReview.reviewerId,
+      state: normalizedReview.state,
+      outcome:
+        normalizedReview.state ===
+        "approved"
+          ? "passed"
+          : "failed"
+    };
+  const fact:
+    ProviderPullRequestReviewFact = {
+      sourceObject,
+      revision: {
+        id:
+          deriveGitHubReviewSourceRevision({
+            pullRequestUpdatedAt:
+              normalizedReview.pullRequestUpdatedAt,
+            state:
+              normalizedReview.state
+          }),
+        occurredAt:
+          normalizedReview.pullRequestUpdatedAt,
+        contentDigest: ""
+      },
+      observed,
+      candidateEvent
+    };
 
   fact.revision.contentDigest =
     digestProviderFactContent(fact);
@@ -259,10 +382,28 @@ function createPullRequestEvent(
   mapping: GitHubPullRequestMapping
 ): ArtifactLinkedEvent {
   const artifactId = `pr-${pullRequest.id}`;
+  const sourceObjectKey =
+    `github:pull_request:${pullRequest.id}`;
 
   return {
     eventId:
-      `github:${artifactId}:${pullRequest.headSha}:${pullRequest.updatedAt}`,
+      mapping.deliveryBindingDigest ===
+      undefined
+        ? `github:${artifactId}:${pullRequest.headSha}:${pullRequest.updatedAt}`
+        : deriveGitHubDeliveryEventId({
+            deliveryBindingDigest:
+              mapping.deliveryBindingDigest,
+            workItemId:
+              mapping.workItemId,
+            attemptId:
+              mapping.attemptId,
+            artifactId,
+            artifactRevision:
+              pullRequest.headSha,
+            sourceObjectKey,
+            sourceRevisionId:
+              pullRequest.headSha
+          }),
     workItemId: mapping.workItemId,
     type: "artifact.linked",
     occurredAt: pullRequest.updatedAt,
@@ -280,10 +421,40 @@ function createCheckEvent(
   check: GitHubCheckDto,
   mapping: GitHubCheckMapping
 ): EvidenceRecordedEvent {
-  const evidenceId = `check-${check.id}`;
+  const evidenceId =
+    mapping.deliveryBindingDigest ===
+    undefined
+      ? `check-${check.id}`
+      : `check-${check.id}:pr-${mapping.pullRequestNumber}`;
+  const sourceObjectKey =
+    `github:check:${check.id}`;
+  const sourceRevisionId =
+    getCheckSourceRevision({
+      check,
+      mapping
+    });
 
   return {
-    eventId: `github:${evidenceId}:${check.headSha}`,
+    eventId:
+      mapping.deliveryBindingDigest ===
+      undefined
+        ? `github:${evidenceId}:${check.headSha}`
+        : deriveGitHubDeliveryEventId({
+            deliveryBindingDigest:
+              mapping.deliveryBindingDigest,
+            workItemId:
+              mapping.workItemId,
+            attemptId:
+              mapping.attemptId,
+            artifactId:
+              mapping.artifactId,
+            artifactRevision:
+              check.headSha,
+            sourceObjectKey,
+            sourceRevisionId,
+            criterionKey:
+              mapping.criterionKey
+          }),
     workItemId: mapping.workItemId,
     type: "evidence.recorded",
     occurredAt: check.completedAt,
@@ -298,6 +469,66 @@ function createCheckEvent(
           ? "passed"
           : "failed",
       url: check.detailsUrl
+    }
+  };
+}
+
+function createPullRequestReviewEvent(
+  review: GitHubPullRequestReviewDto,
+  mapping:
+    GitHubPullRequestReviewMapping
+): EvidenceRecordedEvent {
+  const evidenceId =
+    `review-${review.id}:reviewer-${review.reviewerId}:${review.state}`;
+  const sourceObjectKey =
+    `github:pull_request_review:${review.id}`;
+  const sourceRevisionId =
+    deriveGitHubReviewSourceRevision({
+      pullRequestUpdatedAt:
+        review.pullRequestUpdatedAt,
+      state: review.state
+    });
+
+  if (
+    mapping.deliveryBindingDigest ===
+    undefined
+  ) {
+    throw new TypeError(
+      "GitHub review evidence requires a delivery binding digest."
+    );
+  }
+
+  return {
+    eventId:
+      deriveGitHubDeliveryEventId({
+        deliveryBindingDigest:
+          mapping.deliveryBindingDigest,
+        workItemId: mapping.workItemId,
+        attemptId: mapping.attemptId,
+        artifactId: mapping.artifactId,
+        artifactRevision:
+          review.headSha,
+        sourceObjectKey,
+        sourceRevisionId,
+        criterionKey:
+          mapping.criterionKey
+      }),
+    workItemId: mapping.workItemId,
+    type: "evidence.recorded",
+    occurredAt:
+      review.pullRequestUpdatedAt,
+    payload: {
+      evidenceId,
+      attemptId: mapping.attemptId,
+      artifactId: mapping.artifactId,
+      revision: review.headSha,
+      criterionKey:
+        mapping.criterionKey,
+      outcome:
+        review.state === "approved"
+          ? "passed"
+          : "failed",
+      url: review.htmlUrl
     }
   };
 }
@@ -367,6 +598,12 @@ function normalizeCheckDto(
   check: unknown
 ): GitHubCheckDto {
   const id = readProperty(check, "id");
+  const name = readProperty(check, "name");
+  const app = readProperty(check, "app");
+  const appId =
+    app === null || app === undefined
+      ? null
+      : readProperty(app, "id");
   const headSha = readProperty(check, "head_sha");
   const detailsUrl = readProperty(
     check,
@@ -391,12 +628,162 @@ function normalizeCheckDto(
 
   return {
     id,
+    name:
+      typeof name === "string"
+        ? name
+        : null,
+    appId:
+      (
+        typeof appId === "string" ||
+        typeof appId === "number"
+      )
+        ? String(appId)
+        : null,
     headSha,
     detailsUrl,
     completedAt,
     status,
     conclusion
   };
+}
+
+function normalizePullRequestReviewDto({
+  review,
+  pullRequest,
+  reviewerId
+}: {
+  review: unknown;
+  pullRequest: unknown;
+  reviewerId: string;
+}): GitHubPullRequestReviewDto {
+  const id = readProperty(review, "id");
+  const htmlUrl = readProperty(
+    review,
+    "html_url"
+  );
+  const rawState = readProperty(
+    review,
+    "state"
+  );
+  const submittedAt = readProperty(
+    review,
+    "submitted_at"
+  );
+  const commitId = readProperty(
+    review,
+    "commit_id"
+  );
+  const actualReviewerId = readProperty(
+    readProperty(review, "user"),
+    "id"
+  );
+  const normalizedPullRequest =
+    normalizePullRequestDto(pullRequest);
+  const state =
+    normalizeReviewState(rawState);
+
+  requireIdentifier(id, "review id");
+  requireHttpUrl(
+    htmlUrl,
+    "review html_url"
+  );
+  requireString(
+    submittedAt,
+    "review submitted_at"
+  );
+  requireString(commitId, "review commit_id");
+  requireIdentifier(
+    actualReviewerId,
+    "review user.id"
+  );
+
+  if (
+    String(actualReviewerId) !==
+      reviewerId ||
+    commitId !==
+      normalizedPullRequest.headSha
+  ) {
+    throw new TypeError(
+      "GitHub review does not match the configured reviewer and pull request head."
+    );
+  }
+
+  return {
+    id,
+    htmlUrl,
+    state,
+    reviewerId,
+    submittedAt,
+    headSha:
+      normalizedPullRequest.headSha,
+    pullRequestUpdatedAt:
+      normalizedPullRequest.updatedAt
+  };
+}
+
+function getCheckSourceRevision({
+  check,
+  mapping
+}: {
+  check: GitHubCheckDto;
+  mapping: GitHubCheckMapping;
+}): string {
+  if (
+    mapping.deliveryBindingDigest ===
+    undefined
+  ) {
+    return check.completedAt;
+  }
+
+  if (
+    check.name === null ||
+    check.name.trim().length === 0 ||
+    check.name !== check.name.trim() ||
+    check.name.length > 256 ||
+    check.appId === null ||
+    !/^[1-9]\d*$/.test(check.appId) ||
+    check.appId.length > 32 ||
+    mapping.checkName === undefined ||
+    mapping.pullRequestRevisionId ===
+      undefined ||
+    check.name !== mapping.checkName ||
+    (
+      mapping.checkAppId !== undefined &&
+      check.appId !== mapping.checkAppId
+    )
+  ) {
+    throw new TypeError(
+      "GitHub delivery check requires exact selector and pull request revision identity."
+    );
+  }
+
+  return deriveGitHubCheckSourceRevision({
+    completedAt: check.completedAt,
+    name: check.name,
+    appId: check.appId,
+    pullRequestRevisionId:
+      mapping.pullRequestRevisionId
+  });
+}
+
+function normalizeReviewState(
+  value: unknown
+): ProviderPullRequestReviewState {
+  if (value === "APPROVED") {
+    return "approved";
+  }
+
+  if (value === "CHANGES_REQUESTED") {
+    return "changes_requested";
+  }
+
+  if (value === "DISMISSED") {
+    return "dismissed";
+  }
+
+  throw new TypeError(
+    "GitHub review state is not delivery evidence."
+  );
 }
 
 function normalizeIssueMapping(
@@ -431,13 +818,25 @@ function normalizePullRequestMapping(
     mapping,
     "attemptId"
   );
+  const deliveryBindingDigest =
+    readOptionalProperty(
+      mapping,
+      "deliveryBindingDigest"
+    );
 
   requireMappingString(workItemId, "workItemId");
   requireMappingString(attemptId, "attemptId");
-
+  requireOptionalDigest(
+    deliveryBindingDigest,
+    "deliveryBindingDigest"
+  );
   return {
     workItemId,
-    attemptId
+    attemptId,
+    ...(deliveryBindingDigest ===
+    undefined
+      ? {}
+      : { deliveryBindingDigest })
   };
 }
 
@@ -460,17 +859,155 @@ function normalizeCheckMapping(
     mapping,
     "criterionKey"
   );
+  const deliveryBindingDigest =
+    readOptionalProperty(
+      mapping,
+      "deliveryBindingDigest"
+    );
+  const pullRequestNumber =
+    readOptionalProperty(
+      mapping,
+      "pullRequestNumber"
+    );
+  const checkName =
+    readOptionalProperty(
+      mapping,
+      "checkName"
+    );
+  const checkAppId =
+    readOptionalProperty(
+      mapping,
+      "checkAppId"
+    );
+  const pullRequestRevisionId =
+    readOptionalProperty(
+      mapping,
+      "pullRequestRevisionId"
+    );
 
   requireMappingString(workItemId, "workItemId");
   requireMappingString(attemptId, "attemptId");
   requireMappingString(artifactId, "artifactId");
   requireMappingString(criterionKey, "criterionKey");
+  requireOptionalDigest(
+    deliveryBindingDigest,
+    "deliveryBindingDigest"
+  );
+  if (
+    deliveryBindingDigest !== undefined &&
+    (
+      typeof pullRequestNumber !==
+        "number" ||
+      !Number.isSafeInteger(
+        pullRequestNumber
+      ) ||
+      pullRequestNumber <= 0
+    )
+  ) {
+    throw new TypeError(
+      "GitHub mapping pullRequestNumber must be a positive integer for delivery evidence."
+    );
+  }
+
+  if (
+    checkName !== undefined &&
+    (
+      typeof checkName !== "string" ||
+      checkName.trim().length === 0 ||
+      checkName !== checkName.trim() ||
+      checkName.length > 256
+    )
+  ) {
+    throw new TypeError(
+      "GitHub mapping checkName is invalid."
+    );
+  }
+
+  if (
+    checkAppId !== undefined &&
+    (
+      typeof checkAppId !== "string" ||
+      !/^[1-9]\d*$/.test(checkAppId) ||
+      checkAppId.length > 32
+    )
+  ) {
+    throw new TypeError(
+      "GitHub mapping checkAppId is invalid."
+    );
+  }
+
+  if (
+    pullRequestRevisionId !==
+      undefined &&
+    (
+      typeof pullRequestRevisionId !==
+        "string" ||
+      pullRequestRevisionId.length === 0 ||
+      pullRequestRevisionId.length > 256 ||
+      !Number.isFinite(
+        Date.parse(
+          pullRequestRevisionId
+        )
+      )
+    )
+  ) {
+    throw new TypeError(
+      "GitHub mapping pullRequestRevisionId is invalid."
+    );
+  }
 
   return {
     workItemId,
     attemptId,
     artifactId,
-    criterionKey
+    criterionKey,
+    ...(deliveryBindingDigest ===
+    undefined
+      ? {}
+      : {
+          deliveryBindingDigest,
+          pullRequestNumber:
+            pullRequestNumber as number,
+          ...(checkName === undefined
+            ? {}
+            : { checkName }),
+          ...(checkAppId === undefined
+            ? {}
+            : { checkAppId }),
+          ...(pullRequestRevisionId ===
+          undefined
+            ? {}
+            : {
+                pullRequestRevisionId
+              })
+        })
+  };
+}
+
+function normalizePullRequestReviewMapping(
+  mapping: unknown
+): GitHubPullRequestReviewMapping {
+  const normalized =
+    normalizeCheckMapping(mapping);
+  const reviewerId =
+    readOptionalProperty(
+      mapping,
+      "reviewerId"
+    );
+
+  if (
+    typeof reviewerId !== "string" ||
+    !/^[1-9]\d*$/.test(reviewerId) ||
+    reviewerId.length > 32
+  ) {
+    throw new TypeError(
+      "GitHub mapping reviewerId must be a positive decimal identifier."
+    );
+  }
+
+  return {
+    ...normalized,
+    reviewerId
   };
 }
 
@@ -513,6 +1050,25 @@ function requireMappingString(
   ) {
     throw new TypeError(
       `GitHub mapping ${field} must be a non-empty string.`
+    );
+  }
+}
+
+function requireOptionalDigest(
+  value: unknown,
+  field: string
+): asserts value is string | undefined {
+  if (
+    value !== undefined &&
+    (
+      typeof value !== "string" ||
+      !/^sha256:[0-9a-f]{64}$/.test(
+        value
+      )
+    )
+  ) {
+    throw new TypeError(
+      `GitHub mapping ${field} must be a SHA-256 digest.`
     );
   }
 }
