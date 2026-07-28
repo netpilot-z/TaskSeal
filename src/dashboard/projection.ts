@@ -26,7 +26,18 @@ export interface DashboardWorkItem {
   id: string;
   title: string;
   status: WorkItemStatus;
-  progress: number;
+  progress: {
+    basis:
+      "acceptance-and-current-evidence";
+    accepted: boolean;
+    passedEvidence: number;
+    failedEvidence: number;
+    missingEvidence: number;
+    totalEvidence: number;
+    uncertainty:
+      | "verified"
+      | "incomplete";
+  };
   requiredEvidence: string[];
   activeAttempt: Attempt | null;
   activeArtifact: Artifact | null;
@@ -45,14 +56,6 @@ export interface DashboardProjection {
   summary: DashboardSummary;
   workItems: DashboardWorkItem[];
 }
-
-const PROGRESS_BY_STATUS: Readonly<Record<WorkItemStatus, number>> = {
-  planned: 20,
-  running: 45,
-  reviewing: 80,
-  blocked: 65,
-  accepted: 100
-};
 
 export function projectDashboard(
   workflow: Workflow
@@ -120,7 +123,11 @@ function projectWorkItem(
     id: workItem.id,
     title: workItem.title,
     status: workItem.status,
-    progress: PROGRESS_BY_STATUS[workItem.status],
+    progress:
+      projectDeliveryProgress(
+        workItem,
+        currentEvidence
+      ),
     requiredEvidence: workItem.requiredEvidence,
     activeAttempt,
     activeArtifact,
@@ -136,5 +143,65 @@ function projectWorkItem(
     acceptanceHistory:
       workItem.acceptanceHistory,
     externalLinks: workItem.externalLinks
+  };
+}
+
+function projectDeliveryProgress(
+  workItem: WorkItem,
+  currentEvidence: readonly Evidence[]
+): DashboardWorkItem["progress"] {
+  const latestByCriterion =
+    new Map<string, Evidence>();
+
+  for (const evidence of currentEvidence) {
+    if (
+      !workItem.requiredEvidence.includes(
+        evidence.criterionKey
+      )
+    ) {
+      continue;
+    }
+    const prior =
+      latestByCriterion.get(
+        evidence.criterionKey
+      );
+    if (
+      prior === undefined ||
+      Date.parse(evidence.recordedAt) >
+        Date.parse(prior.recordedAt)
+    ) {
+      latestByCriterion.set(
+        evidence.criterionKey,
+        evidence
+      );
+    }
+  }
+
+  let passedEvidence = 0;
+  let failedEvidence = 0;
+  for (const evidence of latestByCriterion.values()) {
+    if (evidence.outcome === "passed") {
+      passedEvidence += 1;
+    } else {
+      failedEvidence += 1;
+    }
+  }
+  const accepted =
+    workItem.status === "accepted";
+
+  return {
+    basis:
+      "acceptance-and-current-evidence",
+    accepted,
+    passedEvidence,
+    failedEvidence,
+    missingEvidence:
+      workItem.requiredEvidence.length -
+      latestByCriterion.size,
+    totalEvidence:
+      workItem.requiredEvidence.length,
+    uncertainty: accepted
+      ? "verified"
+      : "incomplete"
   };
 }

@@ -40,6 +40,22 @@ test("the local API exposes the workflow and can run the demo to acceptance", as
   assert.equal(pageResponse.status, 200);
   assert.match(page, /TaskSeal Control Room/);
   assert.match(page, /Provider operations/);
+  assert.match(
+    page,
+    /id="orchestration-panel"[\s\S]*aria-labelledby="orchestration-heading"/
+  );
+  assert.match(
+    page,
+    /id="orchestration-live-status"[\s\S]*role="status"/
+  );
+  assert.match(
+    page,
+    /id="orchestration-retirements"/
+  );
+  assert.match(
+    page,
+    /id="orchestration-retirement-count"/
+  );
   assert.match(page, /id="work-item-select"/);
   assert.match(page, /id="codex-cancel-button"/);
   assert.match(
@@ -92,6 +108,10 @@ test("the local API exposes the workflow and can run the demo to acceptance", as
   assert.match(
     appSource,
     /api\/provider-operations/
+  );
+  assert.match(
+    appSource,
+    /api\/decompositions/
   );
 
   const initialResponse = await fetch(`${baseUrl}/api/dashboard`);
@@ -258,6 +278,831 @@ test("persistent API exposes journal state and runs one work item asynchronously
     ),
     []
   );
+});
+
+test("persistent decomposition API previews, approves, dispatches, and blocks manual bypass", async (t) => {
+  const planDigest =
+    `sha256:${"9".repeat(64)}`;
+  const draft = {
+    planId: "PLAN-1"
+  };
+  const previewCalls: unknown[] = [];
+  const approvalCalls: unknown[] = [];
+  const dispatchCalls: unknown[] = [];
+  const retirementCalls: unknown[] = [];
+  let directRetirementCalls = 0;
+  let activePlan = true;
+  const retirementAudit: Array<{
+    recordType: "decomposition.retired";
+    schemaVersion: "1";
+    planId: string;
+    planDigest: string;
+    retiredBy: string;
+    retiredAt: string;
+    reasonCode: "operator_rollback";
+    note: string;
+  }> = [];
+  const runCalls: RunCallObservation[] = [];
+  const orchestration = {
+    planId: "PLAN-1",
+    planDigest,
+    rootWorkItemId: "ROOT-1",
+    approvedBy: "operator.test",
+    approvedAt: "2026-07-28T00:00:00.000Z",
+    progress: {
+      basis: "accepted-nodes",
+      acceptedNodes: 0,
+      totalNodes: 1,
+      uncertainNodes: 1
+    },
+    countsByPhase: {
+      unknown: 0,
+      waiting_dependencies: 0,
+      ready: 1,
+      running: 0,
+      awaiting_artifact: 0,
+      awaiting_evidence: 0,
+      awaiting_acceptance: 0,
+      retry_backoff: 0,
+      blocked: 0,
+      accepted: 0
+    },
+    queue: {
+      durability: "ephemeral",
+      limit: 4,
+      queuedCount: 1,
+      nodeIds: ["NODE-1"]
+    },
+    topologicalOrder: ["NODE-1"],
+    dispatch: {
+      maxParallelism: 1
+    },
+    activeNodeIds: [],
+    nodes: [
+      {
+        nodeId: "NODE-1",
+        workItemId: "TS-1",
+        phase: "ready",
+        dependsOn: [],
+        owner: {
+          runnerId: "codex-app-server",
+          profileRevision: planDigest,
+          match: "matched"
+        },
+        actualAgentId: null,
+        blockingReasons: [],
+        retry: {
+          attempts: 0,
+          maxAttempts: 2,
+          nextEligibleAt: null
+        },
+        evidence: {
+          passed: 0,
+          failed: 0,
+          missing: 1,
+          total: 1
+        },
+        attemptTrace: []
+      }
+    ]
+  } as const;
+  const decomposition = {
+    capabilities: {
+      preview: true,
+      approve: true,
+      dispatch: true,
+      retire: true
+    },
+    preview(value: unknown) {
+      previewCalls.push(value);
+      return {
+        planDigest,
+        plan: value
+      };
+    },
+    async approve(value: unknown) {
+      approvalCalls.push(value);
+      return {
+        resolution: "committed",
+        record: orchestration
+      };
+    },
+    async retire() {
+      directRetirementCalls += 1;
+      return {};
+    },
+    listRetirements() {
+      return retirementAudit;
+    },
+    assertManualRunAllowed() {},
+    assertAcceptanceAllowed() {},
+    createDispatcher({
+      attemptRuns,
+      execute
+    }: {
+      attemptRuns: {
+        start(input: {
+          workItemId: string;
+          execute(options: {
+            signal: AbortSignal;
+            terminalization: RunWorkItemOptions["terminalization"];
+          }): unknown;
+        }): {
+          execution: Promise<unknown>;
+        };
+      };
+      execute(options: {
+        workItemId: string;
+        runnerId: string;
+        instruction: string;
+        workspaceAccess: "read-only" | "workspace-write";
+        timeoutMs: number;
+        signal: AbortSignal;
+        terminalization: RunWorkItemOptions["terminalization"];
+      }): unknown;
+    }) {
+      return {
+        list() {
+          return activePlan
+            ? [orchestration]
+            : [];
+        },
+        assertManualRunAllowed(workItemId: string) {
+          if (workItemId === "TS-1") {
+            throw Object.assign(
+              new Error(
+                "Managed WorkItems must use decomposition dispatch."
+              ),
+              {
+                name:
+                  "DecompositionDispatcherError",
+                code:
+                  "DECOMPOSITION_MANAGED_WORK_ITEM"
+              }
+            );
+          }
+        },
+        startManualRun(input: {
+          workItemId: string;
+          execute(options: {
+            signal: AbortSignal;
+            terminalization: RunWorkItemOptions["terminalization"];
+          }): unknown;
+        }) {
+          this.assertManualRunAllowed(
+            input.workItemId
+          );
+          return attemptRuns.start(
+            input
+          );
+        },
+        async decideAcceptanceOnce<T>(
+          input: {
+            decide: () =>
+              T | Promise<T>;
+          }
+        ) {
+          return await input.decide();
+        },
+        dispatchOnce(value: unknown) {
+          dispatchCalls.push(value);
+          const run = attemptRuns.start({
+            workItemId: "TS-1",
+            execute: ({
+              signal,
+              terminalization
+            }) =>
+              execute({
+                workItemId: "TS-1",
+                runnerId:
+                  "codex-app-server",
+                instruction:
+                  "Implement the approved node.",
+                workspaceAccess:
+                  "workspace-write",
+                timeoutMs: 120_000,
+                signal,
+                terminalization
+              })
+          });
+          void run.execution.catch(() => {});
+          return {
+            startedNodeIds: ["NODE-1"],
+            queuedNodeIds: [],
+            projection: orchestration
+          };
+        },
+        retireOnce(value: {
+          planId: string;
+          expectedPlanDigest: string;
+          reasonCode:
+            "operator_rollback";
+          note: string;
+        }) {
+          retirementCalls.push(value);
+          const existing =
+            retirementAudit[0];
+          if (existing) {
+            return {
+              resolution:
+                "idempotent",
+              record: existing
+            };
+          }
+          const record = {
+            recordType:
+              "decomposition.retired" as const,
+            schemaVersion:
+              "1" as const,
+            planId: value.planId,
+            planDigest:
+              value.expectedPlanDigest,
+            retiredBy:
+              "operator.test",
+            retiredAt:
+              "2026-07-28T00:05:00.000Z",
+            reasonCode:
+              value.reasonCode,
+            note: value.note
+          };
+          activePlan = false;
+          retirementAudit.push(record);
+          return {
+            resolution: "committed",
+            record
+          };
+        }
+      };
+    }
+  };
+  const server = createTaskSealServer({
+    service:
+      createPersistentService(
+        () => "planned",
+        ["ROOT-1", "TS-1"]
+      ),
+    providerStatus: createProviderStatus(),
+    runWorkItem: async ({
+      signal,
+      terminalization,
+      ...options
+    }) => {
+      runCalls.push({
+        ...options,
+        hasAbortSignal:
+          signal instanceof AbortSignal,
+        hasTerminalization:
+          typeof terminalization.begin ===
+          "function"
+      });
+    },
+    ...({ decomposition } as object)
+  });
+  const baseUrl = await listen(server, t);
+  const initial: unknown = await (
+    await fetch(`${baseUrl}/api/dashboard`)
+  ).json();
+  const csrfToken = readJsonString(
+    initial,
+    "security",
+    "csrfToken"
+  );
+  const headers = {
+    "content-type": "application/json",
+    "x-taskseal-csrf-token": csrfToken
+  };
+
+  assert.equal(
+    readJsonPath(
+      initial,
+      "capabilities",
+      "previewDecomposition"
+    ),
+    true
+  );
+  assert.equal(
+    readJsonPath(
+      initial,
+      "capabilities",
+      "approveDecomposition"
+    ),
+    true
+  );
+  assert.equal(
+    readJsonPath(
+      initial,
+      "orchestration",
+      0,
+      "progress",
+      "basis"
+    ),
+    "accepted-nodes"
+  );
+
+  const unauthorized = await fetch(
+    `${baseUrl}/api/decompositions/preview`,
+    {
+      method: "POST",
+      headers: {
+        "content-type":
+          "application/json"
+      },
+      body: JSON.stringify({ draft })
+    }
+  );
+  assert.equal(unauthorized.status, 403);
+
+  const preview = await fetch(
+    `${baseUrl}/api/decompositions/preview`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ draft })
+    }
+  );
+  assert.equal(preview.status, 200);
+  assert.deepEqual(previewCalls, [draft]);
+
+  const injectedActor = await fetch(
+    `${baseUrl}/api/decompositions/approve`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        draft,
+        expectedPlanDigest: planDigest,
+        approvedBy: "attacker"
+      })
+    }
+  );
+  assert.equal(injectedActor.status, 400);
+  assert.deepEqual(approvalCalls, []);
+
+  const approval = await fetch(
+    `${baseUrl}/api/decompositions/approve`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        draft,
+        expectedPlanDigest: planDigest
+      })
+    }
+  );
+  assert.equal(approval.status, 200);
+  assert.deepEqual(approvalCalls, [
+    {
+      draft,
+      expectedPlanDigest: planDigest
+    }
+  ]);
+
+  const dispatch = await fetch(
+    `${baseUrl}/api/decompositions/PLAN-1/dispatch`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        expectedPlanDigest: planDigest
+      })
+    }
+  );
+  assert.equal(dispatch.status, 202);
+  assert.deepEqual(dispatchCalls, [
+    {
+      planId: "PLAN-1",
+      expectedPlanDigest: planDigest
+    }
+  ]);
+  assert.deepEqual(runCalls, [
+    {
+      workItemId: "TS-1",
+      runnerId:
+        "codex-app-server",
+      prompt:
+        "Implement the approved node.",
+      sandbox: "workspace-write",
+      timeoutMs: 120_000,
+      hasAbortSignal: true,
+      hasTerminalization: true
+    }
+  ]);
+
+  const bypass = await fetch(
+    `${baseUrl}/api/work-items/TS-1/run`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: "Bypass the plan."
+      })
+    }
+  );
+  const bypassFailure: unknown =
+    await bypass.json();
+  assert.equal(bypass.status, 409);
+  assert.equal(
+    readJsonPath(
+      bypassFailure,
+      "error"
+    ),
+    "DECOMPOSITION_MANAGED_WORK_ITEM"
+  );
+  assert.equal(runCalls.length, 1);
+
+  const injectedRetirementActor =
+    await fetch(
+      `${baseUrl}/api/decompositions/PLAN-1/retire`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          expectedPlanDigest:
+            planDigest,
+          reasonCode:
+            "operator_rollback",
+          note:
+            "Return to the reviewed serial workflow.",
+          retiredBy: "attacker"
+        })
+      }
+    );
+  assert.equal(
+    injectedRetirementActor.status,
+    400
+  );
+  assert.deepEqual(
+    retirementCalls,
+    []
+  );
+
+  const retirement = await fetch(
+    `${baseUrl}/api/decompositions/PLAN-1/retire`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        expectedPlanDigest: planDigest,
+        reasonCode:
+          "operator_rollback",
+        note:
+          "Return to the reviewed serial workflow."
+      })
+    }
+  );
+  assert.equal(retirement.status, 200);
+  assert.equal(
+    readJsonPath(
+      await retirement.json(),
+      "resolution"
+    ),
+    "committed"
+  );
+
+  const retirementRetry =
+    await fetch(
+      `${baseUrl}/api/decompositions/PLAN-1/retire`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          expectedPlanDigest:
+            planDigest,
+          reasonCode:
+            "operator_rollback",
+          note:
+            "Return to the reviewed serial workflow."
+        })
+      }
+    );
+  assert.equal(
+    retirementRetry.status,
+    200
+  );
+  assert.equal(
+    readJsonPath(
+      await retirementRetry.json(),
+      "resolution"
+    ),
+    "idempotent"
+  );
+  assert.equal(
+    directRetirementCalls,
+    0
+  );
+  assert.equal(
+    retirementCalls.length,
+    2
+  );
+
+  const retiredDashboard: unknown =
+    await (
+      await fetch(
+        `${baseUrl}/api/dashboard`
+      )
+    ).json();
+  assert.deepEqual(
+    readJsonPath(
+      retiredDashboard,
+      "orchestration"
+    ),
+    []
+  );
+  assert.equal(
+    readJsonPath(
+      retiredDashboard,
+      "decompositionRetirements",
+      0,
+      "retiredBy"
+    ),
+    "operator.test"
+  );
+});
+
+test("decomposition approval maps stale state to conflict and storage failure to a safe outage", async (t) => {
+  const decomposition = {
+    capabilities: {
+      preview: true,
+      approve: true,
+      dispatch: true,
+      retire: true
+    },
+    preview() {
+      return {};
+    },
+    async approve(input: {
+      draft: {
+        failure: string;
+      };
+    }) {
+      const code =
+        input.draft.failure ===
+          "stale"
+          ? "DECOMPOSITION_APPROVAL_STALE"
+          : "DECOMPOSITION_JOURNAL_WRITE_FAILED";
+      throw Object.assign(
+        new Error(
+          "raw storage detail must not leak"
+        ),
+        {
+          name:
+            "DecompositionPlanJournalError",
+          code
+        }
+      );
+    },
+    listRetirements() {
+      return [];
+    },
+    assertManualRunAllowed() {},
+    assertAcceptanceAllowed() {},
+    createDispatcher() {
+      return {
+        list() {
+          return [];
+        },
+        dispatchOnce() {
+          return {};
+        },
+        retireOnce() {
+          return {};
+        },
+        assertManualRunAllowed() {},
+        startManualRun() {
+          throw new Error(
+            "not called"
+          );
+        },
+        async decideAcceptanceOnce<T>(
+          input: {
+            decide: () =>
+              T | Promise<T>;
+          }
+        ) {
+          return await input.decide();
+        }
+      };
+    }
+  };
+  const server = createTaskSealServer({
+    service:
+      createPersistentService(
+        () => "planned"
+      ),
+    providerStatus:
+      createProviderStatus(),
+    runWorkItem: async () => {},
+    ...({ decomposition } as object)
+  });
+  const baseUrl = await listen(
+    server,
+    t
+  );
+  const dashboard: unknown =
+    await (
+      await fetch(
+        `${baseUrl}/api/dashboard`
+      )
+    ).json();
+  const headers = {
+    "content-type":
+      "application/json",
+    "x-taskseal-csrf-token":
+      readJsonString(
+        dashboard,
+        "security",
+        "csrfToken"
+      )
+  };
+
+  const stale = await fetch(
+    `${baseUrl}/api/decompositions/approve`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        draft: {
+          failure: "stale"
+        },
+        expectedPlanDigest:
+          `sha256:${"1".repeat(64)}`
+      })
+    }
+  );
+  const staleBody: unknown =
+    await stale.json();
+  assert.equal(stale.status, 409);
+  assert.equal(
+    readJsonPath(
+      staleBody,
+      "error"
+    ),
+    "DECOMPOSITION_APPROVAL_STALE"
+  );
+
+  const writeFailure = await fetch(
+    `${baseUrl}/api/decompositions/approve`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        draft: {
+          failure: "write"
+        },
+        expectedPlanDigest:
+          `sha256:${"2".repeat(64)}`
+      })
+    }
+  );
+  const failureBody: unknown =
+    await writeFailure.json();
+  assert.equal(
+    writeFailure.status,
+    503
+  );
+  assert.equal(
+    readJsonPath(
+      failureBody,
+      "error"
+    ),
+    "DECOMPOSITION_JOURNAL_WRITE_FAILED"
+  );
+  assert.doesNotMatch(
+    JSON.stringify(failureBody),
+    /raw storage detail/
+  );
+});
+
+test("persistent acceptance cannot accept a decomposition root before all nodes are accepted", async (t) => {
+  let decisions = 0;
+  const decomposition = {
+    capabilities: {
+      preview: true,
+      approve: true,
+      dispatch: true,
+      retire: true
+    },
+    preview() {
+      return {};
+    },
+    async approve() {
+      return {};
+    },
+    async retire() {
+      return {};
+    },
+    listRetirements() {
+      return [];
+    },
+    assertManualRunAllowed() {},
+    assertAcceptanceAllowed(
+      workItemId: string
+    ) {
+      if (workItemId === "ROOT-1") {
+        throw Object.assign(
+          new Error(
+            "The decomposition root is not ready."
+          ),
+          {
+            name:
+              "DecompositionDispatcherError",
+            code:
+              "DECOMPOSITION_ROOT_NOT_READY"
+          }
+        );
+      }
+    },
+    createDispatcher() {
+      return {
+        list() {
+          return [];
+        },
+        async decideAcceptanceOnce<T>(
+          input: {
+            workItemId: string;
+            decision:
+              | "accepted"
+              | "rejected";
+            decide: () =>
+              T | Promise<T>;
+          }
+        ) {
+          decomposition
+            .assertAcceptanceAllowed(
+              input.workItemId
+            );
+          return await input.decide();
+        },
+        dispatchOnce() {
+          return {};
+        },
+        assertManualRunAllowed() {}
+      };
+    }
+  };
+  const server = createTaskSealServer({
+    service:
+      createPersistentService(
+        () => "reviewing",
+        ["ROOT-1", "TS-1"]
+      ),
+    providerStatus:
+      createProviderStatus(),
+    acceptance: {
+      async decide() {
+        decisions += 1;
+        return {} as never;
+      },
+      async reconcile() {
+        return {
+          status: "disabled"
+        } as never;
+      }
+    },
+    acceptanceCapabilities: {
+      decideAcceptance: true,
+      linearTransition: false,
+      reconcileLinearTransition:
+        false
+    },
+    operatorId: "operator.test",
+    runWorkItem: async () => {},
+    ...({ decomposition } as object)
+  });
+  const baseUrl = await listen(server, t);
+  const dashboard: unknown = await (
+    await fetch(
+      `${baseUrl}/api/dashboard`
+    )
+  ).json();
+  const response = await fetch(
+    `${baseUrl}/api/work-items/ROOT-1/acceptance`,
+    {
+      method: "POST",
+      headers: {
+        "content-type":
+          "application/json",
+        "x-taskseal-csrf-token":
+          readJsonString(
+            dashboard,
+            "security",
+            "csrfToken"
+          )
+      },
+      body: JSON.stringify({
+        decisionId:
+          "00000000-0000-4000-8000-000000000009",
+        decision: "accepted",
+        reason:
+          "Do not accept before the graph completes.",
+        expectedReviewRevision:
+          `sha256:${"0".repeat(64)}`
+      })
+    }
+  );
+
+  assert.equal(response.status, 409);
+  assert.equal(decisions, 0);
 });
 
 test("persistent acceptance uses a server-owned capability and exposes local and Linear truth separately", async (t) => {
@@ -631,6 +1476,75 @@ test("persistent health keeps the established ok response while ready", async (t
   assert.deepEqual(await response.json(), {
     status: "ok"
   });
+});
+
+test("persistent health reports a fenced decomposition journal", async (t) => {
+  const decomposition = {
+    capabilities: {
+      preview: true,
+      approve: true,
+      dispatch: true,
+      retire: true
+    },
+    preview() {
+      return {};
+    },
+    async approve() {
+      return {};
+    },
+    async retire() {
+      return {};
+    },
+    listRetirements() {
+      return [];
+    },
+    assertManualRunAllowed() {},
+    assertAcceptanceAllowed() {},
+    getHealth() {
+      return {
+        status: "fenced",
+        code:
+          "DECOMPOSITION_COMMIT_OUTCOME_UNKNOWN"
+      };
+    },
+    createDispatcher() {
+      return {
+        list() {
+          return [];
+        },
+        dispatchOnce() {
+          return {};
+        },
+        assertManualRunAllowed() {}
+      };
+    }
+  };
+  const server = createTaskSealServer({
+    service:
+      createPersistentService(
+        () => "planned"
+      ),
+    providerStatus:
+      createProviderStatus(),
+    runWorkItem: async () => {},
+    ...({ decomposition } as object)
+  });
+  const baseUrl = await listen(server, t);
+  const response = await fetch(
+    `${baseUrl}/health`
+  );
+  const body: unknown =
+    await response.json();
+
+  assert.equal(response.status, 503);
+  assert.equal(
+    readJsonPath(body, "status"),
+    "fenced"
+  );
+  assert.equal(
+    readJsonPath(body, "code"),
+    "DECOMPOSITION_COMMIT_OUTCOME_UNKNOWN"
+  );
 });
 
 test("persistent dashboard preserves a safe service reopen error", async (t) => {
@@ -1571,7 +2485,17 @@ function createPersistentService(
             id: workItemId,
             title: "Persistent work",
             status,
-            progress: 20,
+            progress: {
+              basis:
+                "acceptance-and-current-evidence",
+              accepted: false,
+              passedEvidence: 0,
+              failedEvidence: 0,
+              missingEvidence: 1,
+              totalEvidence: 1,
+              uncertainty:
+                "incomplete"
+            },
             requiredEvidence: ["tests"],
             activeAttempt: null,
             activeArtifact: null,

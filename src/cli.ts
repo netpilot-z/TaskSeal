@@ -38,6 +38,9 @@ import {
 import {
   ManagedAttemptRunner
 } from "./application/managed-attempt-runner.ts";
+import {
+  createLocalDecompositionControl
+} from "./decomposition-runtime.ts";
 import { TaskSealService } from "./application/taskseal-service.ts";
 import {
   readProjectConfiguration
@@ -75,6 +78,7 @@ import type {
 } from "./application/managed-attempt-runner.ts";
 import type {
   PersistentAcceptancePort,
+  PersistentDecompositionControlPort,
   PersistentServicePort,
   RunWorkItemOptions
 } from "./server.ts";
@@ -313,6 +317,36 @@ interface RunLocalCodexWorkItemOptions {
     | "workspace-write"
     | undefined;
   commandRunner?: CommandRunner | undefined;
+  runtimeFactory?:
+    | ((
+        options:
+          CreateLocalCodexRuntimeOptions
+      ) =>
+        | LocalCodexRunRuntime
+        | Promise<LocalCodexRunRuntime>)
+    | undefined;
+}
+
+interface LocalCodexRunRuntime {
+  service: {
+    getWorkItem(
+      workItemId: string
+    ): {
+      id: string;
+      title: string;
+    } | null;
+  };
+  runner: {
+    run(
+      options: ManagedRunnerRunOptions
+    ): ManagedRunnerResult |
+      Promise<ManagedRunnerResult>;
+  };
+  decomposition: {
+    assertManualRunAllowed(
+      workItemId: string
+    ): void;
+  };
 }
 
 interface CreateLocalCodexRuntimeOptions {
@@ -381,6 +415,9 @@ interface ParsedVersionedArguments {
 }
 
 interface ControlRoomRunnerPort {
+  readonly manifest?: {
+    readonly runnerId: string;
+  } | undefined;
   run(
     options: ManagedRunnerRunOptions
   ): unknown | Promise<unknown>;
@@ -389,6 +426,10 @@ interface ControlRoomRunnerPort {
 interface ControlRoomRuntime {
   service: PersistentServicePort;
   runner: ControlRoomRunnerPort;
+  decomposition?:
+    | PersistentDecompositionControlPort
+    | null
+    | undefined;
 }
 
 interface ControlRoomServerPort {
@@ -480,6 +521,10 @@ interface StartPersistentControlRoomOptions {
           acceptanceCapabilities:
             LocalLinearAcceptanceRuntime["capabilities"];
           operatorId: string | null;
+          decomposition?:
+            | PersistentDecompositionControlPort
+            | null
+            | undefined;
           maxConcurrentRuns: number;
           runWorkItem: (
             options: RunWorkItemOptions
@@ -938,12 +983,18 @@ export async function runLocalCodexWorkItem({
   workItemId,
   prompt,
   sandbox = "workspace-write",
-  commandRunner = runCommand
+  commandRunner = runCommand,
+  runtimeFactory =
+    createLocalCodexRuntime
 }: RunLocalCodexWorkItemOptions): Promise<ManagedRunnerResult> {
-  const { service, runner } = await createLocalCodexRuntime({
-    cwd,
-    commandRunner
-  });
+  const {
+    service,
+    runner,
+    decomposition
+  } = await runtimeFactory({
+      cwd,
+      commandRunner
+    });
   const workItem = service.getWorkItem(workItemId);
 
   if (!workItem) {
@@ -954,6 +1005,9 @@ export async function runLocalCodexWorkItem({
       { code: "WORK_ITEM_NOT_FOUND" }
     );
   }
+  decomposition.assertManualRunAllowed(
+    workItemId
+  );
 
   return runner.run({
     workItemId,
@@ -971,6 +1025,8 @@ export async function createLocalCodexRuntime({
 }: CreateLocalCodexRuntimeOptions): Promise<{
   service: TaskSealService;
   runner: ManagedAttemptRunner;
+  decomposition:
+    PersistentDecompositionControlPort;
 }> {
   const journal = new FileEventJournal({
     filePath: join(cwd, ".taskseal", "events.jsonl")
@@ -1008,10 +1064,18 @@ export async function createLocalCodexRuntime({
           })
       })
   });
+  const decomposition =
+    await createLocalDecompositionControl({
+      cwd,
+      service,
+      runner,
+      environment
+    });
 
   return {
     service,
-    runner
+    runner,
+    decomposition
   };
 }
 
@@ -2361,7 +2425,8 @@ export async function startPersistentControlRoom({
     await providerOperationQueryFactory({ cwd });
   const {
     service,
-    runner
+    runner,
+    decomposition = null
   } = await runtimeFactory({
     cwd,
     commandRunner,
@@ -2402,19 +2467,39 @@ export async function startPersistentControlRoom({
       acceptanceRuntime.capabilities,
     operatorId:
       acceptanceRuntime.operatorId,
+    decomposition,
     maxConcurrentRuns,
-    runWorkItem: (options) =>
-      runner.run({
+    runWorkItem: (options) => {
+      if (
+        options.runnerId !==
+          undefined &&
+        runner.manifest?.runnerId !==
+          options.runnerId
+      ) {
+        throw Object.assign(
+          new Error(
+            "The approved decomposition runner is not available."
+          ),
+          {
+            code:
+              "RUNNER_NOT_AVAILABLE"
+          }
+        );
+      }
+      return runner.run({
         workItemId:
           options.workItemId,
         cwd,
         instruction: options.prompt,
         workspaceAccess:
           options.sandbox,
+        timeoutMs:
+          options.timeoutMs,
         signal: options.signal,
         terminalization:
           options.terminalization
-      })
+      });
+    }
   });
 
   await new Promise<void>((resolve, reject) => {

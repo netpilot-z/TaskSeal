@@ -222,6 +222,61 @@
         </section>
 
         <section
+          class="panel orchestration-panel"
+          id="orchestration-panel"
+          aria-labelledby="orchestration-heading"
+          hidden
+        >
+          <div class="panel-heading orchestration-heading">
+            <div>
+              <p class="section-kicker">ORCHESTRATION</p>
+              <h2 id="orchestration-heading">Decomposition control</h2>
+              <p class="panel-description">
+                Approved plans, accepted-node progress, explicit
+                dispatch, and immutable retirement audit.
+              </p>
+            </div>
+            <span
+              class="orchestration-overview"
+              id="orchestration-overview"
+            >
+              No approved plans
+            </span>
+          </div>
+          <div
+            class="orchestration-plans"
+            id="orchestration-plans"
+          ></div>
+          <section
+            class="orchestration-retirement-audit"
+            aria-labelledby="orchestration-retirement-heading"
+          >
+            <div class="orchestration-retirement-heading">
+              <div>
+                <span class="detail-label">IMMUTABLE AUDIT</span>
+                <h3 id="orchestration-retirement-heading">
+                  Retirement history
+                </h3>
+              </div>
+              <span id="orchestration-retirement-count">
+                0 retired
+              </span>
+            </div>
+            <ol
+              class="orchestration-retirements"
+              id="orchestration-retirements"
+            ></ol>
+          </section>
+          <p
+            class="visually-hidden"
+            id="orchestration-live-status"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          ></p>
+        </section>
+
+        <section
           class="panel provider-panel"
           id="provider-panel"
           aria-labelledby="provider-heading"

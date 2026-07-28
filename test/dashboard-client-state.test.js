@@ -3,10 +3,13 @@ import test from "node:test";
 
 import {
   AcceptanceTruthFence,
+  createAccessibleOrchestrationState,
   createAccessibleSnapshotState,
   createAcceptanceControlState,
+  createOrchestrationPanelModel,
   createRunControlState,
   DashboardRequestGate,
+  normalizeRequiredAuditNote,
   PromptDraftStore,
   reconcileSelectedWorkItemId,
   semanticSnapshotKey,
@@ -128,6 +131,326 @@ test("accessible snapshot state changes when evidence changes without a status c
     semanticSnapshotKey(
       createAccessibleSnapshotState(demoUpdatedSnapshot)
     )
+  );
+});
+
+test("retirement audit notes are normalized before native form validation", () => {
+  assert.equal(
+    normalizeRequiredAuditNote(
+      "  Retire after review.  "
+    ),
+    "Retire after review."
+  );
+  assert.equal(
+    normalizeRequiredAuditNote(
+      " \r\n\t "
+    ),
+    null
+  );
+  assert.equal(
+    normalizeRequiredAuditNote(null),
+    null
+  );
+});
+
+test("orchestration model preserves accepted-node truth, topology, blocking evidence, and bounded dispatch state", () => {
+  const snapshot =
+    createOrchestrationSnapshot();
+  const model =
+    createOrchestrationPanelModel(
+      snapshot,
+      false
+    );
+
+  assert.equal(model.visible, true);
+  assert.equal(model.plans.length, 1);
+  assert.deepEqual(
+    model.plans[0].progress,
+    {
+      basis: "accepted-nodes",
+      acceptedNodes: 0,
+      totalNodes: 2,
+      uncertainNodes: 2
+    }
+  );
+  assert.equal(
+    "percent" in model.plans[0].progress,
+    false
+  );
+  assert.deepEqual(
+    model.plans[0].nodes.map(
+      (node) => node.nodeId
+    ),
+    ["api", "qa"]
+  );
+  assert.equal(
+    model.plans[0].nodes[0].title,
+    "Build API"
+  );
+  assert.deepEqual(
+    model.plans[0].nodes[1]
+      .blockingReasons,
+    [
+      {
+        code:
+          "DEPENDENCY_NOT_ACCEPTED",
+        label:
+          "Waiting for accepted dependencies",
+        relatedNodeIds: ["api"]
+      }
+    ]
+  );
+  assert.equal(
+    model.plans[0].queue.durability,
+    "ephemeral"
+  );
+  assert.deepEqual(
+    model.plans[0].dispatchControl,
+    {
+      enabled: true,
+      label: "Dispatch 1 ready node",
+      readyCount: 1
+    }
+  );
+  assert.deepEqual(
+    model.plans[0]
+      .retirementControl,
+    {
+      enabled: true,
+      label: "Retire plan",
+      hasActiveOwnedWork: false
+    }
+  );
+
+  const full =
+    createOrchestrationPanelModel(
+      {
+        ...snapshot,
+        runtime: {
+          ...snapshot.runtime,
+          capacity: {
+            ...snapshot.runtime.capacity,
+            availableSlots: 0
+          }
+        }
+      },
+      false
+    );
+  assert.deepEqual(
+    full.plans[0].dispatchControl,
+    {
+      enabled: false,
+      label: "Execution capacity full",
+      readyCount: 1
+    }
+  );
+});
+
+test("retirement controls fail closed on active work and audit history remains factual", () => {
+  const snapshot = {
+    ...createOrchestrationSnapshot(),
+    decompositionRetirements: [
+      {
+        planId: "plan-old",
+        planDigest:
+          `sha256:${"3".repeat(64)}`,
+        retiredBy:
+          "operator.test",
+        retiredAt:
+          "2026-07-28T00:10:00.000Z",
+        reasonCode:
+          "operator_rollback",
+        note:
+          "Returned to serial execution."
+      }
+    ]
+  };
+  const active =
+    createOrchestrationPanelModel(
+      {
+        ...snapshot,
+        runtime: {
+          ...snapshot.runtime,
+          activeWorkItemIds: [
+            "ROOT-1"
+          ]
+        }
+      }
+    );
+  assert.deepEqual(
+    active.plans[0]
+      .retirementControl,
+    {
+      enabled: false,
+      label:
+        "Wait for active work",
+      hasActiveOwnedWork: true
+    }
+  );
+
+  const retiring =
+    createOrchestrationPanelModel(
+      snapshot,
+      true,
+      {
+        kind: "retire",
+        planId: "plan-alpha"
+      }
+    );
+  assert.equal(
+    retiring.plans[0]
+      .dispatchControl.label,
+    "Busy"
+  );
+  assert.equal(
+    retiring.plans[0]
+      .retirementControl.label,
+    "Retiring…"
+  );
+  assert.deepEqual(
+    retiring.retirements,
+    [
+      {
+        planId: "plan-old",
+        planDigest:
+          `sha256:${"3".repeat(64)}`,
+        retiredBy:
+          "operator.test",
+        retiredAt:
+          "2026-07-28T00:10:00.000Z",
+        reasonCode:
+          "operator_rollback",
+        reasonLabel:
+          "Operator rollback",
+        note:
+          "Returned to serial execution."
+      }
+    ]
+  );
+  assert.equal(
+    "percent" in
+      retiring.retirements[0],
+    false
+  );
+});
+
+test("managed decomposition nodes cannot use manual run while active nodes can still be cancelled", () => {
+  const snapshot =
+    createOrchestrationSnapshot();
+  const idle = createRunControlState(
+    snapshot,
+    "TS-1"
+  );
+
+  assert.equal(idle.canRun, false);
+  assert.match(
+    idle.statusLabel,
+    /Managed by decomposition plan-alpha/
+  );
+  const root =
+    createRunControlState(
+      snapshot,
+      "ROOT-1"
+    );
+  assert.equal(root.canRun, false);
+  assert.match(
+    root.statusLabel,
+    /Managed by decomposition plan-alpha/
+  );
+
+  const active = createRunControlState(
+    {
+      ...snapshot,
+      runtime: {
+        ...snapshot.runtime,
+        activeWorkItemIds: ["TS-1"],
+        runs: [
+          {
+            workItemId: "TS-1",
+            phase: "running"
+          }
+        ]
+      }
+    },
+    "TS-1"
+  );
+  assert.equal(active.canRun, false);
+  assert.equal(active.canCancel, true);
+});
+
+test("accessible orchestration state changes with node facts but ignores generated time", () => {
+  const snapshot =
+    createOrchestrationSnapshot();
+  const baseline = semanticSnapshotKey(
+    createAccessibleOrchestrationState(
+      snapshot
+    )
+  );
+  const generatedOnly =
+    semanticSnapshotKey(
+      createAccessibleOrchestrationState({
+        ...snapshot,
+        generatedAt:
+          "2030-01-01T00:00:00.000Z"
+      })
+    );
+  const phaseChanged =
+    semanticSnapshotKey(
+      createAccessibleOrchestrationState({
+        ...snapshot,
+        orchestration: [
+          {
+            ...snapshot.orchestration[0],
+            nodes:
+              snapshot.orchestration[0]
+                .nodes.map((node) =>
+                  node.nodeId === "api"
+                    ? {
+                        ...node,
+                        phase: "running"
+                      }
+                    : node
+                )
+          }
+        ]
+      })
+    );
+
+  assert.equal(
+    baseline,
+    generatedOnly
+  );
+  assert.notEqual(
+    baseline,
+    phaseChanged
+  );
+
+  const retirementChanged =
+    semanticSnapshotKey(
+      createAccessibleOrchestrationState({
+        ...snapshot,
+        decompositionRetirements: [
+          {
+            planId:
+              "plan-alpha",
+            planDigest:
+              snapshot.orchestration[0]
+                .planDigest,
+            retiredBy:
+              "operator.test",
+            retiredAt:
+              "2026-07-28T00:10:00.000Z",
+            reasonCode:
+              "operator_rollback",
+            note:
+              "Returned to serial execution."
+          }
+        ]
+      })
+    );
+  assert.notEqual(
+    baseline,
+    retirementChanged
   );
 });
 
@@ -707,6 +1030,90 @@ test("acceptance controls bind the current review and exact transition decision"
   );
 });
 
+test("acceptance controls expose decomposition dependency and root readiness gates", () => {
+  const base =
+    createOrchestrationSnapshot();
+  const reviewable = (workItem) => ({
+    ...workItem,
+    status: "reviewing",
+    acceptanceReviewRevision:
+      `sha256:${"4".repeat(64)}`,
+    activeAttempt: {
+      id:
+        `attempt-${workItem.id}`,
+      status: "completed",
+      runtimeOutcome:
+        "completed"
+    },
+    activeArtifact: {
+      id:
+        `artifact-${workItem.id}`,
+      revision: "revision-1"
+    },
+    currentEvidence: [
+      {
+        criterionKey: "tests",
+        outcome: "passed"
+      }
+    ],
+    acceptanceDecision: null,
+    acceptanceHistory: []
+  });
+  const snapshot = {
+    ...base,
+    capabilities: {
+      ...base.capabilities,
+      decideAcceptance: true
+    },
+    security: {
+      operatorId:
+        "operator.test"
+    },
+    workItems:
+      base.workItems.map(
+        reviewable
+      )
+  };
+  const providerState = {
+    phase: "ready",
+    model: {
+      operations: []
+    }
+  };
+
+  const dependent =
+    createAcceptanceControlState(
+      snapshot,
+      "TS-2",
+      providerState
+    );
+  assert.equal(
+    dependent.canAccept,
+    false
+  );
+  assert.equal(
+    dependent.canReject,
+    false
+  );
+  assert.match(
+    dependent.localLabel,
+    /dependencies/
+  );
+
+  const root =
+    createAcceptanceControlState(
+      snapshot,
+      "ROOT-1",
+      providerState
+    );
+  assert.equal(root.canAccept, false);
+  assert.equal(root.canReject, false);
+  assert.match(
+    root.localLabel,
+    /all decomposition nodes/
+  );
+});
+
 function createPersistentSnapshot({
   activeIds,
   availableSlots,
@@ -737,6 +1144,171 @@ function createPersistentSnapshot({
         id: "TS-2",
         title: "Second",
         attempts: []
+      }
+    ]
+  };
+}
+
+function createOrchestrationSnapshot() {
+  return {
+    mode: "persistent",
+    generatedAt:
+      "2026-07-28T00:00:00.000Z",
+    summary: {
+      activeAgents: 0
+    },
+    capabilities: {
+      runAttempt: true,
+      cancelAttempt: true,
+      dispatchDecomposition: true,
+      retireDecomposition: true
+    },
+    runtime: {
+      activeWorkItemIds: [],
+      capacity: {
+        maxConcurrentRuns: 2,
+        activeCount: 0,
+        availableSlots: 2
+      },
+      runs: []
+    },
+    workItems: [
+      {
+        id: "ROOT-1",
+        title: "Deliver product",
+        status: "planned",
+        attempts: [],
+        requiredEvidence: ["tests"],
+        currentEvidence: [],
+        activeArtifact: null,
+        acceptanceDecision: null
+      },
+      {
+        id: "TS-1",
+        title: "Build API",
+        status: "planned",
+        attempts: [],
+        requiredEvidence: ["tests"],
+        currentEvidence: [],
+        activeArtifact: null,
+        acceptanceDecision: null
+      },
+      {
+        id: "TS-2",
+        title: "Verify API",
+        status: "planned",
+        attempts: [],
+        requiredEvidence: ["tests"],
+        currentEvidence: [],
+        activeArtifact: null,
+        acceptanceDecision: null
+      }
+    ],
+    decompositionRetirements: [],
+    orchestration: [
+      {
+        planId: "plan-alpha",
+        planDigest:
+          `sha256:${"1".repeat(64)}`,
+        rootWorkItemId: "ROOT-1",
+        approvedBy: "operator.test",
+        approvedAt:
+          "2026-07-28T00:00:00.000Z",
+        progress: {
+          basis: "accepted-nodes",
+          acceptedNodes: 0,
+          totalNodes: 2,
+          uncertainNodes: 2
+        },
+        countsByPhase: {
+          unknown: 0,
+          waiting_dependencies: 1,
+          ready: 1,
+          running: 0,
+          awaiting_artifact: 0,
+          awaiting_evidence: 0,
+          awaiting_acceptance: 0,
+          retry_backoff: 0,
+          blocked: 0,
+          accepted: 0
+        },
+        queue: {
+          durability: "ephemeral",
+          limit: 8,
+          queuedCount: 1,
+          nodeIds: ["api"]
+        },
+        topologicalOrder: [
+          "api",
+          "qa"
+        ],
+        dispatch: {
+          maxParallelism: 2
+        },
+        activeNodeIds: [],
+        nodes: [
+          {
+            nodeId: "qa",
+            workItemId: "TS-2",
+            phase:
+              "waiting_dependencies",
+            dependsOn: ["api"],
+            owner: {
+              runnerId:
+                "codex-app-server",
+              profileRevision:
+                `sha256:${"2".repeat(64)}`,
+              match: "matched"
+            },
+            actualAgentId: null,
+            blockingReasons: [
+              {
+                code:
+                  "DEPENDENCY_NOT_ACCEPTED",
+                relatedNodeIds: ["api"]
+              }
+            ],
+            retry: {
+              attempts: 0,
+              maxAttempts: 2,
+              nextEligibleAt: null
+            },
+            evidence: {
+              passed: 0,
+              failed: 0,
+              missing: 1,
+              total: 1
+            },
+            attemptTrace: []
+          },
+          {
+            nodeId: "api",
+            workItemId: "TS-1",
+            phase: "ready",
+            dependsOn: [],
+            owner: {
+              runnerId:
+                "codex-app-server",
+              profileRevision:
+                `sha256:${"2".repeat(64)}`,
+              match: "matched"
+            },
+            actualAgentId: null,
+            blockingReasons: [],
+            retry: {
+              attempts: 0,
+              maxAttempts: 2,
+              nextEligibleAt: null
+            },
+            evidence: {
+              passed: 0,
+              failed: 0,
+              missing: 1,
+              total: 1
+            },
+            attemptTrace: []
+          }
+        ]
       }
     ]
   };
