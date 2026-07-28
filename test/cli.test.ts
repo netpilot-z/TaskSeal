@@ -34,7 +34,7 @@ import {
   digestCanonicalJson
 } from "../src/lib/canonical-json.ts";
 
-test("package entrypoints target the source-checkout TypeScript CLI", async () => {
+test("package entrypoints separate the source checkout scripts from the compiled install bin", async () => {
   const packageJson: unknown = JSON.parse(
     await readFile(
       new URL("../package.json", import.meta.url),
@@ -50,7 +50,7 @@ test("package entrypoints target the source-checkout TypeScript CLI", async () =
 
   assert.equal(readJsonPath(packageJson, "private"), true);
   assert.deepEqual(readJsonPath(packageJson, "bin"), {
-    taskseal: "src/cli.ts"
+    taskseal: "dist/bin/taskseal.js"
   });
   assert.equal(
     readJsonPath(packageJson, "scripts", "start"),
@@ -68,7 +68,7 @@ test("package entrypoints target the source-checkout TypeScript CLI", async () =
       "bin",
       "taskseal"
     ),
-    "src/cli.ts"
+    "dist/bin/taskseal.js"
   );
 });
 

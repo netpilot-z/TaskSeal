@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://taskseal.dev/schemas/project-config-v1.json",
+  "title": "TaskSeal Project Configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "project"
+  ],
+  "properties": {
+    "project": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "mode": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "github": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "delivery": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "mappingIndex"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "mappingIndex": {
+              "$ref": "#/$defs/repositoryRelativePath"
+            }
+          }
+        }
+      }
+    },
+    "gitee": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        }
+      }
+    },
+    "linear": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workspace",
+        "team"
+      ],
+      "properties": {
+        "workspace": {
+          "$ref": "#/$defs/nonEmptyName"
+        },
+        "team": {
+          "$ref": "#/$defs/nonEmptyName"
+        },
+        "project": {
+          "$ref": "#/$defs/nonEmptyName"
+        },
+        "backlogState": {
+          "$ref": "#/$defs/nonEmptyName"
+        },
+        "readyWork": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "readyState",
+            "completedState",
+            "dependencyIndex"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "readyState": {
+              "$ref": "#/$defs/nonEmptyName"
+            },
+            "completedState": {
+              "$ref": "#/$defs/nonEmptyName"
+            },
+            "dependencyIndex": {
+              "$ref": "#/$defs/repositoryRelativePath"
+            }
+          }
+        },
+        "acceptance": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "enabled"
+              ],
+              "properties": {
+                "enabled": {
+                  "const": false
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "enabled",
+                "expectedState",
+                "targetState"
+              ],
+              "properties": {
+                "enabled": {
+                  "const": true
+                },
+                "expectedState": {
+                  "$ref": "#/$defs/nonEmptyName"
+                },
+                "targetState": {
+                  "$ref": "#/$defs/nonEmptyName"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "nonEmptyName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "repositoryRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^(?![A-Za-z]:)(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    }
+  }
+}

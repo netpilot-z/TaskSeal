@@ -98,7 +98,7 @@
 
 ## T21 — 任务拆解、依赖调度与真实可观测性
 
-- 状态：待执行。
+- 状态：已完成；对应 Linear `NP-9`。
 - 目的：支持多个数字员工协作，并让老板视图看到真实工作而非硬编码百分比。
 - 范围：人工可审查 decomposition plan、DAG、owner/capability matching、bounded queue、retry policy、attempt trace、evidence progress、blocked reason。
 - 不包含：自主修改公司目标、无限递归拆分或基于固定状态映射伪造精确进度。
@@ -106,10 +106,14 @@
 - 验收标准：循环依赖失败关闭；每个子任务有 owner/验收/证据；进度由完成的可验收节点计算并保留不确定性。
 - 验证：planner/dispatcher property tests、failure injection、投影/API/UI 测试。
 - 风险与回退：首版 decomposition 必须人工批准；可回退到单 WorkItem 串行执行。
+- 规格与决策：`docs/specs/0023-decomposition-dag-observability.md`、
+  `docs/adr/0014-independent-approved-decomposition-lifecycle.md`、
+  `docs/experiments/0031-decomposition-dag-observability.md`、
+  `docs/reviews/0025-decomposition-dag-observability.md`。
 
 ## T22 — 提供可安装 CLI 与插件开发包
 
-- 状态：等待 T19 核心闭环稳定；对应待迁移的 GitHub `#32`。
+- 状态：已完成；对应 Linear `NP-10`。
 - 目的：让其他团队能以 CLI-first 方式接入现有仓库和 Runner，再按需连接 hosted Control Room。
 - 范围：编译产物、可安装 CLI、版本兼容、配置 schema、Runner/Provider SDK、示例插件和 contract tests。
 - 不包含：立即改成 monorepo/NestJS；只有出现独立部署边界后再触发 ADR 0002 的迁移条件。
@@ -117,6 +121,10 @@
 - 验收标准：干净环境安装运行；插件版本不兼容时给出安全诊断；核心包不要求 hosted 服务。
 - 验证：pack/install smoke、Node support matrix、example plugin contract 和升级回退测试。
 - 风险与回退：保持 private checkout 路径直到发布门禁完整；不发布半成品包。
+- 规格与决策：`docs/specs/0024-installable-cli-plugin-sdk.md`、
+  `docs/adr/0015-single-package-compiled-cli-plugin-sdk.md`、
+  `docs/experiments/0032-installable-cli-plugin-sdk.md`、
+  `docs/reviews/0026-installable-cli-plugin-sdk.md`。
 
 ## T23 — 用飞书多维表格压力测试 Adapter
 

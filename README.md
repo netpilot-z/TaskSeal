@@ -22,7 +22,7 @@ TaskSeal 是一个 AI Delivery Control Plane 技术验证项目。它把外部�
 ## 原型边界
 
 - 零生产依赖，基于 Node.js 内置能力。
-- 服务端代码按切片迁移到 TypeScript；Node.js 原生执行，`tsc --noEmit` 负责类型门禁。
+- 服务端源码使用 TypeScript；源码 checkout 由 Node.js 原生执行，安装包由 `tsc` 预编译为 JavaScript。
 - 当前保持单 package 和 framework-free core；NestJS 与 monorepo 只在出现独立部署或远程平台后端需求时引入。
 - 默认不访问真实凭证，不向外部系统写入数据。
 - 当前结果用于验证技术和产品假设，不代表生产就绪。
@@ -30,7 +30,7 @@ TaskSeal 是一个 AI Delivery Control Plane 技术验证项目。它把外部�
 
 ## 本地运行
 
-要求 Node.js 24.12 或更高版本。首次检出后安装锁定的开发工具：
+要求 Node.js `>=24.12.0 <25`。首次检出后安装锁定的开发工具：
 
 ```bash
 npm ci
@@ -56,6 +56,39 @@ npm start
 ```bash
 npm test
 ```
+
+## 安装包与插件开发包
+
+当前 package 仍为 `private` 技术验证版，不发布到 npm registry；但可以从当前提交生成并在仓库外安装本地 tarball：
+
+```bash
+npm pack
+npm install ../taskseal-0.0.0-experiment.3.tgz
+npm exec -- taskseal --help
+npm exec -- taskseal --version
+```
+
+安装包中的 CLI 只执行 `dist/` JavaScript，不依赖 TypeScript runtime。公开 API 使用显式版本子路径：
+
+```js
+import {
+  parseRunnerManifest
+} from "taskseal/runner/v1";
+import {
+  normalizeProviderAdapterV1
+} from "taskseal/provider/v1";
+import {
+  parseTaskSealPluginManifest
+} from "taskseal/plugin/v1";
+```
+
+Runner 与只读 Provider 的 contract kit 分别位于 `taskseal/testing/runner/v1` 和 `taskseal/testing/provider/v1`；配置 schema 位于 `taskseal/schemas/project-config` 与 `taskseal/schemas/plugin-manifest`。`examples/` 提供可直接运行合同测试的 Echo Runner 和内存 Provider。
+
+```bash
+npm exec -- taskseal plugin check ./taskseal.plugin.json
+```
+
+该命令只读取不超过 64 KiB 的 JSON 并检查 API、合同、Node 版本和安全相对入口，不会加载、安装或执行插件。首版 SDK 是受信开发者的 authoring contract；第三方插件发现、动态加载与进程隔离仍不在当前范围。
 
 ## Provider 只读检查
 
@@ -219,6 +252,12 @@ node src/cli.ts sync linear --dry-run
     线性化 approval/run、acceptance/retirement 与 retirement/dispatch。新计划从新
     generation 接管 WorkItem，不继承旧 retry/rejection/owner/Evidence；退役仍保留
     全部 WorkItem、Attempt、Artifact、Evidence 和验收历史。
+26. 本地 tarball 已使用 `tsc → dist` 提供可安装 CLI、版本化 Runner/Provider/
+    Plugin facade、公开 contract kit、schema 与示例；pack/install 门禁验证
+    Windows npm bin、仓库外 JavaScript/TypeScript consumer、内部 export fence、
+    Node 版本 fail-fast 和发布物路径/凭证扫描。`plugin check` 只做 64 KiB 有界
+    静态 JSON 兼容检查，不加载 entrypoint；package 继续保持 private、单包、
+    零生产依赖和零 hosted service 要求。
 
 ## 项目结构
 
@@ -227,6 +266,8 @@ config/        非敏感项目坐标
 docs/          实验、架构和后续接入说明
 fixtures/      匿名外部系统夹具
 public/        本地 Control Room
+examples/      Runner/Provider SDK 示例与合同测试
+schemas/       可发布的项目配置与插件清单 schema
 src/
   application/ TaskSeal 写入、重放与 Managed Runner Host
   config/      非敏感项目配置读取与校验
@@ -235,11 +276,12 @@ src/
   demo/        可重复演示编排
   domain/      状态与验收不变量
   runners/     Runner v1 合同、Codex Adapter 与 App Server transport
+  sdk/         版本化公开 facade 与 contract kit
   storage/     canonical journal 与独立只读投影存储
 test-support/  fake App Server、fake Runner 与 contract kit
 test/          领域、连接器、集成和 HTTP 测试
 ```
 
-计划内 Node.js 服务端源码已迁移到 TypeScript；浏览器原生脚本 `public/` 暂不进入 TypeScript 构建。当前 `private: true` 包只支持源码 checkout 运行，尚不把 `bin: src/cli.ts` 视为可安装 npm 发布物。TypeScript、NestJS 与 monorepo 的取舍见 `docs/adr/0002-typescript-repository-strategy.md`，迁移规格见 `docs/specs/0005-typescript-migration.md`。
+计划内 Node.js 服务端源码已迁移到 TypeScript；浏览器原生脚本 `public/` 暂不进入 TypeScript 构建。当前 `private: true` 包同时保留源码 checkout 入口和指向 `dist/bin/taskseal.js` 的可安装本地 tarball；`files` 与 `exports` 双 allowlist 限制发布内容和公共 API。它不是 registry 发布版，也不动态执行第三方插件。TypeScript、NestJS 与 monorepo 的基础取舍见 `docs/adr/0002-typescript-repository-strategy.md`，本次发布边界见 `docs/specs/0024-installable-cli-plugin-sdk.md` 与 `docs/adr/0015-single-package-compiled-cli-plugin-sdk.md`。
 
 实验结果见 `docs/experiments/`，Runner 设计见 `docs/architecture/codex-runner.md`、`docs/specs/0022-stable-runner-contract.md` 与 `docs/adr/0013-application-owned-runner-host.md`；DAG 分解与协作控制见 `docs/specs/0023-decomposition-dag-observability.md` 与 `docs/adr/0014-independent-approved-decomposition-lifecycle.md`。连接器演进方向见 `docs/architecture/connectors.md`，工作跟踪规则见 `docs/standards/work-tracking.md`，当前产品化路线见 `docs/tickets/0005-linear-productization-milestone.md`。现有 Provider 契约见 `docs/research/0001-github-linear-read-contracts.md`，第二 Provider 选择证据见 `docs/research/0002-gitee-feishu-provider-probe.md` 与 `docs/adr/0003-select-gitee-as-second-provider.md`。Provider Observation 的边界与持久化决策见 `docs/specs/0007-provider-observation-read-model.md` 和 `docs/adr/0004-provider-observation-read-model.md`；人工验收与 Linear Done 见 `docs/specs/0021-human-acceptance-linear-transition.md`、`docs/adr/0012-linear-acceptance-transition-operation.md` 与 `docs/research/0004-linear-issue-transition-cas.md`。

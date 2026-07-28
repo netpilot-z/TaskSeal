@@ -2,6 +2,9 @@ import { spawn } from "node:child_process";
 import type { EventEmitter } from "node:events";
 import type { Readable, Writable } from "node:stream";
 import type { AttemptTerminalOutcome } from "../domain/workflow.ts";
+import {
+  TASKSEAL_PACKAGE_VERSION
+} from "../sdk/version.ts";
 
 const DEFAULT_LINE_LIMIT_BYTES = 10 * 1024 * 1024;
 const RESPONSE_ERROR_MESSAGE_LIMIT = 8_192;
@@ -340,7 +343,8 @@ export class CodexAppServerClient {
           clientInfo: {
             name: "taskseal",
             title: "TaskSeal",
-            version: "0.0.0-experiment.2"
+            version:
+              TASKSEAL_PACKAGE_VERSION
           }
         })
       );
