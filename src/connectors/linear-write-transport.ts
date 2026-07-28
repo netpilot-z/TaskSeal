@@ -1,9 +1,15 @@
 import type {
   LinearWriteCreateInput,
+  LinearWriteCreateInputV2,
   LinearWriteCreateResult,
+  LinearWriteCreateResultV2,
+  LinearWriteObservedPlacementV2,
   LinearWriteQueryInput,
+  LinearWriteQueryInputV2,
   LinearWriteQueryResult,
-  LinearWriteTransportPort
+  LinearWriteQueryResultV2,
+  LinearWriteTransportPort,
+  LinearWriteTransportV2Port
 } from "../application/linear-write-transport.ts";
 
 export const LINEAR_WRITE_REQUEST_BYTE_LIMIT =
@@ -34,6 +40,53 @@ const QUERY_ISSUE = `query TaskSealQueryIssue($id: String!) {
   }
 }`;
 
+const CREATE_ISSUE_MUTATION_V2 = `mutation TaskSealCreateIssueV2($input: IssueCreateInput!) {
+  issueCreate(input: $input) {
+    success
+    issue {
+      id
+      identifier
+      team {
+        id
+        organization {
+          id
+        }
+      }
+      project {
+        id
+      }
+      state {
+        id
+      }
+      parent {
+        id
+      }
+    }
+  }
+}`;
+
+const QUERY_ISSUE_V2 = `query TaskSealQueryIssueV2($id: String!) {
+  issue(id: $id) {
+    id
+    identifier
+    team {
+      id
+      organization {
+        id
+      }
+    }
+    project {
+      id
+    }
+    state {
+      id
+    }
+    parent {
+      id
+    }
+  }
+}`;
+
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const UUID_V4_PATTERN =
@@ -45,7 +98,9 @@ export interface LinearWriteGraphqlRequest {
   readonly schemaVersion: 1;
   readonly operation:
     | "issue_create"
-    | "issue_by_id";
+    | "issue_by_id"
+    | "issue_create_v2"
+    | "issue_by_id_v2";
   readonly body: string;
 }
 
@@ -77,8 +132,17 @@ interface ParsedIssue {
   teamId: string;
 }
 
+interface ParsedIssueV2 {
+  id: string;
+  identifier: string;
+  observedPlacement:
+    LinearWriteObservedPlacementV2;
+}
+
 export class InjectedLinearWriteTransport
-  implements LinearWriteTransportPort
+  implements
+    LinearWriteTransportPort,
+    LinearWriteTransportV2Port
 {
   readonly #exchange: LinearWriteGraphqlExchange;
 
@@ -212,6 +276,135 @@ export class InjectedLinearWriteTransport
       observedTeamId: parsed.teamId
     });
   }
+
+  async createIssueV2(
+    inputValue: unknown
+  ): Promise<LinearWriteCreateResultV2> {
+    let input: LinearWriteCreateInputV2;
+    try {
+      input = normalizeCreateInputV2(
+        inputValue
+      );
+    } catch {
+      throw invalidInput();
+    }
+    const request = createRequest(
+      "issue_create_v2",
+      {
+        operationName: "TaskSealCreateIssueV2",
+        query: CREATE_ISSUE_MUTATION_V2,
+        variables: {
+          input: {
+            id: input.clientRequestId,
+            teamId: input.teamId,
+            projectId: input.projectId,
+            stateId: input.stateId,
+            parentId: input.parentIssueId,
+            title: input.title,
+            description: input.description
+          }
+        }
+      }
+    );
+
+    let exchanged: unknown;
+    try {
+      exchanged = await this.#exchange(request);
+    } catch {
+      return outcomeUnknownV2();
+    }
+
+    const exchangeResult =
+      normalizeExchangeResult(exchanged);
+    if (exchangeResult === null) {
+      return outcomeUnknownV2();
+    }
+    if (exchangeResult.kind === "not_dispatched") {
+      return notDispatchedV2();
+    }
+    if (exchangeResult.kind === "response_lost") {
+      return outcomeUnknownV2();
+    }
+
+    const issue = parseCreateResponseV2(
+      exchangeResult,
+      input
+    );
+    if (issue === null) {
+      return outcomeUnknownV2();
+    }
+    return freezeResult({
+      kind: "created",
+      issue: {
+        id: issue.id,
+        identifier: issue.identifier
+      },
+      observedPlacement:
+        issue.observedPlacement
+    });
+  }
+
+  async queryByClientUuidV2(
+    inputValue: unknown
+  ): Promise<LinearWriteQueryResultV2> {
+    let input: LinearWriteQueryInputV2;
+    try {
+      input = normalizeQueryInputV2(
+        inputValue
+      );
+    } catch {
+      throw invalidInput();
+    }
+    const request = createRequest(
+      "issue_by_id_v2",
+      {
+        operationName: "TaskSealQueryIssueV2",
+        query: QUERY_ISSUE_V2,
+        variables: {
+          id: input.clientRequestId
+        }
+      }
+    );
+
+    let exchanged: unknown;
+    try {
+      exchanged = await this.#exchange(request);
+    } catch {
+      return reconciliationFailedV2();
+    }
+
+    const exchangeResult =
+      normalizeExchangeResult(exchanged);
+    if (
+      exchangeResult === null ||
+      exchangeResult.kind !== "response"
+    ) {
+      return reconciliationFailedV2();
+    }
+
+    const parsed = parseQueryResponseV2(
+      exchangeResult,
+      input
+    );
+    if (parsed === "failed") {
+      return reconciliationFailedV2();
+    }
+    if (parsed === "absent") {
+      return freezeResult({ kind: "absent" });
+    }
+    if (parsed === "ambiguous") {
+      return reconciliationAmbiguousV2();
+    }
+    return freezeResult({
+      kind: "found",
+      issue: {
+        id: parsed.id,
+        identifier: parsed.identifier
+      },
+      observedPlacement:
+        parsed.observedPlacement
+    });
+  }
 }
 
 function normalizeCreateInput(
@@ -262,6 +455,103 @@ function normalizeQueryInput(
       true
     ),
     teamId: normalizeUuid(input.teamId, false)
+  };
+}
+
+function normalizeCreateInputV2(
+  value: unknown
+): LinearWriteCreateInputV2 {
+  const input = readExactRecord(value, [
+    "clientRequestId",
+    "organizationId",
+    "teamId",
+    "projectId",
+    "stateId",
+    "parentIssueId",
+    "title",
+    "description"
+  ]);
+
+  return {
+    clientRequestId: normalizeUuid(
+      input.clientRequestId,
+      true
+    ),
+    organizationId: normalizeUuid(
+      input.organizationId,
+      false
+    ),
+    teamId: normalizeUuid(input.teamId, false),
+    projectId: normalizeUuid(
+      input.projectId,
+      false
+    ),
+    stateId: normalizeUuid(
+      input.stateId,
+      false
+    ),
+    parentIssueId:
+      input.parentIssueId === null
+        ? null
+        : normalizeUuid(
+            input.parentIssueId,
+            false
+          ),
+    title: normalizeText(input.title, {
+      maximumCodePoints: 256,
+      maximumBytes: 1_024,
+      allowEmpty: false,
+      multiline: false
+    }),
+    description: normalizeText(
+      input.description,
+      {
+        maximumCodePoints: 16_384,
+        maximumBytes: 65_536,
+        allowEmpty: true,
+        multiline: true
+      }
+    )
+  };
+}
+
+function normalizeQueryInputV2(
+  value: unknown
+): LinearWriteQueryInputV2 {
+  const input = readExactRecord(value, [
+    "clientRequestId",
+    "organizationId",
+    "teamId",
+    "projectId",
+    "stateId",
+    "parentIssueId"
+  ]);
+
+  return {
+    clientRequestId: normalizeUuid(
+      input.clientRequestId,
+      true
+    ),
+    organizationId: normalizeUuid(
+      input.organizationId,
+      false
+    ),
+    teamId: normalizeUuid(input.teamId, false),
+    projectId: normalizeUuid(
+      input.projectId,
+      false
+    ),
+    stateId: normalizeUuid(
+      input.stateId,
+      false
+    ),
+    parentIssueId:
+      input.parentIssueId === null
+        ? null
+        : normalizeUuid(
+            input.parentIssueId,
+            false
+          )
   };
 }
 
@@ -399,6 +689,82 @@ function parseQueryResponse(
   }
 }
 
+function parseCreateResponseV2(
+  response: NormalizedResponse,
+  input: LinearWriteCreateInputV2
+): ParsedIssueV2 | null {
+  const data = parseGraphqlData(response);
+  if (data === null) {
+    return null;
+  }
+
+  try {
+    const root = readExactRecord(data, [
+      "issueCreate"
+    ]);
+    const payload = readExactRecord(
+      root.issueCreate,
+      ["success", "issue"]
+    );
+    if (payload.success !== true) {
+      return null;
+    }
+    const shape = parseIssueShapeV2(
+      payload.issue
+    );
+    if (shape === null) {
+      return null;
+    }
+    const issue =
+      normalizeIssueCandidateV2(shape);
+    if (
+      issue === null ||
+      !matchesInputV2(issue, input)
+    ) {
+      return null;
+    }
+    return issue;
+  } catch {
+    return null;
+  }
+}
+
+function parseQueryResponseV2(
+  response: NormalizedResponse,
+  input: LinearWriteQueryInputV2
+):
+  | ParsedIssueV2
+  | "absent"
+  | "failed"
+  | "ambiguous" {
+  const data = parseGraphqlData(response);
+  if (data === null) {
+    return "failed";
+  }
+
+  try {
+    const root = readExactRecord(data, ["issue"]);
+    if (root.issue === null) {
+      return "absent";
+    }
+    const shape = parseIssueShapeV2(root.issue);
+    if (shape === null) {
+      return "ambiguous";
+    }
+    const issue =
+      normalizeIssueCandidateV2(shape);
+    if (
+      issue === null ||
+      !matchesInputV2(issue, input)
+    ) {
+      return "ambiguous";
+    }
+    return issue;
+  } catch {
+    return "failed";
+  }
+}
+
 function parseGraphqlData(
   response: NormalizedResponse
 ): Record<string, unknown> | null {
@@ -469,6 +835,75 @@ function parseIssueShape(
   };
 }
 
+function parseIssueShapeV2(
+  value: unknown
+): ParsedIssueV2 | null {
+  const issue = readExactRecord(value, [
+    "id",
+    "identifier",
+    "team",
+    "project",
+    "state",
+    "parent"
+  ]);
+  const team = readExactRecord(issue.team, [
+    "id",
+    "organization"
+  ]);
+  const organization = readExactRecord(
+    team.organization,
+    ["id"]
+  );
+  if (issue.project === null) {
+    return null;
+  }
+  const project = readExactRecord(
+    issue.project,
+    ["id"]
+  );
+  const state = readExactRecord(issue.state, [
+    "id"
+  ]);
+  const parent =
+    issue.parent === null
+      ? null
+      : readExactRecord(issue.parent, ["id"]);
+  const parentIssueId =
+    parent === null ? null : parent.id;
+
+  if (
+    typeof issue.id !== "string" ||
+    !issue.id.isWellFormed() ||
+    typeof issue.identifier !== "string" ||
+    !issue.identifier.isWellFormed() ||
+    typeof team.id !== "string" ||
+    !team.id.isWellFormed() ||
+    typeof organization.id !== "string" ||
+    !organization.id.isWellFormed() ||
+    typeof project.id !== "string" ||
+    !project.id.isWellFormed() ||
+    typeof state.id !== "string" ||
+    !state.id.isWellFormed() ||
+    (parentIssueId !== null &&
+      (typeof parentIssueId !== "string" ||
+        !parentIssueId.isWellFormed()))
+  ) {
+    throw invalidInput();
+  }
+
+  return {
+    id: issue.id,
+    identifier: issue.identifier,
+    observedPlacement: {
+      organizationId: organization.id,
+      teamId: team.id,
+      projectId: project.id,
+      stateId: state.id,
+      parentIssueId
+    }
+  };
+}
+
 function normalizeIssueCandidate(
   issue: ParsedIssue
 ): ParsedIssue | null {
@@ -488,6 +923,56 @@ function normalizeIssueCandidate(
     return null;
   }
   return issue;
+}
+
+function normalizeIssueCandidateV2(
+  issue: ParsedIssueV2
+): ParsedIssueV2 | null {
+  const placement = issue.observedPlacement;
+  if (
+    !UUID_PATTERN.test(issue.id) ||
+    !UUID_PATTERN.test(
+      placement.organizationId
+    ) ||
+    !UUID_PATTERN.test(placement.teamId) ||
+    !UUID_PATTERN.test(placement.projectId) ||
+    !UUID_PATTERN.test(placement.stateId) ||
+    (placement.parentIssueId !== null &&
+      !UUID_PATTERN.test(
+        placement.parentIssueId
+      )) ||
+    issue.identifier !== issue.identifier.trim() ||
+    [...issue.identifier].length > 32 ||
+    Buffer.byteLength(
+      issue.identifier,
+      "utf8"
+    ) > 128 ||
+    !ISSUE_IDENTIFIER_PATTERN.test(
+      issue.identifier
+    )
+  ) {
+    return null;
+  }
+  return issue;
+}
+
+function matchesInputV2(
+  issue: ParsedIssueV2,
+  input:
+    | LinearWriteCreateInputV2
+    | LinearWriteQueryInputV2
+): boolean {
+  const placement = issue.observedPlacement;
+  return (
+    issue.id === input.clientRequestId &&
+    placement.organizationId ===
+      input.organizationId &&
+    placement.teamId === input.teamId &&
+    placement.projectId === input.projectId &&
+    placement.stateId === input.stateId &&
+    placement.parentIssueId ===
+      input.parentIssueId
+  );
 }
 
 function normalizeUuid(
@@ -627,6 +1112,38 @@ function reconciliationFailed(): LinearWriteQueryResult {
 }
 
 function reconciliationAmbiguous(): LinearWriteQueryResult {
+  return freezeResult({
+    kind: "ambiguous",
+    diagnosticCode:
+      "LINEAR_RECONCILIATION_AMBIGUOUS"
+  });
+}
+
+function notDispatchedV2(): LinearWriteCreateResultV2 {
+  return freezeResult({
+    kind: "not_dispatched",
+    diagnosticCode:
+      "LINEAR_WRITE_NOT_DISPATCHED"
+  });
+}
+
+function outcomeUnknownV2(): LinearWriteCreateResultV2 {
+  return freezeResult({
+    kind: "outcome_unknown",
+    diagnosticCode:
+      "LINEAR_WRITE_OUTCOME_UNKNOWN"
+  });
+}
+
+function reconciliationFailedV2(): LinearWriteQueryResultV2 {
+  return freezeResult({
+    kind: "failed",
+    diagnosticCode:
+      "LINEAR_RECONCILIATION_FAILED"
+  });
+}
+
+function reconciliationAmbiguousV2(): LinearWriteQueryResultV2 {
   return freezeResult({
     kind: "ambiguous",
     diagnosticCode:
