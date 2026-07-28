@@ -111,6 +111,27 @@ test("Linear ticket dry-run rejects paths outside the project and invalid ticket
   );
 });
 
+test("an explicit empty bootstrap manifest produces an empty offline plan", async (t) => {
+  const cwd = await createTemporaryProject(t);
+  await mkdir(join(cwd, "docs"), { recursive: true });
+  await writeFile(
+    join(cwd, "docs", "empty.md"),
+    `# Empty bootstrap manifest
+
+<!-- taskseal-linear-bootstrap:empty -->
+`
+  );
+
+  const plan = await createLinearTicketDryRun({
+    cwd,
+    source: "docs/empty.md"
+  });
+
+  assert.equal(plan.issueCount, 0);
+  assert.deepEqual(plan.drafts, []);
+  assert.equal(plan.externalWrites, 0);
+});
+
 test("non-ticket headings end a ticket and duplicate fields are rejected", async (t) => {
   const cwd = await createTemporaryProject(t);
   await mkdir(join(cwd, "docs"), { recursive: true });
@@ -225,21 +246,9 @@ test("the repository default uses only the current unmapped bootstrap manifest",
   );
   assert.deepEqual(
     plan.drafts.map((draft) => draft.sourceTicket),
-    [
-      "T15.2",
-      "T15.3",
-      "T16",
-      "T17",
-      "T18",
-      "T19",
-      "T20",
-      "T21",
-      "T22",
-      "T23",
-      "T24"
-    ]
+    []
   );
-  assert.equal(plan.issueCount, 11);
+  assert.equal(plan.issueCount, 0);
   assert.equal(plan.externalWrites, 0);
 
   const historicalPlan =

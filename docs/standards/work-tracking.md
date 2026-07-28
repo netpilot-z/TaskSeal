@@ -62,13 +62,13 @@ Pull Request 标题以 `[NP-123]` 开头，正文使用 `Implements NP-123` 或 
 ## GitHub 历史迁移
 
 - 已关闭的历史 GitHub Issues 保留为交付记录，不在 Linear 重新创建开放副本。
-- 当前开放的内部规划 Issues `#7`、`#25`、`#32` 在 Linear 子任务创建并读后核验成功后迁移。
+- 内部规划 Issues `#7`、`#25`、`#32` 已分别迁移到 `NP-3`、`NP-11`、`NP-10`。
 - 迁移时在 GitHub 留下 Linear identifier 和链接，再以 `moved to Linear` 关闭；在成功核验前不得先关闭。
 - 后续 GitHub Issue 只有在外部 Bug、公开反馈或仓库级维护问题语义下创建。
 
 ## 当前写入门禁
 
-操作者已为 `LINEAR_API_KEY` 配置 Issue 创建、更新和评论权限；`NP-1` 已通过精确 UUID update 与读后核验确认。权限可用不等于 TaskSeal v1 获得自动写授权：
+操作者已为 `LINEAR_API_KEY` 配置 Issue 创建、更新和评论权限；`NP-1` 与 `NP-2`～`NP-12` 已通过精确 UUID mutation 与读后核验确认。Linear 的 `issueRelationCreate` 另需通用 `write` scope，当前失败关闭且没有创建任何原生依赖关系。权限可用不等于 TaskSeal v1 获得自动写授权：
 
 - 人工授权的 tracker bootstrap 可以创建和维护本轮 Linear 任务；
 - TaskSeal runtime 在 Operation v2 完成前仍不接入真实 mutation；
