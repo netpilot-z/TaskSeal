@@ -12,6 +12,10 @@
     "projectId": "3e1b05e6-0a14-43d4-9fed-e1bee6ef0683",
     "stateId": "b4be78ef-bcf9-47a7-97a4-b3dc106d9bda"
   },
+  "verificationPolicy": {
+    "identity": "clientRequestId",
+    "descriptionNormalization": "linear-markdown-unordered-list-marker"
+  },
   "entries": [
     {
       "sourceTicket": "T15.2",
@@ -24,10 +28,10 @@
       ],
       "linearIssue": {
         "id": "807cfb48-4b4e-4d9e-9481-a83a1ac764de",
-        "identifier": null,
-        "url": null
+        "identifier": "NP-2",
+        "url": "https://linear.app/netpilot-z/issue/NP-2/taskseal-t152-引入-reader-first-的-linear-operation-v2"
       },
-      "status": "planned"
+      "status": "verified"
     },
     {
       "sourceTicket": "T15.3",
