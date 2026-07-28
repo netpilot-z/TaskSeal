@@ -15,7 +15,7 @@
 
 ## T15.2 — 引入 reader-first 的 Linear Operation v2
 
-- 状态：执行中；由 Linear `NP-2` 跟踪。
+- 状态：已完成；由 Linear `NP-2` 跟踪，代码与证据通过 PR `#53` 合入主线。
 - 目的：让真实 placement 和 source intent 成为不可漂移的审批内容。
 - 范围：v1/v2 union reader、v2 plan digest、configured/resolved Project/State、source intent、project-aware transport input、placement observation。
 - 不包含：通用多 Provider write abstraction、批量自动提交或状态关闭。
@@ -26,7 +26,7 @@
 
 ## T15.3 — Bootstrap 未完成待办并迁移 GitHub 规划 Issue
 
-- 状态：由 Linear `NP-3` 跟踪；子任务创建、回读核验和 GitHub 规划 Issue 迁移已完成，Operation v2 与原生依赖关系仍待完成。
+- 状态：由 Linear `NP-3` 跟踪；子任务创建、回读核验、GitHub 规划 Issue 迁移和 Operation v2 已完成，原生依赖关系仍待额外 `write` scope。
 - 目的：把当前内部产品待办切换到 Linear，并建立稳定 source ticket ↔ Linear UUID/identifier 映射。
 - 范围：只含未完成项的 manifest、batch digest、prepare-only preview、单票 pilot、逐项 approve/submit/reconcile；迁移 GitHub `#7`、`#25`、`#32`。
 - 不包含：按标题去重、无人审批、遇到 unknown 后继续派发或迁移已关闭历史 Issue。
