@@ -44,10 +44,10 @@
       ],
       "linearIssue": {
         "id": "b5c03bd9-a1a8-4b67-ae01-fc12807eac69",
-        "identifier": null,
-        "url": null
+        "identifier": "NP-3",
+        "url": "https://linear.app/netpilot-z/issue/NP-3/taskseal-t153-bootstrap-未完成待办并迁移-github-规划-issue"
       },
-      "status": "planned"
+      "status": "verified"
     },
     {
       "sourceTicket": "T16",
@@ -60,10 +60,10 @@
       ],
       "linearIssue": {
         "id": "cc57a0f0-ce3b-4e26-98b0-cd01219eac4a",
-        "identifier": null,
-        "url": null
+        "identifier": "NP-4",
+        "url": "https://linear.app/netpilot-z/issue/NP-4/taskseal-t16-从-linear-领取-ready-work"
       },
-      "status": "planned"
+      "status": "verified"
     },
     {
       "sourceTicket": "T17",
@@ -76,10 +76,10 @@
       ],
       "linearIssue": {
         "id": "fb80f73d-3857-445a-843b-da1d13b1999c",
-        "identifier": null,
-        "url": null
+        "identifier": "NP-5",
+        "url": "https://linear.app/netpilot-z/issue/NP-5/taskseal-t17-补齐-control-room-执行控制"
       },
-      "status": "planned"
+      "status": "verified"
     },
     {
       "sourceTicket": "T18",
@@ -92,10 +92,10 @@
       ],
       "linearIssue": {
         "id": "4f3ce2c1-5415-403b-9129-698cac96d987",
-        "identifier": null,
-        "url": null
+        "identifier": "NP-6",
+        "url": "https://linear.app/netpilot-z/issue/NP-6/taskseal-t18-自动收集-github-artifact-与-evidence"
       },
-      "status": "planned"
+      "status": "verified"
     },
     {
       "sourceTicket": "T19",
@@ -109,10 +109,10 @@
       ],
       "linearIssue": {
         "id": "70cbe548-5e6c-4d35-b019-a570058a8cf2",
-        "identifier": null,
-        "url": null
+        "identifier": "NP-7",
+        "url": "https://linear.app/netpilot-z/issue/NP-7/taskseal-t19-人工验收并受控迁移-linear-done"
       },
-      "status": "planned"
+      "status": "verified"
     },
     {
       "sourceTicket": "T20",
@@ -126,10 +126,10 @@
       ],
       "linearIssue": {
         "id": "362d3f0e-804f-4687-95e9-13a9561760ec",
-        "identifier": null,
-        "url": null
+        "identifier": "NP-8",
+        "url": "https://linear.app/netpilot-z/issue/NP-8/taskseal-t20-稳定-runner-数字员工合同"
       },
-      "status": "planned"
+      "status": "verified"
     },
     {
       "sourceTicket": "T21",
@@ -142,10 +142,10 @@
       ],
       "linearIssue": {
         "id": "8c20a04b-d005-427a-8221-166551a80a1c",
-        "identifier": null,
-        "url": null
+        "identifier": "NP-9",
+        "url": "https://linear.app/netpilot-z/issue/NP-9/taskseal-t21-任务拆解依赖调度与真实可观测性"
       },
-      "status": "planned"
+      "status": "verified"
     },
     {
       "sourceTicket": "T22",
@@ -159,10 +159,10 @@
       ],
       "linearIssue": {
         "id": "35aa7526-2d18-4e72-a869-1bbec7af5a98",
-        "identifier": null,
-        "url": null
+        "identifier": "NP-10",
+        "url": "https://linear.app/netpilot-z/issue/NP-10/taskseal-t22-提供可安装-cli-与插件开发包"
       },
-      "status": "planned"
+      "status": "verified"
     },
     {
       "sourceTicket": "T23",
@@ -173,10 +173,10 @@
       "dependsOnTickets": [],
       "linearIssue": {
         "id": "d417850c-add8-4f90-9793-e9530e37ec60",
-        "identifier": null,
-        "url": null
+        "identifier": "NP-11",
+        "url": "https://linear.app/netpilot-z/issue/NP-11/taskseal-t23-用飞书多维表格压力测试-adapter"
       },
-      "status": "planned"
+      "status": "verified"
     },
     {
       "sourceTicket": "T24",
@@ -189,10 +189,10 @@
       ],
       "linearIssue": {
         "id": "3fdc7f5a-27aa-40c2-9c26-8a7ab59dba07",
-        "identifier": null,
-        "url": null
+        "identifier": "NP-12",
+        "url": "https://linear.app/netpilot-z/issue/NP-12/taskseal-t24-远程团队与商业化基础"
       },
-      "status": "planned"
+      "status": "verified"
     }
   ]
 }
