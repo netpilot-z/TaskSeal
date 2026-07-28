@@ -17,7 +17,7 @@ test("Linear ticket dry-run is deterministic, structured, and offline", async (t
 
 ## T01 — Build the first slice
 
-- 状态：已完成。
+- 状态：待执行。
 - 目的：证明第一个切片。
 - 范围：最小实现。
 - 不包含：外部写入。
@@ -167,47 +167,100 @@ test("non-ticket headings end a ticket and duplicate fields are rejected", async
   );
 });
 
-test("the repository milestone produces drafts for every current T ticket", async () => {
+test("completed tickets are excluded from bootstrap drafts", async (t) => {
+  const cwd = await createTemporaryProject(t);
+  await mkdir(join(cwd, "docs"), {
+    recursive: true
+  });
+  await writeFile(
+    join(cwd, "docs", "mixed.md"),
+    `## T01 — Historical work
+
+- 状态：已完成；保留历史。
+- 目的：验证过滤。
+- 范围：历史任务。
+- 不包含：外部写入。
+- 依赖：无。
+- 验收标准：不生成草案。
+- 验证：定向测试。
+
+## T02 — Pending work
+
+- 状态：待执行。
+- 目的：验证未完成项。
+- 范围：当前任务。
+- 不包含：外部写入。
+- 依赖：T01。
+- 验收标准：只生成这一项。
+- 验证：定向测试。
+`
+  );
+
+  const plan = await createLinearTicketDryRun({
+    cwd,
+    source: "docs/mixed.md"
+  });
+
+  assert.deepEqual(
+    plan.drafts.map((draft) => draft.sourceTicket),
+    ["T02"]
+  );
+  assert.deepEqual(
+    requireItem(
+      plan.drafts,
+      0
+    ).externalTicketDependencies,
+    ["T01"]
+  );
+});
+
+test("the repository default uses only the current unmapped bootstrap manifest", async () => {
   const plan = await createLinearTicketDryRun({
     cwd: process.cwd()
   });
 
-  assert.equal(plan.source, "docs/tickets/0002-codex-runner-milestone.md");
+  assert.equal(
+    plan.source,
+    "docs/tickets/0006-linear-bootstrap-manifest.md"
+  );
   assert.deepEqual(
     plan.drafts.map((draft) => draft.sourceTicket),
-    ["T01", "T02", "T03", "T04", "T05.1", "T05.2", "T05.3", "T06"]
+    [
+      "T15.2",
+      "T15.3",
+      "T16",
+      "T17",
+      "T18",
+      "T19",
+      "T20",
+      "T21",
+      "T22",
+      "T23",
+      "T24"
+    ]
   );
-  assert.equal(plan.issueCount, 8);
+  assert.equal(plan.issueCount, 11);
   assert.equal(plan.externalWrites, 0);
 
-  const nextPlan = await createLinearTicketDryRun({
+  const historicalPlan =
+    await createLinearTicketDryRun({
+      cwd: process.cwd(),
+      source:
+        "docs/tickets/0002-codex-runner-milestone.md"
+    });
+
+  assert.equal(historicalPlan.issueCount, 0);
+
+  const legacyGapPlan = await createLinearTicketDryRun({
     cwd: process.cwd(),
     source: "docs/tickets/0003-controlled-provider-sync-milestone.md"
   });
 
   assert.deepEqual(
-    nextPlan.drafts.map((draft) => draft.sourceTicket),
-    [
-      "T07.1",
-      "T07.2",
-      "T07.3",
-      "T08",
-      "T09",
-      "T10",
-      "T11.1",
-      "T11.2",
-      "T11.3",
-      "T11.4",
-      "T11.5"
-    ]
-  );
-  assert.equal(nextPlan.issueCount, 11);
-  assert.deepEqual(
-    requireItem(
-      nextPlan.drafts,
-      0
-    ).externalTicketDependencies,
-    ["T05.3"]
+    legacyGapPlan.drafts.map(
+      (draft) => draft.sourceTicket
+    ),
+    ["T09", "T11.3"]
   );
 });
 
@@ -220,10 +273,12 @@ async function createTemporaryProject(
   await writeFile(
     join(cwd, "config", "project.json"),
     JSON.stringify({
-      project: "TaskSeal",
+      project: "Local TaskSeal",
       linear: {
         workspace: "TaskSeal",
-        team: "netpilot"
+        team: "netpilot",
+        project: "TaskSeal",
+        backlogState: "Backlog"
       }
     })
   );

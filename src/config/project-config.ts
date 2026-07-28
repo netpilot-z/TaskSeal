@@ -9,6 +9,13 @@ export interface ProjectConfiguration {
   readonly mode?: string;
 }
 
+export interface LinearBootstrapCoordinates {
+  readonly workspace: string;
+  readonly team: string;
+  readonly project: string;
+  readonly backlogState: string;
+}
+
 type ProjectConfigErrorCode =
   | "PROJECT_CONFIG_INVALID"
   | "GITHUB_CONFIG_INVALID"
@@ -102,6 +109,35 @@ export function getLinearCoordinates(
   return { workspace, team };
 }
 
+export function getLinearBootstrapCoordinates(
+  configuration: ProjectConfiguration | null | undefined
+): LinearBootstrapCoordinates {
+  const { workspace, team } =
+    getLinearCoordinates(configuration);
+  const project = configuration?.linear?.project;
+  const backlogState =
+    configuration?.linear?.backlogState;
+
+  if (
+    !isNonEmptyTrimmedString(workspace) ||
+    !isNonEmptyTrimmedString(team) ||
+    !isNonEmptyTrimmedString(project) ||
+    !isNonEmptyTrimmedString(backlogState)
+  ) {
+    throw configError(
+      "LINEAR_CONFIG_INVALID",
+      "Linear bootstrap configuration requires project and backlogState references."
+    );
+  }
+
+  return {
+    workspace,
+    team,
+    project,
+    backlogState
+  };
+}
+
 export function getGiteeCoordinates(
   configuration: ProjectConfiguration | null | undefined
 ): { repository: string } {
@@ -146,6 +182,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function isNonEmptyTrimmedString(
+  value: unknown
+): value is string {
+  return (
+    isNonEmptyString(value) &&
+    value === value.trim()
+  );
 }
 
 class ProjectConfigError extends Error {

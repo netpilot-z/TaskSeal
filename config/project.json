@@ -5,7 +5,9 @@
   },
   "linear": {
     "workspace": "netpilot-z",
-    "team": "netpilot"
+    "team": "netpilot",
+    "project": "TaskSeal",
+    "backlogState": "Backlog"
   },
   "mode": "persistent"
 }

@@ -8,12 +8,12 @@ import {
 } from "node:path";
 
 import {
-  getLinearCoordinates,
+  getLinearBootstrapCoordinates,
   readProjectConfiguration
 } from "../config/project-config.ts";
 
 const DEFAULT_SOURCE =
-  "docs/tickets/0002-codex-runner-milestone.md";
+  "docs/tickets/0006-linear-bootstrap-manifest.md";
 
 type RequiredTicketField =
   | "状态"
@@ -112,8 +112,8 @@ export async function createLinearTicketDryRun({
   });
   const configuration =
     await readProjectConfiguration({ cwd });
-  const { workspace, team } =
-    getLinearCoordinates(configuration);
+  const { workspace, team, project } =
+    getLinearBootstrapCoordinates(configuration);
   let content: string;
 
   try {
@@ -128,7 +128,12 @@ export async function createLinearTicketDryRun({
     );
   }
 
-  const tickets = parseTickets(content);
+  const tickets = parseTickets(content).filter(
+    (ticket) =>
+      !isCompletedStatus(
+        requireTicketField(ticket, "状态")
+      )
+  );
   const ticketIds = new Set(
     tickets.map((ticket) => ticket.id)
   );
@@ -136,7 +141,7 @@ export async function createLinearTicketDryRun({
     createDraft({
       ticket,
       ticketIds,
-      project: configuration.project,
+      project,
       workspace,
       team,
       source: sourceFile.relativePath
@@ -152,7 +157,7 @@ export async function createLinearTicketDryRun({
     externalWrites: 0,
     source: sourceFile.relativePath,
     target: {
-      project: configuration.project,
+      project,
       workspace,
       team,
       resolved: false
@@ -440,6 +445,18 @@ function parseDependencies(value: string): string[] {
         item !== "无" &&
         item.toLowerCase() !== "none"
     );
+}
+
+function isCompletedStatus(value: string): boolean {
+  const normalized = value
+    .trim()
+    .replace(/[。.]+$/g, "")
+    .toLowerCase();
+
+  return (
+    normalized.startsWith("已完成") ||
+    normalized.startsWith("completed")
+  );
 }
 
 function digest(value: string): string {

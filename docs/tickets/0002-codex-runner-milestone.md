@@ -1,6 +1,6 @@
 # 里程碑 0002：Codex App Server Runner
 
-这些 tickets 是仓库内执行计划，不会自动同步到 Linear。
+这些 tickets 是已执行历史和早期 bootstrap 输入，不再作为当前在线任务状态；现行工作以 Linear 为权威来源，路线见 `0005-linear-productization-milestone.md`。
 
 ## T01 — 持久化并恢复 canonical events
 

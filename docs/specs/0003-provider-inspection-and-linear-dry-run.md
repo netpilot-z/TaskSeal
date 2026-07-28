@@ -45,12 +45,12 @@ taskseal inspect linear \
   --criterion <key>
 
 taskseal sync linear --dry-run \
-  [--source docs/tickets/0002-codex-runner-milestone.md]
+  [--source docs/tickets/0006-linear-bootstrap-manifest.md]
 ```
 
 `inspect` 成功时输出经过裁剪的 JSON snapshot；provider、配置或映射错误返回退出码 1；参数错误返回退出码 2。snapshot 不包含 Token、请求头、原始响应、当前工作目录或本地绝对路径。
 
-`sync linear --dry-run` 只读取项目配置与仓库内 Markdown。`--source` 解析后的路径必须仍位于项目根目录内，输出只使用仓库相对路径。
+`sync linear --dry-run` 只读取项目配置与仓库内 Markdown。默认 source 是只含尚未完成且尚未建立 Linear 映射的 bootstrap manifest；任意显式 source 中以“已完成”或 `completed` 开头的 ticket 都不会生成草案。`--source` 解析后的路径必须仍位于项目根目录内，输出只使用仓库相对路径。
 
 ## 配置与认证
 
@@ -63,7 +63,9 @@ taskseal sync linear --dry-run \
   },
   "linear": {
     "workspace": "workspace-name",
-    "team": "team-name-or-key"
+    "team": "team-name-or-key",
+    "project": "project-name",
+    "backlogState": "Backlog"
   }
 }
 ```

@@ -1,6 +1,6 @@
 # 里程碑 0003：真实样本、导入与受控同步
 
-这些 tickets 是 T05/T06 之后的建议执行顺序，不会自动同步到 Linear，也不会授权任何外部写入。
+这些 tickets 保留已完成历史和早期缺口，不再作为当前在线任务状态；现行工作以 Linear 为权威来源，未完成项已重述到 `0005-linear-productization-milestone.md`。本文本本身不授权外部写入。
 
 ## T07.1 — 确认 GitHub 与 Linear 真实 scope
 

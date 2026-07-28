@@ -1,6 +1,6 @@
 # 里程碑 0004：渐进式 TypeScript 与仓库演进
 
-这些 tickets 是仓库内迁移计划，不会自动同步到 GitHub 或 Linear，也不授权任何外部写入。
+这些 tickets 是已完成迁移历史和触发式后续输入，不再作为当前在线任务状态；现行工作以 Linear 为权威来源，未完成项已重述到 `0005-linear-productization-milestone.md`。本文本本身不授权外部写入。
 
 ## T12.1 — 建立 TypeScript 门禁并迁移项目配置
 

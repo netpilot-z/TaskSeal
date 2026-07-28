@@ -18,13 +18,14 @@ External provider
 - GitHub Issue/PR/Check Run 的真实 REST 只读客户端。
 - GitHub 单 Issue 的独立只读 snapshot，用于在 PR/Check 尚未就绪时先验证 WorkItem 映射。
 - Linear Organization/Team/Issue 的真实 GraphQL 只读客户端。
+- Linear Organization/Team/Project/Backlog State 的真实分页 resolver，以及尚未接入写链的 bounded GraphQL HTTP exchange。
 - 显式映射后的裁剪 snapshot 与内存重放。
 - 仓库 tickets 到 Linear Issue 草案的离线 dry-run。
 - ProviderSnapshot v2 的 preview、受策略约束的原子 apply 与可恢复 receipt。
 - 静态 AdapterManifest v1、capability/port runtime contract，以及 Gitee 匿名 repository health 与单 Issue read。
 - 独立 Provider Observation v1、五态 latest-state projection 与 persistent-only `GET /api/providers`。
 
-当前没有 Provider Webhook 或任何外部写入。
+当前没有 Provider Webhook 或任何外部写入。真实 Linear HTTP exchange 只完成只读 resolver smoke；在 Operation v2 绑定 Project/State/source intent 前，不得注入 v1 coordinator。
 
 ## 稳定事件契约
 
