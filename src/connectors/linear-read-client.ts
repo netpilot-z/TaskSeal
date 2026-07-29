@@ -38,6 +38,10 @@ const READ_ISSUE_QUERY = `query TaskSealReadIssue($id: String!) {
       id
       key
     }
+    project {
+      id
+      name
+    }
   }
 }`;
 
@@ -57,6 +61,10 @@ const READ_ISSUE_IDENTITY_QUERY =
     team {
       id
       key
+    }
+    project {
+      id
+      name
     }
   }
 }`;
@@ -103,6 +111,10 @@ export interface LinearIssue
     id: string;
     key: string;
   };
+  project: {
+    id: string;
+    name: string;
+  };
 }
 
 export interface LinearIssueReadResult {
@@ -114,6 +126,7 @@ export interface LinearIssueReadResult {
 export interface ReadLinearIssueOptions {
   workspace: string;
   team: string;
+  project: string;
   issueReference: string;
   apiKey?: string | undefined;
   accessToken?: string | undefined;
@@ -153,6 +166,7 @@ interface TeamConnection {
 export async function readLinearIssue({
   workspace,
   team,
+  project,
   issueReference,
   apiKey,
   accessToken,
@@ -161,6 +175,7 @@ export async function readLinearIssue({
 }: ReadLinearIssueOptions): Promise<LinearIssueReadResult> {
   requireNonEmptyString(workspace, "workspace");
   requireNonEmptyString(team, "team");
+  requireNonEmptyString(project, "project");
   requireNonEmptyString(
     issueReference,
     "issueReference"
@@ -348,6 +363,9 @@ export async function readLinearIssue({
     issue.team.id === resolvedTeam.id &&
     normalizeReference(issue.team.key) ===
       normalizeReference(resolvedTeam.key);
+  const returnedProjectMatches =
+    normalizeReference(issue.project.name) ===
+      normalizeReference(project);
 
   if (
     !returnedIdentifierMatches ||
@@ -356,6 +374,13 @@ export async function readLinearIssue({
     throw linearError(
       "LINEAR_ISSUE_TEAM_MISMATCH",
       "The requested Linear issue does not belong to the configured team."
+    );
+  }
+
+  if (!returnedProjectMatches) {
+    throw linearError(
+      "LINEAR_ISSUE_PROJECT_MISMATCH",
+      "The requested Linear issue does not belong to the configured project."
     );
   }
 
@@ -710,7 +735,10 @@ function isLinearIssue(
     isNonEmptyString(value.updatedAt) &&
     isRecord(value.team) &&
     isNonEmptyString(value.team.id) &&
-    isNonEmptyString(value.team.key)
+    isNonEmptyString(value.team.key) &&
+    isRecord(value.project) &&
+    isNonEmptyString(value.project.id) &&
+    isNonEmptyString(value.project.name)
   );
 }
 

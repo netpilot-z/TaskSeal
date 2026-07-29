@@ -235,6 +235,8 @@ test("mocked-real GitHub and Linear re-reads reject same-scope forged locator bi
           createReadOnlyProviderFactProvenanceVerifier({
             linear: {
               apiKey: "test-only-key",
+              expectedProjectId:
+                "55555555-5555-4555-8555-555555555555",
               fetchImpl: async () =>
                 jsonResponse({
                   data: {
@@ -259,6 +261,11 @@ test("mocked-real GitHub and Linear re-reads reject same-scope forged locator bi
                         id:
                           "22222222-2222-4222-8222-222222222222",
                         key: "NET"
+                      },
+                      project: {
+                        id:
+                          "55555555-5555-4555-8555-555555555555",
+                        name: "TaskSeal"
                       }
                     }
                   }

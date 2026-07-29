@@ -47,6 +47,12 @@ export interface LinearBootstrapCoordinates {
   readonly backlogState: string;
 }
 
+export interface LinearProjectCoordinates {
+  readonly workspace: string;
+  readonly team: string;
+  readonly project: string;
+}
+
 export interface GitHubDeliveryCoordinates {
   readonly repository: string;
   readonly enabled: boolean;
@@ -208,6 +214,23 @@ export function getLinearCoordinates(
   }
 
   return { workspace, team };
+}
+
+export function getLinearProjectCoordinates(
+  configuration: ProjectConfiguration | null | undefined
+): LinearProjectCoordinates {
+  const { workspace, team } =
+    getLinearCoordinates(configuration);
+  const project = configuration?.linear?.project;
+
+  if (!isNonEmptyTrimmedString(project)) {
+    throw configError(
+      "LINEAR_CONFIG_INVALID",
+      "Linear project configuration requires a project reference."
+    );
+  }
+
+  return { workspace, team, project };
 }
 
 export function getLinearBootstrapCoordinates(

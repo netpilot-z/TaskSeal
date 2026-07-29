@@ -2,7 +2,7 @@ import {
   getFeishuReadCoordinates,
   getGiteeCoordinates,
   getGitHubCoordinates,
-  getLinearCoordinates,
+  getLinearProjectCoordinates,
   readProjectConfiguration
 } from "../config/project-config.ts";
 import type {
@@ -714,11 +714,12 @@ export async function inspectLinearProvider({
   const configuration =
     providedConfiguration ??
     (await readProjectConfiguration({ cwd }));
-  const { workspace, team } =
-    getLinearCoordinates(configuration);
+  const { workspace, team, project } =
+    getLinearProjectCoordinates(configuration);
   const facts = await readLinearIssue({
     workspace,
     team,
+    project,
     issueReference,
     apiKey: environment.LINEAR_API_KEY,
     accessToken: environment.LINEAR_ACCESS_TOKEN,

@@ -64,7 +64,7 @@ taskseal ready linear --mode apply --issue <uuid> --work-item <id> --criterion <
 
 apply 先只重放本地 journal 并按 reviewed digest 查询已验证的 batch context。只有 receipt、PolicyBinding、全部 action source、WorkItem、Linear rich link 与 mapping 完整绑定本次 Issue UUID/WorkItem/Evidence 时，才在读取配置、凭证或 Provider 前返回 `idempotent`；该 receipt replay 输出 `issueId` 与 `receiptReplay: true`，不伪造未重新读取的 live candidate。未命中才进入实时 eligibility 与新 apply；错误 digest、错误 source/mapping 或不存在的 receipt 不得被报告为成功，也不追加空 batch。
 
-apply 只写本地 canonical journal，输出 `linearWrites: 0`。apply-time Linear provenance re-read 仍绑定 UUID、Team、revision、title 与 digest；Project/Todo/依赖 eligibility 是派发前短生命周期门禁，不宣称与 Linear 形成原子租约。
+apply 只写本地 canonical journal，输出 `linearWrites: 0`。apply-time Linear provenance re-read 绑定 UUID、Team、Project UUID、revision、title 与 digest；Todo/依赖 eligibility 是派发前短生命周期门禁，不宣称与 Linear 形成原子租约。Issue 在 preview 后移入其他 Project 时必须作为 provenance mismatch 停止，不能提交 canonical batch。
 
 ## 安全与回退
 
@@ -78,7 +78,7 @@ apply 只写本地 canonical journal，输出 `linearWrites: 0`。apply-time Lin
 
 ## 验收与验证
 
-- exact Project/Todo/Done scope；
+- exact Project/Todo/Done scope，并在 apply-time 重验 Project UUID；
 - Issue 与 relation 有界分页；
 - stable UUID create/link；
 - declared/native dependency union 与实时 Done gate；

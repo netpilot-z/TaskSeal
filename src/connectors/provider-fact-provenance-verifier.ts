@@ -43,6 +43,7 @@ export interface GitHubProvenanceReadOptions {
 export interface LinearProvenanceReadOptions {
   apiKey?: string | undefined;
   accessToken?: string | undefined;
+  expectedProjectId: string;
   fetchImpl?: LinearFetchLike;
   timeoutMs?: number;
 }
@@ -616,6 +617,8 @@ async function verifyLinearClaim(
       scope.organizationId &&
     issue.team.id.toLowerCase() ===
       scope.teamId &&
+    issue.project.id.toLowerCase() ===
+      readOptions.expectedProjectId &&
     identifier !== null &&
     identifier[1]?.toLowerCase() ===
       issue.team.key.toLowerCase() &&
@@ -702,8 +705,19 @@ function normalizeLinearReadOptions(
     throw unavailable();
   }
 
+  const expectedProjectId =
+    options.expectedProjectId?.toLowerCase();
+
+  if (
+    typeof expectedProjectId !== "string" ||
+    !isUuid(expectedProjectId)
+  ) {
+    throw unavailable();
+  }
+
   return {
     ...options,
+    expectedProjectId,
     timeoutMs: normalizeBoundedTimeout({
       timeoutMs: options.timeoutMs,
       defaultMs:
