@@ -923,19 +923,37 @@ function finishAttempt(
   const changesActiveState =
     workItem.activeAttemptId === attempt.id &&
     attempt.status === "running";
-  const attempts: Attempt[] = workItem.attempts.map((item) =>
-    item.id === attempt.id
-      ? {
-          ...item,
-          status: changesActiveState ? event.payload.outcome : item.status,
-          runtimeOutcome: event.payload.outcome,
-          completedAt: item.completedAt ?? event.occurredAt,
-          threadId: event.payload.threadId ?? item.threadId,
-          turnId: event.payload.turnId ?? item.turnId,
-          summary: event.payload.summary ?? item.summary
-        }
-      : item
-  );
+  const attempts: Attempt[] = workItem.attempts.map((item) => {
+    if (item.id !== attempt.id) {
+      return item;
+    }
+
+    const threadId =
+      event.payload.threadId ?? item.threadId;
+    const turnId =
+      event.payload.turnId ?? item.turnId;
+    const summary =
+      event.payload.summary ?? item.summary;
+
+    return {
+      ...item,
+      status: changesActiveState
+        ? event.payload.outcome
+        : item.status,
+      runtimeOutcome: event.payload.outcome,
+      completedAt:
+        item.completedAt ?? event.occurredAt,
+      ...(threadId === undefined
+        ? {}
+        : { threadId }),
+      ...(turnId === undefined
+        ? {}
+        : { turnId }),
+      ...(summary === undefined
+        ? {}
+        : { summary })
+    };
+  });
 
   return withWorkItem(workflow, event, {
     ...workItem,
