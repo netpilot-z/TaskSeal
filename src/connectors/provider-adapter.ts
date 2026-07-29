@@ -14,6 +14,22 @@ export interface AdapterScopeV1 {
   readonly objectTypes: readonly string[];
 }
 
+export interface AdapterEnvironmentCredentialReferenceV1 {
+  readonly key: string;
+  readonly environmentVariable: string;
+  readonly secret: true;
+}
+
+export type AdapterCredentialV1 =
+  | {
+      readonly mode: "none";
+    }
+  | {
+      readonly mode: "environment";
+      readonly references:
+        readonly AdapterEnvironmentCredentialReferenceV1[];
+    };
+
 export interface AdapterManifestV1 {
   readonly schemaVersion: 1;
   readonly apiVersion: "taskseal.provider/v1";
@@ -26,9 +42,7 @@ export interface AdapterManifestV1 {
     readonly schemaVersion: 1;
     readonly fields: readonly AdapterConfigurationFieldV1[];
   };
-  readonly credential: {
-    readonly mode: "none";
-  };
+  readonly credential: AdapterCredentialV1;
   readonly scopes: readonly AdapterScopeV1[];
 }
 
@@ -66,9 +80,12 @@ const CAPABILITIES: readonly ProviderReadCapability[] = [
   "work-item.read"
 ];
 const MAX_CONFIGURATION_FIELDS = 32;
+const MAX_CREDENTIAL_REFERENCES = 16;
 const MAX_SCOPES = 16;
 const MAX_OBJECT_TYPES = 32;
 const IDENTIFIER_PATTERN = /^[a-z][a-z0-9.-]{0,63}$/;
+const ENVIRONMENT_VARIABLE_PATTERN =
+  /^[A-Z][A-Z0-9_]{0,127}$/;
 
 export function normalizeProviderAdapterV1(
   value: unknown
@@ -220,14 +237,67 @@ function normalizeConfigurationField(
 function normalizeCredential(
   value: Record<string, unknown>
 ): AdapterManifestV1["credential"] {
+  if (hasExactKeys(value, ["mode"]) && value.mode === "none") {
+    return { mode: "none" };
+  }
+
   if (
-    !hasExactKeys(value, ["mode"]) ||
-    value.mode !== "none"
+    !hasExactKeys(value, ["mode", "references"]) ||
+    value.mode !== "environment" ||
+    !isDenseArray(value.references) ||
+    value.references.length === 0 ||
+    value.references.length > MAX_CREDENTIAL_REFERENCES
   ) {
     throw invalidAdapter();
   }
 
-  return { mode: "none" };
+  const references = value.references.map(
+    normalizeEnvironmentCredentialReference
+  );
+  const keys = references.map((reference) => reference.key);
+  const environmentVariables = references.map(
+    (reference) => reference.environmentVariable
+  );
+
+  if (
+    new Set(keys).size !== keys.length ||
+    new Set(environmentVariables).size !==
+      environmentVariables.length
+  ) {
+    throw invalidAdapter();
+  }
+
+  return {
+    mode: "environment",
+    references
+  };
+}
+
+function normalizeEnvironmentCredentialReference(
+  value: unknown
+): AdapterEnvironmentCredentialReferenceV1 {
+  if (
+    !isPlainRecord(value) ||
+    !hasExactKeys(value, [
+      "key",
+      "environmentVariable",
+      "secret"
+    ]) ||
+    !isAdapterIdentifier(value.key) ||
+    typeof value.environmentVariable !== "string" ||
+    !ENVIRONMENT_VARIABLE_PATTERN.test(
+      value.environmentVariable
+    ) ||
+    value.secret !== true
+  ) {
+    throw invalidAdapter();
+  }
+
+  return {
+    key: value.key,
+    environmentVariable: value.environmentVariable,
+    secret: true
+  };
 }
 
 function normalizeScopes(

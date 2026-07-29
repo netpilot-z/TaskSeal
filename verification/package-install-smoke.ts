@@ -631,6 +631,40 @@ if (
   throw new Error("Public SDK surface mismatch.");
 }
 
+normalizeProviderAdapterV1({
+  manifest: {
+    schemaVersion: 1,
+    apiVersion: "taskseal.provider/v1",
+    providerId: "smoke.environment",
+    capabilities: ["provider.health", "work-item.read"],
+    configuration: {
+      schemaVersion: 1,
+      fields: [{
+        key: "resource",
+        type: "string",
+        required: true,
+        secret: false
+      }]
+    },
+    credential: {
+      mode: "environment",
+      references: [{
+        key: "app-secret",
+        environmentVariable: "SMOKE_PROVIDER_APP_SECRET",
+        secret: true
+      }]
+    },
+    scopes: [{
+      kind: "resource",
+      objectTypes: ["work-item"]
+    }]
+  },
+  ports: {
+    "provider.health": async () => ({ status: "ready" }),
+    "work-item.read": async () => ({ title: "Smoke item" })
+  }
+});
+
 try {
   await import("taskseal/dist/application/taskseal-service.js");
   throw new Error("Internal package path was exported.");
@@ -672,11 +706,45 @@ declare const provider: ProviderAdapterV1<
   { id: string },
   { title: string }
 >;
+const environmentProvider: ProviderAdapterV1 = {
+  manifest: {
+    schemaVersion: 1,
+    apiVersion: "taskseal.provider/v1",
+    providerId: "consumer.environment",
+    capabilities: ["provider.health", "work-item.read"],
+    configuration: {
+      schemaVersion: 1,
+      fields: [{
+        key: "resource",
+        type: "string",
+        required: true,
+        secret: false
+      }]
+    },
+    credential: {
+      mode: "environment",
+      references: [{
+        key: "app-secret",
+        environmentVariable: "CONSUMER_PROVIDER_APP_SECRET",
+        secret: true
+      }]
+    },
+    scopes: [{
+      kind: "resource",
+      objectTypes: ["work-item"]
+    }]
+  },
+  ports: {
+    "provider.health": async () => ({ status: "ready" }),
+    "work-item.read": async () => ({ title: "Consumer item" })
+  }
+};
 declare const runnerContract: RunnerAdapterContractFactory;
 declare const providerContract: ProviderAdapterContractFactory;
 
 parseRunnerManifest(runner.manifest);
 normalizeProviderAdapterV1(provider);
+normalizeProviderAdapterV1(environmentProvider);
 parseTaskSealPluginManifest({
   schemaVersion: 1,
   apiVersion: "taskseal.plugin/v1",

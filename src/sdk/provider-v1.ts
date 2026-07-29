@@ -5,6 +5,8 @@ export {
 
 export type {
   AdapterConfigurationFieldV1,
+  AdapterCredentialV1,
+  AdapterEnvironmentCredentialReferenceV1,
   AdapterManifestV1,
   AdapterScopeV1,
   ProviderAdapterV1,
