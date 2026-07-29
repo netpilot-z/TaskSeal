@@ -140,7 +140,7 @@ function normalizeLinearIssueDto(
   requireString(id, "id");
   requireString(identifier, "identifier");
   requireString(title, "title");
-  requireHttpUrl(url, "url");
+  const normalizedUrl = normalizeHttpUrl(url, "url");
   requireString(createdAt, "createdAt");
   requireString(updatedAt, "updatedAt");
 
@@ -148,7 +148,7 @@ function normalizeLinearIssueDto(
     id,
     identifier,
     title,
-    url,
+    url: normalizedUrl,
     createdAt,
     updatedAt
   };
@@ -228,10 +228,10 @@ function requireString(
   }
 }
 
-function requireHttpUrl(
+function normalizeHttpUrl(
   value: unknown,
   field: string
-): asserts value is string {
+): string {
   requireString(value, field);
 
   let url: URL;
@@ -251,6 +251,8 @@ function requireHttpUrl(
       `Linear issue ${field} must be an http or https URL.`
     );
   }
+
+  return url.href;
 }
 
 function readProperty(
