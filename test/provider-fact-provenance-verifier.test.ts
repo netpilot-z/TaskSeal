@@ -512,6 +512,31 @@ test("Linear verifier binds Organization, Team, UUID, identifier, URL, revision,
   );
 });
 
+test("Linear verifier canonicalizes a Unicode remote URL before comparing the reviewed claim", async () => {
+  const rawUrl =
+    "https://linear.app/taskseal/issue/NET-7/自驱动项目交付闭环";
+  const claim = linearIssueClaimWithUrl(rawUrl);
+  const response = linearIdentityResponse(claim);
+  response.data.issue.url = rawUrl;
+  const verifier =
+    createReadOnlyProviderFactProvenanceVerifier({
+      linear: {
+        apiKey: "linear-secret",
+        expectedProjectId:
+          LINEAR_PROJECT_ID,
+        fetchImpl: async () =>
+          jsonResponse(response)
+      }
+    });
+
+  const result = await verifier.verify([
+    claim
+  ]) as ProviderFactProvenanceVerificationResult[];
+
+  assert.equal(claim.url, new URL(rawUrl).href);
+  assert.equal(result[0]?.outcome, "verified");
+});
+
 test("Linear readable scope or locator drift is a mismatch while transport failures stay unavailable", async () => {
   const claim = linearIssueClaim();
   const mismatchVerifier =
@@ -833,6 +858,31 @@ function linearIssueClaim():
     snapshot: createLinearIssueSnapshot(),
     importPolicy: createLinearImportPolicy()
   });
+  return required(
+    collectProviderFactProvenanceClaims({
+      plan,
+      baseWorkflow: createWorkflow()
+    })[0]
+  );
+}
+
+function linearIssueClaimWithUrl(
+  rawUrl: string
+): ProviderFactProvenanceClaim {
+  const snapshot =
+    createLinearIssueSnapshot();
+  const fact = required(snapshot.facts[0]);
+  const canonicalUrl = new URL(rawUrl).href;
+  fact.sourceObject.url = canonicalUrl;
+  fact.candidateEvent.payload.externalLink.url =
+    canonicalUrl;
+  fact.revision.contentDigest =
+    digestProviderFactContent(fact);
+  const plan = createPreviewPlan({
+    snapshot,
+    importPolicy: createLinearImportPolicy()
+  });
+
   return required(
     collectProviderFactProvenanceClaims({
       plan,

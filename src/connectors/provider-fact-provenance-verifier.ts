@@ -21,6 +21,9 @@ import type {
   FetchLike
 } from "./github-read-client.ts";
 import {
+  normalizeLinearIssueUrl
+} from "./linear.ts";
+import {
   readLinearIssueIdentity
 } from "./linear-read-client.ts";
 import type {
@@ -598,6 +601,15 @@ async function verifyLinearClaim(
   }
 
   const issue = result.issue;
+  let issueUrl: string;
+
+  try {
+    issueUrl =
+      normalizeLinearIssueUrl(issue.url);
+  } catch {
+    return false;
+  }
+
   const externalId = issue.id.toLowerCase();
   const sourceObject = {
     providerObjectKey:
@@ -605,7 +617,7 @@ async function verifyLinearClaim(
     provider: "linear" as const,
     objectType: "issue" as const,
     externalId,
-    url: issue.url
+    url: issueUrl
   };
   const identifier =
     /^([A-Za-z][A-Za-z0-9]*)-([1-9]\d*)$/.exec(
@@ -627,7 +639,7 @@ async function verifyLinearClaim(
     externalId === claim.externalId &&
     sourceObject.providerObjectKey ===
       claim.providerObjectKey &&
-    issue.url === claim.url &&
+    issueUrl === claim.url &&
     issue.updatedAt ===
       claim.sourceRevisionId &&
     issueTimesMatch(claim, {
