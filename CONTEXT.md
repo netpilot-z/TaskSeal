@@ -21,6 +21,12 @@ TaskSeal 让人类和 AI Agent 的“已完成”变成有证据、可验收、�
 
 本阶段不构建通用 Agent 市场、多租户权限、计费或生产数据库。Snapshot apply 默认仍只提供 application API；Linear ready-work 额外开放显式 UUID 的本地 CLI preview/apply，但只写 canonical journal、固定零 Linear mutation。没有可信 ImportPolicy provider 时不能提交。Registry 证明 Provider/scope 授权和离线可验证的 locator 结构；GitHub/Linear 新 apply 还必须通过显式注入的只读 verifier，以短生命周期 `ProviderFactProvenanceClaim v1` 从精确 plan event 对账远端 stable ID、locator、scope、revision、source/event time、content binding 与 digest。公开 plan digest 不被当作来源证明；未注入 verifier、远端不可用或 Plan v1 remote no-event 时失败关闭。单次最多 8 个 claim、4 路并发、单请求最多 15 秒并受 30 秒总 deadline 约束；已提交 receipt 与历史 journal replay 保持离线。Linear workspace `netpilot-z`、team `netpilot`、project `TaskSeal`、backlog `Backlog`、ready `Todo` 与 completed `Done` 已通过真实只读 resolver 精确验证。
 
+首个真实产品 Dogfood 选择 ScopeLedger：当前用户是唯一 accountable owner，
+产品、架构、开发、测试和发布由 Agent 角色模拟，人工验收不能被模拟。试点保持
+local-first，GitHub 只同步代码、PR 和 CI；在 ScopeLedger 未提交基线受保护且远端
+坐标/可见性获批前，不修改其工作树、不创建远端或启动交付。章程见
+`docs/pilots/0001-scope-ledger-single-owner.md`。
+
 Runner v1 已把 Codex App Server 从唯一实现降为首个
 `CodexAppServerRunnerAdapter`。application-owned `ManagedAttemptRunner` 统一拥有
 WorkItem/cwd/capability 校验、Attempt reservation、deadline、cancel fence、
