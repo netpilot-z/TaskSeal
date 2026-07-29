@@ -2,9 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  computeBaseWorkflowDigest,
   computeImportPlanDigest,
   deriveImportEventId
 } from "../src/application/import-plan.ts";
+import {
+  applyEvent,
+  createWorkflow
+} from "../src/domain/workflow.ts";
 
 interface EventIdentityFixture {
   eventType: string;
@@ -109,6 +114,66 @@ test("import plan digest survives JSON round trips and excludes presentation fie
   assert.equal(
     computeImportPlanDigest(roundTripped),
     planDigest
+  );
+});
+
+test("base workflow digests accept a completed attempt without optional runtime fields", () => {
+  const workflow = [
+    {
+      eventId: "taskseal:TS-1:created",
+      workItemId: "TS-1",
+      type: "work_item.created" as const,
+      occurredAt: "2026-07-29T08:00:00.000Z",
+      payload: {
+        title: "Legacy summary-free attempt",
+        requiredEvidence: ["tests"],
+        externalLink: {
+          provider: "taskseal",
+          externalId: "TS-1",
+          url: "http://127.0.0.1/work-items/TS-1"
+        }
+      }
+    },
+    {
+      eventId: "taskseal:attempt-1:started",
+      workItemId: "TS-1",
+      type: "attempt.started" as const,
+      occurredAt: "2026-07-29T08:01:00.000Z",
+      payload: {
+        attemptId: "attempt-1",
+        agentId: "codex"
+      }
+    },
+    {
+      eventId: "taskseal:attempt-1:finished",
+      workItemId: "TS-1",
+      type: "attempt.finished" as const,
+      occurredAt: "2026-07-29T08:02:00.000Z",
+      payload: {
+        attemptId: "attempt-1",
+        outcome: "completed" as const
+      }
+    }
+  ].reduce(applyEvent, createWorkflow());
+  const attempt =
+    workflow.workItems["TS-1"]?.attempts[0];
+
+  assert.ok(attempt);
+  assert.equal(
+    Object.hasOwn(attempt, "summary"),
+    false
+  );
+  assert.equal(
+    Object.hasOwn(attempt, "threadId"),
+    false
+  );
+  assert.equal(
+    Object.hasOwn(attempt, "turnId"),
+    false
+  );
+  assert.match(
+    computeBaseWorkflowDigest(workflow),
+    /^sha256:[0-9a-f]{64}$/
   );
 });
 
