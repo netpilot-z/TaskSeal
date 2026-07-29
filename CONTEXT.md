@@ -11,7 +11,7 @@ TaskSeal 让人类和 AI Agent 的“已完成”变成有证据、可验收、�
 - fixture：`Linear WorkItem → Codex Attempt → GitHub Artifact/Evidence → AcceptanceDecision`
 - persistent：`Local WorkItem → Managed Runner Host → Codex App Server Adapter → Attempt → Control Room`
 - provider import：`GitHub/Linear/Gitee read-only fact → trusted ingress registry → per-scope ImportPolicy v2 → deterministic ImportPlan → GitHub/Linear apply-time provenance re-read → atomic local batch → ImportReceipt`
-- provider extension：已以 Gitee 提取内置 Adapter Contract v1，并验证 Provider-neutral rich link 与受控本地 import；下一步用飞书多维表格做异构压力测试
+- provider extension：已以 Gitee 提取内置 Adapter Contract v1，并验证 Provider-neutral rich link 与受控本地 import；飞书多维表格也已完成 token、动态字段、POST-read、分页与业务错误的异构压力测试，但只进入 observation，不授予 import
 - provider observation：`inspection/preview/import → redacted latest-state model → GET /api/providers`，独立于 canonical journal
 - controlled external write（v2 fake 验证完成）：`Project/State/source intent OperationPlan → human approval → versioned Operation Journal → project-aware fake submit → full placement observation → client UUID reconciliation → safe Control Room projection`
 - Linear ready work：`exact Project/Todo query → native/declared blocker union → live Done gate → explicit UUID selection → ImportPlan review → atomic local create/link`
@@ -53,7 +53,7 @@ Linear ready-work intake 已使用独立 connector/application composition 实�
 
 GitHub delivery reconciliation 已使用仓库版本化 `DeliveryMapping` 实现。mapping 精确绑定 Linear Issue UUID、WorkItem、target PR number、fork-aware head repository/branch 与最多七项 Check/Review criterion；index 只表达关联意图，不是 GitHub live truth。runtime 在任何 GitHub read 前对账项目 repository、Linear rich link ownership、required evidence 和 active Attempt；随后读取 exact PR/head、批量 checks、reviewer-specific decisive reviews，并以第二次 PR read 建立 head fence。新 head 即使 Evidence 尚未齐全也先形成 Artifact plan，从而让旧 revision Evidence 退出当前验收 gate；同一 facts 已表示时返回 `up_to_date`。apply 必须重新采集 reviewed plan，并由 exact PR/check/review provenance 回读后才原子写本地 journal；CLI 固定 `githubWrites: 0`、`linearWrites: 0`，disabled、foreign target 或空 mapping 均不回退到自动发现。
 
-当前真实环境中，Linear Issue `NP-1` 已完成成功 snapshot；GitHub Issue `#1`、Draft PR `#2` 与 PR head 上的 `tests` Check 已完成完整只读 snapshot 和真实内存重放。Gitee 公共 `oschina/git-osc#I4` 已完成匿名 health/read smoke；自动化测试已证明它只有在 trusted registry 与精确 per-scope policy 同时允许时才能执行本地 preview/apply，direct rich append 仍固定拒绝。该 apply 只写本地 canonical journal，不写回 Gitee。Issue、PR 与 CI 的创建均来自操作者明确授权；TaskSeal 不会从只读检查隐式创建、更新、合并或关闭外部对象。
+当前真实环境中，Linear Issue `NP-1` 已完成成功 snapshot；GitHub Issue `#1`、Draft PR `#2` 与 PR head 上的 `tests` Check 已完成完整只读 snapshot 和真实内存重放。Gitee 公共 `oschina/git-osc#I4` 已完成匿名 health/read smoke；自动化测试已证明它只有在 trusted registry 与精确 per-scope policy 同时允许时才能执行本地 preview/apply，direct rich append 仍固定拒绝。飞书专用测试 Base 已完成真实 health 和固定 record snapshot，仓库、CLI 与 observation 只保存不透明 table/record digest；飞书没有 ingress registration、ImportPolicy、apply route 或 write-back。Gitee apply 也只写本地 canonical journal，不写回 Gitee。Issue、PR 与 CI 的创建均来自操作者明确授权；TaskSeal 不会从只读检查隐式创建、更新、合并或关闭外部对象。
 
 Provider Observation v1 已使用独立 `.taskseal/provider-observations.json` 保存每个 configured target 的最新脱敏状态。它按 operation start freshness 拒绝晚返回的旧结果，先对账 configured target 与 observed scope，再通过 persistent-only `GET /api/providers` 暴露五态；真实 preview/apply 由持有 verified resolved-scope binding 的 observed application façade 组合，跨 Provider/foreign scope 在业务提交前拒绝，不保存 raw payload、标题、URL、凭证或错误正文，也不会进入 Workflow journal。
 

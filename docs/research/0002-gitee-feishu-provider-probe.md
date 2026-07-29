@@ -1,5 +1,7 @@
 # 调研 0002：Gitee 与飞书第二 Provider 契约探针
 
+> 后续状态：先接 Gitee 的顺序决策已验证；飞书随后由 Linear `NP-11` 完成真实只读压力测试，最终边界见 [ADR 0017](../adr/0017-feishu-opaque-read-scope.md)。
+
 ## 调研范围
 
 本调研只回答 GitHub Issue `#9` 的可证伪问题：TaskSeal 应先用 Gitee Issue，还是飞书多维表格记录，作为第二个只读 Provider 来反证插件边界。
