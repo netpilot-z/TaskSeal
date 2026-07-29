@@ -103,6 +103,12 @@ export function isLinearIssueReference(
   );
 }
 
+export function normalizeLinearIssueUrl(
+  value: unknown
+): string {
+  return normalizeHttpUrl(value, "url");
+}
+
 function createLinearIssueEvent(
   issue: LinearIssueDto,
   mapping: LinearIssueMapping
@@ -140,7 +146,8 @@ function normalizeLinearIssueDto(
   requireString(id, "id");
   requireString(identifier, "identifier");
   requireString(title, "title");
-  const normalizedUrl = normalizeHttpUrl(url, "url");
+  const normalizedUrl =
+    normalizeLinearIssueUrl(url);
   requireString(createdAt, "createdAt");
   requireString(updatedAt, "updatedAt");
 
