@@ -1,4 +1,5 @@
 import {
+  getFeishuConfiguration,
   getGiteeCoordinates,
   getGitHubCoordinates,
   getLinearCoordinates
@@ -268,6 +269,15 @@ export function configuredTargetForProvider(
       kind: "repository",
       key:
         `gitee:repository:${repository.toLowerCase()}`
+    };
+  }
+
+  if (provider === "feishu") {
+    const { tableScopeKey } =
+      getFeishuConfiguration(configuration);
+    return {
+      kind: "table",
+      key: tableScopeKey
     };
   }
 

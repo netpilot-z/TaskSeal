@@ -9,7 +9,11 @@ import type {
 } from "../domain/workflow.ts";
 
 // Read-model membership does not grant import; that allowlist is ImportProvider.
-export type ProviderName = "github" | "linear" | "gitee";
+export type ProviderName =
+  | "github"
+  | "linear"
+  | "gitee"
+  | "feishu";
 
 export type ProviderObjectType =
   | "check"
@@ -34,6 +38,12 @@ export interface ProviderRevision {
 export interface ProviderIssueObservation {
   title: string;
   createdAt: string;
+}
+
+export interface ProviderRecordObservation {
+  title: string;
+  status: string;
+  updatedAt: string;
 }
 
 export interface ProviderPullRequestObservation {
@@ -66,6 +76,19 @@ export interface ProviderIssueFact {
   };
   revision: ProviderRevision;
   observed: ProviderIssueObservation;
+  candidateEvent: WorkItemCreatedEvent;
+}
+
+export interface ProviderRecordFact {
+  sourceObject: Omit<
+    ProviderSourceObject,
+    "provider" | "objectType"
+  > & {
+    provider: "feishu";
+    objectType: "record";
+  };
+  revision: ProviderRevision;
+  observed: ProviderRecordObservation;
   candidateEvent: WorkItemCreatedEvent;
 }
 
@@ -102,6 +125,7 @@ export interface ProviderPullRequestReviewFact {
 
 export type ProviderFact =
   | ProviderIssueFact
+  | ProviderRecordFact
   | ProviderPullRequestFact
   | ProviderCheckFact
   | ProviderPullRequestReviewFact;

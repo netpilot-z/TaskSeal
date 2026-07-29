@@ -1,12 +1,43 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import {
+  createFeishuTableScope
+} from "../lib/feishu-identity.ts";
+
 export interface ProjectConfiguration {
   readonly project: string;
   readonly github?: Readonly<Record<string, unknown>>;
   readonly gitee?: Readonly<Record<string, unknown>>;
+  readonly feishu?: Readonly<Record<string, unknown>>;
   readonly linear?: Readonly<Record<string, unknown>>;
   readonly mode?: string;
+}
+
+export interface FeishuReadEnvironment {
+  readonly TASKSEAL_FEISHU_APP_TOKEN?: string | undefined;
+  readonly TASKSEAL_FEISHU_TABLE_ID?: string | undefined;
+  readonly TASKSEAL_FEISHU_RECORD_ID?: string | undefined;
+  readonly TASKSEAL_FEISHU_TITLE_FIELD?: string | undefined;
+  readonly TASKSEAL_FEISHU_STATUS_FIELD?: string | undefined;
+  readonly TASKSEAL_FEISHU_UPDATED_AT_FIELD?: string | undefined;
+}
+
+export interface FeishuReadCoordinates {
+  readonly appToken: string;
+  readonly tableId: string;
+  readonly recordId: string;
+  readonly fieldMapping: {
+    readonly title: string;
+    readonly status: string;
+    readonly updatedAt: string;
+  };
+  readonly tableScopeKey: string;
+}
+
+export interface FeishuConfiguration {
+  readonly enabled: true;
+  readonly tableScopeKey: string;
 }
 
 export interface LinearBootstrapCoordinates {
@@ -54,6 +85,7 @@ type ProjectConfigErrorCode =
   | "PROJECT_CONFIG_INVALID"
   | "GITHUB_CONFIG_INVALID"
   | "GITEE_CONFIG_INVALID"
+  | "FEISHU_CONFIG_INVALID"
   | "LINEAR_CONFIG_INVALID";
 
 export async function readProjectConfiguration({
@@ -93,6 +125,9 @@ export async function readProjectConfiguration({
       : {}),
     ...(isRecord(parsed.gitee)
       ? { gitee: { ...parsed.gitee } }
+      : {}),
+    ...(isRecord(parsed.feishu)
+      ? { feishu: { ...parsed.feishu } }
       : {}),
     ...(isRecord(parsed.linear)
       ? { linear: { ...parsed.linear } }
@@ -377,6 +412,119 @@ export function getGiteeCoordinates(
   }
 
   return { repository };
+}
+
+export function getFeishuReadCoordinates(
+  configuration: ProjectConfiguration | null | undefined,
+  environment: FeishuReadEnvironment
+): FeishuReadCoordinates {
+  const feishu = getFeishuConfiguration(
+    configuration
+  );
+  const appToken = normalizeFeishuIdentifier(
+    environment.TASKSEAL_FEISHU_APP_TOKEN
+  );
+  const tableId = normalizeFeishuIdentifier(
+    environment.TASKSEAL_FEISHU_TABLE_ID
+  );
+  const recordId = normalizeFeishuIdentifier(
+    environment.TASKSEAL_FEISHU_RECORD_ID
+  );
+  const fieldMapping = {
+    title: normalizeFeishuFieldName(
+      environment.TASKSEAL_FEISHU_TITLE_FIELD
+    ),
+    status: normalizeFeishuFieldName(
+      environment.TASKSEAL_FEISHU_STATUS_FIELD
+    ),
+    updatedAt: normalizeFeishuFieldName(
+      environment.TASKSEAL_FEISHU_UPDATED_AT_FIELD
+    )
+  };
+
+  if (
+    new Set(Object.values(fieldMapping)).size !== 3
+  ) {
+    throw feishuConfigError();
+  }
+
+  let derivedScopeKey: string;
+  try {
+    derivedScopeKey = createFeishuTableScope({
+      appToken,
+      tableId
+    }).key;
+  } catch {
+    throw feishuConfigError();
+  }
+  if (derivedScopeKey !== feishu.tableScopeKey) {
+    throw feishuConfigError();
+  }
+
+  return {
+    appToken,
+    tableId,
+    recordId,
+    fieldMapping,
+    tableScopeKey: feishu.tableScopeKey
+  };
+}
+
+export function getFeishuConfiguration(
+  configuration: ProjectConfiguration | null | undefined
+): FeishuConfiguration {
+  const feishu = configuration?.feishu;
+  if (
+    !isRecord(feishu) ||
+    !hasExactKeys(feishu, [
+      "enabled",
+      "tableScopeKey"
+    ]) ||
+    feishu.enabled !== true ||
+    typeof feishu.tableScopeKey !== "string" ||
+    !/^feishu:table:sha256:[0-9a-f]{64}$/.test(
+      feishu.tableScopeKey
+    )
+  ) {
+    throw feishuConfigError();
+  }
+  return {
+    enabled: true,
+    tableScopeKey: feishu.tableScopeKey
+  };
+}
+
+function normalizeFeishuIdentifier(
+  value: unknown
+): string {
+  if (
+    typeof value !== "string" ||
+    !/^[A-Za-z0-9_-]{1,64}$/.test(value)
+  ) {
+    throw feishuConfigError();
+  }
+  return value;
+}
+
+function normalizeFeishuFieldName(
+  value: unknown
+): string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value !== value.trim() ||
+    [...value].length > 100
+  ) {
+    throw feishuConfigError();
+  }
+  return value;
+}
+
+function feishuConfigError(): ProjectConfigError {
+  return configError(
+    "FEISHU_CONFIG_INVALID",
+    "Feishu configuration requires an enabled opaque table scope and bounded environment coordinates."
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -337,7 +337,11 @@ function scopesEqual(
 function tryNormalizeSnapshotScope(
   provider: ImportProvider,
   value: unknown
-): ProviderObservationScope | null {
+):
+  | (ProviderObservationScope & {
+      kind: "repository" | "team";
+    })
+  | null {
   if (
     !isPlainRecord(value) ||
     typeof value.kind !== "string" ||

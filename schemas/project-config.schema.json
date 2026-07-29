@@ -60,6 +60,23 @@
         }
       }
     },
+    "feishu": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "tableScopeKey"
+      ],
+      "properties": {
+        "enabled": {
+          "const": true
+        },
+        "tableScopeKey": {
+          "type": "string",
+          "pattern": "^feishu:table:sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
     "linear": {
       "type": "object",
       "additionalProperties": false,
