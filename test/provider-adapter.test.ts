@@ -24,6 +24,153 @@ test("AdapterManifest v1 binds every declared read capability to one port", () =
   );
 });
 
+test("AdapterManifest v1 declares environment credential references without values", () => {
+  const adapter = createAdapter({
+    credential: {
+      mode: "environment",
+      references: [
+        {
+          key: "app-id",
+          environmentVariable:
+            "TASKSEAL_FEISHU_APP_ID",
+          secret: true
+        },
+        {
+          key: "app-secret",
+          environmentVariable:
+            "TASKSEAL_FEISHU_APP_SECRET",
+          secret: true
+        }
+      ]
+    }
+  });
+
+  const normalized = normalizeProviderAdapterV1(adapter);
+
+  assert.deepEqual(
+    normalized.manifest.credential,
+    adapter.manifest.credential
+  );
+  assert.doesNotMatch(
+    JSON.stringify(normalized),
+    /credential-value/
+  );
+});
+
+test("AdapterManifest v1 rejects unsafe environment credential references", () => {
+  const invalidCredentials = [
+    {
+      mode: "environment",
+      references: []
+    },
+    {
+      mode: "environment",
+      references: [
+        {
+          key: "app-id",
+          environmentVariable:
+            "TASKSEAL_FEISHU_APP_ID",
+          secret: false
+        }
+      ]
+    },
+    {
+      mode: "environment",
+      references: [
+        {
+          key: "app-id",
+          environmentVariable:
+            "taskseal_feishu_app_id",
+          secret: true
+        }
+      ]
+    },
+    {
+      mode: "environment",
+      references: [
+        {
+          key: "app-id",
+          environmentVariable:
+            "TASKSEAL_FEISHU_APP_ID",
+          secret: true,
+          value: "credential-value"
+        }
+      ]
+    },
+    {
+      mode: "environment",
+      references: [
+        {
+          key: "app-id",
+          environmentVariable:
+            "TASKSEAL_FEISHU_APP_ID",
+          secret: true
+        },
+        {
+          key: "app-id",
+          environmentVariable:
+            "TASKSEAL_FEISHU_APP_SECRET",
+          secret: true
+        }
+      ]
+    },
+    {
+      mode: "environment",
+      references: [
+        {
+          key: "app-id",
+          environmentVariable:
+            "TASKSEAL_FEISHU_APP_ID",
+          secret: true
+        },
+        {
+          key: "app-secret",
+          environmentVariable:
+            "TASKSEAL_FEISHU_APP_ID",
+          secret: true
+        }
+      ]
+    }
+  ];
+
+  for (const credential of invalidCredentials) {
+    assert.throws(
+      () =>
+        normalizeProviderAdapterV1(
+          createAdapter({ credential })
+        ),
+      hasCode("PROVIDER_ADAPTER_INVALID")
+    );
+  }
+
+  const accessorReference = Object.defineProperty(
+    {
+      key: "app-secret",
+      secret: true
+    },
+    "environmentVariable",
+    {
+      enumerable: true,
+      get() {
+        return "TASKSEAL_FEISHU_APP_SECRET";
+      }
+    }
+  );
+
+  assert.throws(
+    () =>
+      normalizeProviderAdapterV1(
+        createAdapter({
+          credential: {
+            mode: "environment",
+            references: [accessorReference]
+          }
+        })
+      ),
+    hasCode("PROVIDER_ADAPTER_INVALID")
+  );
+});
+
 test("AdapterManifest v1 rejects write surfaces and capability drift", () => {
   const mutations: Array<(adapter: Record<string, unknown>) => void> = [
     (adapter) => {
@@ -78,7 +225,13 @@ test("AdapterManifest v1 rejects write surfaces and capability drift", () => {
   }
 });
 
-function createAdapter() {
+function createAdapter({
+  credential = {
+    mode: "none"
+  }
+}: {
+  credential?: unknown;
+} = {}) {
   return {
     manifest: {
       schemaVersion: 1,
@@ -99,9 +252,7 @@ function createAdapter() {
           }
         ]
       },
-      credential: {
-        mode: "none"
-      },
+      credential,
       scopes: [
         {
           kind: "repository",

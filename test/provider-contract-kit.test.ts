@@ -80,3 +80,80 @@ registerProviderAdapterContract({
     });
   }
 });
+
+registerProviderAdapterContract({
+  name: "environment credential provider",
+  createAdapter() {
+    return {
+      manifest: {
+        schemaVersion: 1,
+        apiVersion:
+          "taskseal.provider/v1",
+        providerId:
+          "example.environment",
+        capabilities: [
+          "provider.health",
+          "work-item.read"
+        ],
+        configuration: {
+          schemaVersion: 1,
+          fields: [
+            {
+              key: "resource",
+              type: "string",
+              required: true,
+              secret: false
+            }
+          ]
+        },
+        credential: {
+          mode: "environment",
+          references: [
+            {
+              key: "app-secret",
+              environmentVariable:
+                "EXAMPLE_PROVIDER_APP_SECRET",
+              secret: true
+            }
+          ]
+        },
+        scopes: [
+          {
+            kind: "resource",
+            objectTypes: [
+              "work-item"
+            ]
+          }
+        ]
+      },
+      ports: {
+        async "provider.health"() {
+          return {
+            status: "ready"
+          };
+        },
+        async "work-item.read"() {
+          return {
+            title: "Environment item"
+          };
+        }
+      }
+    };
+  },
+  healthRequest: {
+    resource: "contract"
+  },
+  workItemRequest: {
+    id: "environment-item"
+  },
+  assertHealthResult(result) {
+    assert.deepEqual(result, {
+      status: "ready"
+    });
+  },
+  assertWorkItemResult(result) {
+    assert.deepEqual(result, {
+      title: "Environment item"
+    });
+  }
+});
