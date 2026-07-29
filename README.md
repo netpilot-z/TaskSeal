@@ -12,6 +12,8 @@ TaskSeal 是一个 AI Delivery Control Plane 技术验证项目。它把外部�
 - provider 只读链：`Provider Observation + Operation Journal → safe projection → Control Room API`
 - 人工验收写链：`current Attempt/Artifact/Evidence → human AcceptanceDecision → Transition Operation v3 → exact Linear Done readback`
 
+完整操作顺序与失败恢复见 [项目范围 Dogfood 操作手册](docs/operations/0001-project-scoped-dogfood.md)。
+
 ## 项目坐标
 
 - GitHub：`netpilot-z/TaskSeal`

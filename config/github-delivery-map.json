@@ -4,5 +4,23 @@
   "target": {
     "repository": "netpilot-z/TaskSeal"
   },
-  "entries": []
+  "entries": [
+    {
+      "linearIssueId": "35b6ee7b-8d9d-4fec-b57e-8eebaa3b8020",
+      "workItemId": "TS-43",
+      "headRepository": "netpilot-z/TaskSeal",
+      "branch": "docs/np-43-project-dogfood-runbook",
+      "pullRequestNumber": 74,
+      "evidence": [
+        {
+          "criterionKey": "tests",
+          "source": {
+            "kind": "check_run",
+            "name": "tests (Node 24.12.0)",
+            "appId": "15368"
+          }
+        }
+      ]
+    }
+  ]
 }
