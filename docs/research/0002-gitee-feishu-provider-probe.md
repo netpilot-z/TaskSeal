@@ -128,5 +128,5 @@ repository rename 或 Issue move 会改变 scoped identity，首版视为显式 
 - Gitee 私有仓库的安全认证传输和最小 scope 尚未验证；首个切片仅匿名公开读取。
 - Gitee PR、CI/Check、Webhook、限流重试和写操作不属于第二 Provider 的最小契约。
 - Gitee Check conclusion 的完整枚举和可重复真实 Evidence 样本尚未确认；不能从匿名空列表推断交付闭环已完成。
-- 飞书真实 token、文档权限、动态字段 mapping 和单记录样本尚未提供，由 GitHub Issue `#25` 在获得新授权后验证。
+- 飞书真实 token、文档权限、动态字段 mapping 和单记录样本尚未提供，已迁移到 Linear `NP-11` 与前置任务 `NP-13`；资源访问路径及权限冲突见 `docs/research/0005-feishu-readonly-resource-access.md`。
 - 运行时动态加载第三方代码、插件签名、沙箱、版本分发和市场治理没有证据支持，继续不做。
