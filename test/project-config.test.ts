@@ -12,6 +12,7 @@ import {
   getLinearAcceptanceCoordinates,
   getLinearBootstrapCoordinates,
   getLinearCoordinates,
+  getLinearProjectCoordinates,
   getLinearReadyWorkCoordinates,
   readProjectConfiguration
 } from "../src/config/project-config.ts";
@@ -106,6 +107,14 @@ test("project configuration exposes validated non-secret provider coordinates", 
     workspace: "TaskSeal",
     team: "netpilot"
   });
+  assert.deepEqual(
+    getLinearProjectCoordinates(configuration),
+    {
+      workspace: "TaskSeal",
+      team: "netpilot",
+      project: "TaskSeal Delivery"
+    }
+  );
   assert.deepEqual(
     getLinearBootstrapCoordinates(configuration),
     {

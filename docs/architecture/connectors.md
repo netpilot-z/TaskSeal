@@ -69,7 +69,7 @@ External provider
 当前只读链按以下顺序实现：
 
 1. GitHub 只读：读取一个 Issue、关联 PR、head SHA 和 Check Run。
-2. Linear 只读：读取 `netpilot-z` workspace、`netpilot` team、`TaskSeal` project 下的一个 Issue。
+2. Linear 只读：只读取 `netpilot-z` workspace、`netpilot` team、`TaskSeal` project 下的 Issue；显式 inspect 校验返回的 Project 名称，ready-work 使用 Project UUID 过滤并复核，apply-time provenance 再按 Project UUID 对账。
 3. 调用者显式传入 WorkItem/Attempt/criterion 映射，禁止模糊匹配。
 4. 用 mocked-real 数据生成 canonical snapshot，并在内存中与 Codex Attempt 重放。
 

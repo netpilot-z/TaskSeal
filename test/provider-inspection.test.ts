@@ -74,6 +74,10 @@ const LINEAR_ISSUE = {
   team: {
     id: "team-1",
     key: "NET"
+  },
+  project: {
+    id: "project-1",
+    name: "TaskSeal"
   }
 };
 
@@ -548,7 +552,11 @@ async function createConfiguredProject(
       project: "TaskSeal",
       github: { repository: "netpilot-z/TaskSeal" },
       gitee: { repository: "oschina/git-osc" },
-      linear: { workspace: "TaskSeal", team: "netpilot" }
+      linear: {
+        workspace: "TaskSeal",
+        team: "netpilot",
+        project: "TaskSeal"
+      }
     })
   );
   return cwd;

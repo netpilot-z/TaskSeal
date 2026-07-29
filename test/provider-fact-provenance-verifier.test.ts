@@ -35,6 +35,8 @@ const LINEAR_TEAM_ID =
   "22222222-2222-4222-8222-222222222222";
 const LINEAR_ORGANIZATION_ID =
   "33333333-3333-4333-8333-333333333333";
+const LINEAR_PROJECT_ID =
+  "55555555-5555-4555-8555-555555555555";
 
 test("GitHub verifier binds Issue database ID, number, URL, revision, and content", async () => {
   const claim = githubIssueClaim();
@@ -452,6 +454,8 @@ test("Linear verifier binds Organization, Team, UUID, identifier, URL, revision,
     createReadOnlyProviderFactProvenanceVerifier({
       linear: {
         apiKey: "linear-secret",
+        expectedProjectId:
+          LINEAR_PROJECT_ID,
         fetchImpl: async (url, options) => {
           calls.push({
             url,
@@ -476,6 +480,10 @@ test("Linear verifier binds Organization, Team, UUID, identifier, URL, revision,
                 team: {
                   id: LINEAR_TEAM_ID,
                   key: "NET"
+                },
+                project: {
+                  id: LINEAR_PROJECT_ID,
+                  name: "TaskSeal"
                 }
               }
             }
@@ -510,6 +518,8 @@ test("Linear readable scope or locator drift is a mismatch while transport failu
     createReadOnlyProviderFactProvenanceVerifier({
       linear: {
         apiKey: "linear-secret",
+        expectedProjectId:
+          LINEAR_PROJECT_ID,
         fetchImpl: async () =>
           jsonResponse({
             data: {
@@ -530,6 +540,10 @@ test("Linear readable scope or locator drift is a mismatch while transport failu
                 team: {
                   id: "44444444-4444-4444-8444-444444444444",
                   key: "OTHER"
+                },
+                project: {
+                  id: LINEAR_PROJECT_ID,
+                  name: "TaskSeal"
                 }
               }
             }
@@ -540,6 +554,8 @@ test("Linear readable scope or locator drift is a mismatch while transport failu
     createReadOnlyProviderFactProvenanceVerifier({
       linear: {
         apiKey: "linear-secret",
+        expectedProjectId:
+          LINEAR_PROJECT_ID,
         fetchImpl: async () => {
           throw new Error("network detail");
         }
@@ -590,6 +606,17 @@ test("Linear rejects each independently drifted scope, identity, locator, revisi
         ...baseIssue,
         team: {
           ...baseIssue.team,
+          id:
+            "44444444-4444-4444-8444-444444444444"
+        }
+      })
+    },
+    {
+      name: "Project ID",
+      response: replaceLinearIssue(base, {
+        ...baseIssue,
+        project: {
+          ...baseIssue.project,
           id:
             "44444444-4444-4444-8444-444444444444"
         }
@@ -659,6 +686,8 @@ test("Linear rejects each independently drifted scope, identity, locator, revisi
         createReadOnlyProviderFactProvenanceVerifier({
           linear: {
             apiKey: "linear-test-key",
+            expectedProjectId:
+              LINEAR_PROJECT_ID,
             fetchImpl: async () =>
               jsonResponse(scenario.response)
           }
@@ -832,6 +861,10 @@ function linearIdentityResponse(
         team: {
           id: LINEAR_TEAM_ID,
           key: "NET"
+        },
+        project: {
+          id: LINEAR_PROJECT_ID,
+          name: "TaskSeal"
         }
       }
     }

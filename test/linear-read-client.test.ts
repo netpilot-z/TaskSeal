@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  readLinearIssue,
+  readLinearIssue as readLinearIssueAdapter,
   readLinearIssueIdentity
 } from "../src/connectors/linear-read-client.ts";
 import type {
   LinearFetchLike,
-  LinearFetchRequestOptions
+  LinearFetchRequestOptions,
+  ReadLinearIssueOptions
 } from "../src/connectors/linear-read-client.ts";
 
 interface GraphqlRequestBody {
@@ -42,6 +43,11 @@ const TEAM = {
   key: "NET"
 };
 
+const PROJECT = {
+  id: "project-1",
+  name: "TaskSeal"
+};
+
 const ISSUE = {
   id: "issue-1",
   identifier: "NET-7",
@@ -53,7 +59,8 @@ const ISSUE = {
   team: {
     id: "team-1",
     key: "NET"
-  }
+  },
+  project: PROJECT
 };
 
 const ISSUE_UUID =
@@ -62,6 +69,20 @@ const TEAM_UUID =
   "22222222-2222-4222-8222-222222222222";
 const ORGANIZATION_UUID =
   "33333333-3333-4333-8333-333333333333";
+
+function readLinearIssue(
+  options: Omit<
+    ReadLinearIssueOptions,
+    "project"
+  > & {
+    project?: string;
+  }
+) {
+  return readLinearIssueAdapter({
+    project: "TaskSeal",
+    ...options
+  });
+}
 
 test("Linear reads paginated scope then one issue with an API key", async () => {
   const calls: LinearRequestCall[] = [];
@@ -241,6 +262,24 @@ test("Linear provenance reads one Issue by UUID with its Organization and Team i
 });
 
 test("Linear fails closed for credentials, GraphQL errors, and scope drift", async (t) => {
+  await t.test("project is required before any network request", async () => {
+    let fetchCalled = false;
+
+    await assert.rejects(
+      readLinearIssueAdapter({
+        workspace: "TaskSeal",
+        team: "NET",
+        issueReference: "NET-7",
+        apiKey: "api-key",
+        fetchImpl: async () => {
+          fetchCalled = true;
+        }
+      } as unknown as ReadLinearIssueOptions),
+      hasCode("LINEAR_INPUT_INVALID")
+    );
+    assert.equal(fetchCalled, false);
+  });
+
   await t.test("credentials are required and cannot be mixed", async () => {
     let credentialFetchSentinelCalled = false;
     const fetchImpl = async () => {
@@ -452,6 +491,33 @@ test("Linear fails closed for credentials, GraphQL errors, and scope drift", asy
         ])
       }),
       hasCode("LINEAR_TEAM_AMBIGUOUS")
+    );
+  });
+
+  await t.test("issue project must match the configured project", async () => {
+    await assert.rejects(
+      readLinearIssue({
+        workspace: "TaskSeal",
+        team: "NET",
+        project: "TaskSeal",
+        issueReference: "NET-7",
+        apiKey: "api-key",
+        fetchImpl: createQueuedFetch([
+          scopeResponse(),
+          jsonResponse({
+            data: {
+              issue: {
+                ...ISSUE,
+                project: {
+                  id: "project-2",
+                  name: "ScopeLedger"
+                }
+              }
+            }
+          })
+        ])
+      }),
+      hasCode("LINEAR_ISSUE_PROJECT_MISMATCH")
     );
   });
 

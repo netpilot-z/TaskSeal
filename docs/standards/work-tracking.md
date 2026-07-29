@@ -34,6 +34,14 @@ Backlog → Todo → In Progress → Done
 
 当前没有独立 `In Review` 状态。评审阶段由 TaskSeal WorkItem、PR 和 Evidence 表达；未来若确需新增状态，应单独修改 workflow 并更新映射合同。
 
+## Project 执行边界
+
+- 每个仓库只处理 `config/project.json` 中 `linear.project` 对应的 Issue。
+- workspace、team、`NP-*` identifier 前缀、Issue UUID、父任务或负责人相同，都不能替代 Project 归属。
+- 自动 ready-work 必须使用 Project UUID 服务端过滤并逐项复核；显式 inspect/import 也必须校验 Issue 的 Project。
+- apply-time provenance 必须再次对账当前 Project UUID，防止 Issue 在 preview 后被移动到其他 Project。
+- foreign、missing、ambiguous 或发生漂移的 Project 一律失败关闭，不创建 WorkItem、不启动 Runner、不写 canonical journal，也不更新 Linear。
+
 ## 分支与 Pull Request
 
 分支使用：

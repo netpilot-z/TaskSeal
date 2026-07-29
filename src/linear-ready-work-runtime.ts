@@ -200,7 +200,11 @@ export async function executeLocalLinearReadyWork(
       structuredClone(importPolicy),
     providerFactProvenanceVerifier:
       createReadOnlyProviderFactProvenanceVerifier({
-        linear: credentialOptions
+        linear: {
+          ...credentialOptions,
+          expectedProjectId:
+            scope.projectId
+        }
       }),
     clock
   });
