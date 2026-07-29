@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
 import {
+  getFeishuReadCoordinates,
   getGiteeCoordinates,
   getGitHubDeliveryCoordinates,
   getGitHubCoordinates,
@@ -14,6 +15,9 @@ import {
   getLinearReadyWorkCoordinates,
   readProjectConfiguration
 } from "../src/config/project-config.ts";
+import {
+  createFeishuTableScope
+} from "../src/connectors/feishu.ts";
 
 test("project configuration exposes validated non-secret provider coordinates", async (t) => {
   const cwd = await createTemporaryDirectory(t);
@@ -28,6 +32,13 @@ test("project configuration exposes validated non-secret provider coordinates", 
       }
     },
     gitee: { repository: "NetPilot-Z/TaskSeal" },
+    feishu: {
+      enabled: true,
+      tableScopeKey: createFeishuTableScope({
+        appToken: "base-token",
+        tableId: "table-id"
+      }).key
+    },
     linear: {
       workspace: "TaskSeal",
       team: "netpilot",
@@ -67,6 +78,30 @@ test("project configuration exposes validated non-secret provider coordinates", 
   assert.deepEqual(getGiteeCoordinates(configuration), {
     repository: "NetPilot-Z/TaskSeal"
   });
+  assert.deepEqual(
+    getFeishuReadCoordinates(configuration, {
+      TASKSEAL_FEISHU_APP_TOKEN: "base-token",
+      TASKSEAL_FEISHU_TABLE_ID: "table-id",
+      TASKSEAL_FEISHU_RECORD_ID: "record-id",
+      TASKSEAL_FEISHU_TITLE_FIELD: "Title",
+      TASKSEAL_FEISHU_STATUS_FIELD: "Status",
+      TASKSEAL_FEISHU_UPDATED_AT_FIELD: "Updated At"
+    }),
+    {
+      appToken: "base-token",
+      tableId: "table-id",
+      recordId: "record-id",
+      fieldMapping: {
+        title: "Title",
+        status: "Status",
+        updatedAt: "Updated At"
+      },
+      tableScopeKey: createFeishuTableScope({
+        appToken: "base-token",
+        tableId: "table-id"
+      }).key
+    }
+  );
   assert.deepEqual(getLinearCoordinates(configuration), {
     workspace: "TaskSeal",
     team: "netpilot"
@@ -327,6 +362,54 @@ test("project configuration reports invalid JSON and provider coordinates safely
           gitee
         }),
       hasCode("GITEE_CONFIG_INVALID")
+    );
+  }
+
+  const tableScopeKey = createFeishuTableScope({
+    appToken: "base-token",
+    tableId: "table-id"
+  }).key;
+  for (const scenario of [
+    {
+      feishu: {
+        enabled: true,
+        tableScopeKey,
+        appSecret: "must-not-be-configured"
+      },
+      environment: {}
+    },
+    {
+      feishu: {
+        enabled: false,
+        tableScopeKey
+      },
+      environment: {}
+    },
+    {
+      feishu: {
+        enabled: true,
+        tableScopeKey
+      },
+      environment: {
+        TASKSEAL_FEISHU_APP_TOKEN: "other-base",
+        TASKSEAL_FEISHU_TABLE_ID: "table-id",
+        TASKSEAL_FEISHU_RECORD_ID: "record-id",
+        TASKSEAL_FEISHU_TITLE_FIELD: "Title",
+        TASKSEAL_FEISHU_STATUS_FIELD: "Status",
+        TASKSEAL_FEISHU_UPDATED_AT_FIELD: "Updated At"
+      }
+    }
+  ]) {
+    assert.throws(
+      () =>
+        getFeishuReadCoordinates(
+          {
+            project: "TaskSeal",
+            feishu: scenario.feishu
+          },
+          scenario.environment
+        ),
+      hasCode("FEISHU_CONFIG_INVALID")
     );
   }
 });

@@ -6,6 +6,8 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
+  inspectFeishuHealthProvider,
+  inspectFeishuProvider,
   inspectGiteeHealthProvider,
   inspectGiteeProvider,
   inspectGitHubIssueProvider,
@@ -236,6 +238,24 @@ interface GiteeHealthInspectOptions {
   cwd: string;
 }
 
+type FeishuCommandOptions = {
+  workItemId: string;
+  requiredEvidence: string[];
+  snapshotVersion: 2;
+  managedFields: ManagedField[];
+};
+
+type FeishuInspectOptions =
+  FeishuCommandOptions & {
+    cwd: string;
+    configuration?: ProjectConfiguration | undefined;
+  };
+
+interface FeishuHealthInspectOptions {
+  cwd: string;
+  configuration?: ProjectConfiguration | undefined;
+}
+
 interface LinearDryRunOptions {
   cwd: string;
   source?: string | undefined;
@@ -255,6 +275,12 @@ type InspectGitee = (
 ) => unknown | Promise<unknown>;
 type InspectGiteeHealth = (
   options: GiteeHealthInspectOptions
+) => unknown | Promise<unknown>;
+type InspectFeishu = (
+  options: FeishuInspectOptions
+) => unknown | Promise<unknown>;
+type InspectFeishuHealth = (
+  options: FeishuHealthInspectOptions
 ) => unknown | Promise<unknown>;
 type CreateLinearDryRun = (
   options: LinearDryRunOptions
@@ -318,6 +344,8 @@ export interface RunCliOptions {
   inspectLinear?: InspectLinear | undefined;
   inspectGitee?: InspectGitee | undefined;
   inspectGiteeHealth?: InspectGiteeHealth | undefined;
+  inspectFeishu?: InspectFeishu | undefined;
+  inspectFeishuHealth?: InspectFeishuHealth | undefined;
   createLinearDryRun?: CreateLinearDryRun | undefined;
   executeLinearReadyWork?:
     | ExecuteLinearReadyWork
@@ -590,6 +618,8 @@ const USAGE = `Usage:
   taskseal inspect linear --issue <identifier-or-uuid> --work-item <id> --criterion <key> [--snapshot-version 2 --title-management provider|none]
   taskseal inspect gitee-health
   taskseal inspect gitee --issue <case-sensitive-reference> --work-item <id> --criterion <key> --snapshot-version 2 --title-management provider|none
+  taskseal inspect feishu-health
+  taskseal inspect feishu --work-item <id> --criterion <key> --snapshot-version 2 --title-management provider|none
   taskseal ready linear
   taskseal ready linear --mode preview --issue <uuid> --work-item <id> --criterion <key>
   taskseal ready linear --mode apply --issue <uuid> --work-item <id> --criterion <key> --expected-plan-digest <sha256>
@@ -612,6 +642,8 @@ export async function runCli({
   inspectLinear,
   inspectGitee,
   inspectGiteeHealth,
+  inspectFeishu,
+  inspectFeishuHealth,
   createLinearDryRun,
   executeLinearReadyWork,
   executeGitHubReconciliation,
@@ -885,6 +917,83 @@ export async function runCli({
               })
           });
         output.write(`${JSON.stringify(snapshot, null, 2)}\n`);
+        return 0;
+      } catch (error) {
+        output.write(renderInspectError(error));
+        return 1;
+      }
+    }
+
+    if (provider === "feishu-health") {
+      if (args.length !== 2) {
+        output.write(USAGE);
+        return 2;
+      }
+
+      try {
+        const execute =
+          inspectFeishuHealth ??
+          inspectFeishuHealthProvider;
+        const health =
+          await executeObservedProviderInspection({
+            cwd,
+            clock: now,
+            provider: "feishu",
+            kind: "health",
+            coordinatorFactory:
+              providerObservationCoordinatorFactory,
+            execute: (configuration) =>
+              execute({
+                cwd,
+                ...(configuration === null
+                  ? {}
+                  : { configuration })
+              })
+          });
+        output.write(
+          `${JSON.stringify(health, null, 2)}\n`
+        );
+        return 0;
+      } catch (error) {
+        output.write(renderInspectError(error));
+        return 1;
+      }
+    }
+
+    if (provider === "feishu") {
+      const options = parseFeishuInspectArguments(
+        args.slice(2)
+      );
+      if (!options) {
+        output.write(USAGE);
+        return 2;
+      }
+
+      try {
+        const execute =
+          inspectFeishu ?? inspectFeishuProvider;
+        const snapshot =
+          await executeObservedProviderInspection({
+            cwd,
+            clock: now,
+            provider: "feishu",
+            kind: "snapshot",
+            missingEvidence:
+              options.requiredEvidence,
+            coordinatorFactory:
+              providerObservationCoordinatorFactory,
+            execute: (configuration) =>
+              execute({
+                cwd,
+                ...options,
+                ...(configuration === null
+                  ? {}
+                  : { configuration })
+              })
+          });
+        output.write(
+          `${JSON.stringify(snapshot, null, 2)}\n`
+        );
         return 0;
       } catch (error) {
         output.write(renderInspectError(error));
@@ -1273,7 +1382,8 @@ export async function createLocalProviderObservationRuntime({
   for (const provider of [
     "github",
     "linear",
-    "gitee"
+    "gitee",
+    "feishu"
   ] as const) {
     if (configuration[provider] === undefined) {
       continue;
@@ -1289,7 +1399,10 @@ export async function createLocalProviderObservationRuntime({
           configuration,
           provider
         );
-      if (provider !== "gitee") {
+      if (
+        provider === "github" ||
+        provider === "linear"
+      ) {
         importTargets.set(provider, configuredTarget);
       }
       input = projectProviderConfiguration({
@@ -2066,6 +2179,38 @@ function parseGiteeInspectArguments(
     ),
     requiredEvidence: [
       readNamedArgument(parsed.values, "--criterion")
+    ],
+    snapshotVersion: 2,
+    managedFields: [
+      ...parsed.versionOptions.managedFields
+    ]
+  };
+}
+
+function parseFeishuInspectArguments(
+  args: readonly string[]
+): FeishuCommandOptions | null {
+  const parsed = parseVersionedInspectArguments(args, [
+    "--work-item",
+    "--criterion"
+  ]);
+  if (
+    !parsed ||
+    parsed.versionOptions.snapshotVersion !== 2
+  ) {
+    return null;
+  }
+
+  return {
+    workItemId: readNamedArgument(
+      parsed.values,
+      "--work-item"
+    ),
+    requiredEvidence: [
+      readNamedArgument(
+        parsed.values,
+        "--criterion"
+      )
     ],
     snapshotVersion: 2,
     managedFields: [

@@ -92,7 +92,7 @@ npm exec -- taskseal plugin check ./taskseal.plugin.json
 
 ## Provider 只读检查
 
-TaskSeal 可以预览 GitHub、Linear 与 Gitee 的真实只读事实，但不会仅因读取 snapshot 就写入 journal：
+TaskSeal 可以预览 GitHub、Linear、Gitee 与飞书多维表格的真实只读事实，但不会仅因读取 snapshot 就写入 journal：
 
 ```bash
 node src/cli.ts inspect github-issue \
@@ -121,6 +121,14 @@ node src/cli.ts inspect gitee \
   --criterion review \
   --snapshot-version 2 \
   --title-management none
+
+node src/cli.ts inspect feishu-health
+
+node src/cli.ts inspect feishu \
+  --work-item NP-18 \
+  --criterion tests \
+  --snapshot-version 2 \
+  --title-management none
 ```
 
 Gitee snapshot 已可进入受控的本地 import application API，但必须同时通过 built-in trusted registry 与精确的 per-scope ImportPolicy v2；当前没有 CLI/HTTP apply route，也不会写回 Gitee。GitHub/Linear 新 apply 还必须显式注入只读 provenance verifier，在 journal commit 前以本次 plan 的精确事件重读并绑定 stable ID、locator、scope、revision、source/event time、实际事件内容与 digest；未注入、无法证明或 Plan v1 没有事件时失败关闭。单次最多验证 8 个 claim，以 4 路并发、15 秒单请求和 30 秒总 deadline 执行。Generic rich/provider-managed `append` 固定拒绝，committed receipt retry 与历史 journal replay 不依赖当前授权、网络或凭证。
@@ -128,6 +136,8 @@ Gitee snapshot 已可进入受控的本地 import application API，但必须同
 GitHub 公开仓库可以匿名读取，也可通过 `GITHUB_TOKEN` 或 `GH_TOKEN` 提供只读 Token。Linear 使用 `LINEAR_API_KEY`，或使用 `LINEAR_ACCESS_TOKEN` 提供 OAuth access token；两者不能同时配置。
 
 Gitee 首版只支持匿名公开仓库，配置为 `config/project.json` 中的非敏感 `gitee.repository` 坐标，不读取或接受 Token。`gitee-health` 验证精确 repository scope；`inspect gitee` 只接受显式、区分大小写的 Issue reference，并固定输出 ProviderSnapshot v2。公共 `oschina/git-osc#I4` 只用于 smoke，不代表 TaskSeal 项目的 Gitee 坐标。
+
+飞书首版只支持企业自建应用读取一个固定测试 Base。App ID/Secret、Base/table/record 坐标和三个字段名仅从 `TASKSEAL_FEISHU_*` 环境变量解析；仓库配置只保存不可逆的 table scope digest，用来发现环境漂移。CLI 不接受调用者指定 Base、table 或 record，输出也只包含 opaque scope/object digest。`records/search` 的 POST 固定为空查询 body，只承担 2+1 有界分页，不具有写语义。飞书当前没有 trusted ingress registration、ImportPolicy 或 apply route，因此 snapshot 只进入 observation 与可视化，不会创建本地 WorkItem，也不会写回飞书。
 
 `inspect github-issue` 用于先验证单个 Issue 到 WorkItem 的映射；`inspect github` 用于验证完整 Issue → PR → Check 交付链。两者都要求显式映射，不通过标题或时间猜测关联。成功时只输出裁剪后的 provider scope、source reference 和 canonical events，不输出 Token、原始响应或本地路径，也不修改 `.taskseal/events.jsonl`。实际 CLI 会把最新状态、revision/digest、缺失证据和安全诊断码写入独立 observation 读模型；不会保存标题、URL、raw provider body、凭证或错误正文。
 
@@ -227,7 +237,7 @@ node src/cli.ts sync linear --dry-run
 8. Linear ticket dry-run 对当前 manifest 中未完成、未映射的条目确定性生成草案，网络请求与外部写入均为零。
 9. TaskSeal runtime 只有人工 Acceptance 后的 Linear State transition 能进行真实外部 mutation；任意 Issue Create、评论、删除或自动关闭仍未开放。Linear 已成为内部任务主账本，`NP-1` 与 `NP-2`～`NP-12` 已完成管理性 bootstrap 和读后核验。
 10. fixture 仍验证 revision-bound Artifact/Evidence 与幂等验收规则。
-11. Gitee 内置 AdapterManifest v1、`provider.health` 与 `work-item.read` 已实现，并用公共 `oschina/git-osc#I4` 完成匿名 smoke；本地 preview/apply 只有在 trusted registry 与精确 per-scope policy 同时允许时可用，candidate direct append 固定拒绝，飞书保留为后续异构压力测试。
+11. Gitee 内置 AdapterManifest v1、`provider.health` 与 `work-item.read` 已实现，并用公共 `oschina/git-osc#I4` 完成匿名 smoke；本地 preview/apply 只有在 trusted registry 与精确 per-scope policy 同时允许时可用，candidate direct append 固定拒绝。飞书也已完成同一 AdapterManifest 的异构只读验证，真实 Base 只暴露不透明 table/record digest，并明确不注册 import。
 12. Provider Observation v1 已建立独立、有界、原子替换的 JSON 读模型；按 operation start freshness 拒绝乱序覆盖，通过 observed snapshot-import façade 组合真实 preview/apply，并以 persistent-only `GET /api/providers` 暴露 `configured`、`scope_mismatch`、`sample_missing`、`snapshot_ready` 与 `sync_failed`。
 13. Control Room 已具备 Provider 五态卡片、最新 observation 列表、手动刷新、独立轮询、乱序响应防护和 stale 保留视图。
 14. 受控 Linear 写已具备 OperationPlan v1/v2 union reader；v2 把 configured Project/State、resolved Organization/Team/Project/State/Parent、source intent、payload 和审批摘要绑定在同一 plan，并保持 v1 persisted golden bytes 与摘要不变。

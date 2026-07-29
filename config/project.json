@@ -22,5 +22,9 @@
       "enabled": false
     }
   },
+  "feishu": {
+    "enabled": true,
+    "tableScopeKey": "feishu:table:sha256:3f2465952d16853705c9cb488ad340f1bfc64c420f290173be27ddfa3a1bfcf6"
+  },
   "mode": "persistent"
 }

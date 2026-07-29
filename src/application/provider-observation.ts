@@ -21,22 +21,26 @@ export type ProviderObservationStatus =
   | "sync_failed";
 
 export interface ProviderObservationTarget {
-  kind: "provider" | "repository" | "team";
+  kind: "provider" | "repository" | "team" | "table";
   key: string;
 }
 
 export interface ProviderObservationScope {
-  kind: "repository" | "team";
+  kind: "repository" | "team" | "table";
   key: string;
   parentKey: string | null;
 }
 
 export interface ProviderObservationSourceRevision {
-  objectType: ProviderObjectType;
+  objectType: ProviderObservationObjectType;
   id: string;
   occurredAt: string;
   contentDigest: string;
 }
+
+type ProviderObservationObjectType =
+  | ProviderObjectType
+  | "record";
 
 export interface ProviderObservationInput {
   operation: ProviderObservationOperation;
@@ -155,7 +159,8 @@ const OPERATIONS = new Set<ProviderObservationOperation>([
 const PROVIDERS = new Set<ProviderName>([
   "github",
   "linear",
-  "gitee"
+  "gitee",
+  "feishu"
 ]);
 const STATUSES = new Set<ProviderObservationStatus>([
   "configured",
@@ -164,19 +169,39 @@ const STATUSES = new Set<ProviderObservationStatus>([
   "snapshot_ready",
   "sync_failed"
 ]);
-const OBJECT_TYPES = new Set<ProviderObjectType>([
-  "issue",
-  "pull_request",
-  "check",
-  "pull_request_review"
-]);
+const OBJECT_TYPES =
+  new Set<ProviderObservationObjectType>([
+    "issue",
+    "pull_request",
+    "check",
+    "pull_request_review",
+    "record"
+  ]);
 const SAFE_DIAGNOSTIC_CODES = new Set([
   "PROVIDER_OPERATION_FAILED",
   "PROVIDER_OBSERVATION_SCOPE_MISMATCH",
   "PROJECT_CONFIG_INVALID",
   "GITHUB_CONFIG_INVALID",
   "GITEE_CONFIG_INVALID",
+  "FEISHU_CONFIG_INVALID",
   "LINEAR_CONFIG_INVALID",
+  "FEISHU_API_ERROR",
+  "FEISHU_AUTH_FAILED",
+  "FEISHU_FIELD_MAPPING_INVALID",
+  "FEISHU_CLOCK_INVALID",
+  "FEISHU_FORBIDDEN",
+  "FEISHU_HTTP_ERROR",
+  "FEISHU_INPUT_INVALID",
+  "FEISHU_NOT_FOUND",
+  "FEISHU_PAGINATION_INVALID",
+  "FEISHU_RATE_LIMITED",
+  "FEISHU_REQUEST_FAILED",
+  "FEISHU_RESPONSE_INVALID",
+  "FEISHU_RESPONSE_TOO_LARGE",
+  "FEISHU_RESOURCE_INVALID",
+  "FEISHU_MAPPING_INVALID",
+  "FEISHU_SCOPE_MISMATCH",
+  "FEISHU_UNAUTHORIZED",
   "PROVIDER_MAPPING_INVALID",
   "GITHUB_AUTH_FAILED",
   "GITHUB_CHECK_AMBIGUOUS",
@@ -273,7 +298,8 @@ const SAMPLE_MISSING_CODES = new Set([
   "GITHUB_NOT_FOUND",
   "GITHUB_CHECK_NOT_FOUND",
   "LINEAR_ISSUE_NOT_FOUND",
-  "GITEE_NOT_FOUND"
+  "GITEE_NOT_FOUND",
+  "FEISHU_NOT_FOUND"
 ]);
 
 export class ProviderObservationReadModel
@@ -1007,7 +1033,8 @@ function normalizeTarget(
     !hasExactKeys(value, ["kind", "key"]) ||
     (value.kind !== "provider" &&
       value.kind !== "repository" &&
-      value.kind !== "team")
+      value.kind !== "team" &&
+      value.kind !== "table")
   ) {
     throw observationInvalid();
   }
@@ -1025,7 +1052,9 @@ function normalizeScope(
   if (
     !isPlainDataRecord(value) ||
     !hasExactKeys(value, ["kind", "key", "parentKey"]) ||
-    (value.kind !== "repository" && value.kind !== "team")
+    (value.kind !== "repository" &&
+      value.kind !== "team" &&
+      value.kind !== "table")
   ) {
     throw observationInvalid();
   }
@@ -1046,7 +1075,9 @@ function normalizeProjectedScope(
 ): ProviderObservationScope {
   if (
     !isPlainDataRecord(value) ||
-    (value.kind !== "repository" && value.kind !== "team") ||
+    (value.kind !== "repository" &&
+      value.kind !== "team" &&
+      value.kind !== "table") ||
     typeof value.key !== "string" ||
     (value.parentKey !== undefined &&
       typeof value.parentKey !== "string")
@@ -1164,14 +1195,15 @@ function normalizeSourceRevision(
     ]) ||
     typeof value.objectType !== "string" ||
     !OBJECT_TYPES.has(
-      value.objectType as ProviderObjectType
+      value.objectType as ProviderObjectType | "record"
     )
   ) {
     throw observationInvalid();
   }
 
   return {
-    objectType: value.objectType as ProviderObjectType,
+    objectType:
+      value.objectType as ProviderObservationObjectType,
     id: normalizeString(value.id, MAX_ID_LENGTH),
     occurredAt: normalizeTimestamp(value.occurredAt),
     contentDigest: normalizeDigest(value.contentDigest)

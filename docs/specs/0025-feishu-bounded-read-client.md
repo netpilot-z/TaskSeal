@@ -10,8 +10,8 @@
 TaskSeal 能用企业自建应用身份读取一个固定飞书多维表格、动态校验字段映射、
 遍历小规模分页并归一一个固定记录。
 
-本切片只建立 Connector 层 Client。Provider Adapter、CLI、observation 和控制室
-接线由后续任务完成。
+本规格先建立 Connector 层 Client；Provider Adapter、CLI 与 observation 接线
+已在后续 NP-18 完成，资源隐藏与零 import 边界见 ADR 0017。
 
 ## 输入
 

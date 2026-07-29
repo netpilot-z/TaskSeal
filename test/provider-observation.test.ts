@@ -17,6 +17,69 @@ const TARGET = {
   key: "github:repository:netpilot-z/taskseal"
 };
 
+test("Provider observation projects an opaque Feishu table record snapshot", () => {
+  const scope = {
+    kind: "table" as const,
+    key:
+      "feishu:table:sha256:" +
+      "a".repeat(64),
+    parentKey:
+      "feishu:base:sha256:" +
+      "b".repeat(64)
+  };
+  const projected = projectProviderSnapshot({
+    operation: "inspection",
+    configuredTarget: {
+      kind: "table",
+      key: scope.key
+    },
+    startedAt: "2026-07-29T08:00:00.000Z",
+    observedAt: "2026-07-29T08:00:01.000Z",
+    snapshot: {
+      schemaVersion: 2,
+      mode: "read-only",
+      provider: "feishu",
+      scope,
+      mapping: {
+        workItemId: "NP-18",
+        requiredEvidence: ["tests"],
+        managedFields: []
+      },
+      capturedAt: "2026-07-29T08:00:00.500Z",
+      facts: [
+        {
+          sourceObject: {
+            objectType: "record"
+          },
+          revision: {
+            id: "2026-07-28T02:00:00.000Z",
+            occurredAt:
+              "2026-07-28T02:00:00.000Z",
+            contentDigest: digest("f")
+          },
+          candidateEvent: {
+            type: "work_item.created"
+          }
+        }
+      ]
+    }
+  });
+
+  assert.equal(projected.provider, "feishu");
+  assert.equal(projected.status, "snapshot_ready");
+  assert.deepEqual(projected.observedScope, {
+    ...scope
+  });
+  assert.deepEqual(projected.sourceRevisions, [
+    {
+      objectType: "record",
+      id: "2026-07-28T02:00:00.000Z",
+      occurredAt: "2026-07-28T02:00:00.000Z",
+      contentDigest: digest("f")
+    }
+  ]);
+});
+
 test("Provider observation projects five safe states and rejects stale completion", async () => {
   const storage = new MemoryObservationStorage();
   const model =

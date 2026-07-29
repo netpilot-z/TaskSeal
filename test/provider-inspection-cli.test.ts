@@ -259,6 +259,127 @@ test("inspect gitee-health accepts no provider arguments", async () => {
   assert.deepEqual(calls, [{ cwd: "project-root" }]);
 });
 
+test("inspect feishu-health and feishu expose only fixed-resource commands", async () => {
+  const healthOutput = createOutput();
+  const healthCalls: unknown[] = [];
+  assert.equal(
+    await runCli({
+      args: ["inspect", "feishu-health"],
+      cwd: "project-root",
+      output: healthOutput,
+      inspectFeishuHealth: async (options) => {
+        healthCalls.push(options);
+        return {
+          provider: "feishu",
+          status: "ready"
+        };
+      }
+    }),
+    0
+  );
+  assert.deepEqual(healthCalls, [
+    { cwd: "project-root" }
+  ]);
+
+  const snapshotOutput = createOutput();
+  const snapshotCalls: unknown[] = [];
+  assert.equal(
+    await runCli({
+      args: [
+        "inspect",
+        "feishu",
+        "--work-item",
+        "NP-18",
+        "--criterion",
+        "tests",
+        "--snapshot-version",
+        "2",
+        "--title-management",
+        "none"
+      ],
+      cwd: "project-root",
+      output: snapshotOutput,
+      inspectFeishu: async (options) => {
+        snapshotCalls.push(options);
+        return {
+          schemaVersion: 2,
+          mode: "read-only",
+          provider: "feishu",
+          facts: []
+        };
+      }
+    }),
+    0
+  );
+  assert.deepEqual(snapshotCalls, [
+    {
+      cwd: "project-root",
+      workItemId: "NP-18",
+      requiredEvidence: ["tests"],
+      snapshotVersion: 2,
+      managedFields: []
+    }
+  ]);
+  assert.equal(
+    readJsonProperty(
+      JSON.parse(snapshotOutput.text()),
+      "provider"
+    ),
+    "feishu"
+  );
+});
+
+test("inspect feishu rejects caller-selected resources and incomplete v2 mapping", async () => {
+  const scenarios = [
+    [
+      "inspect",
+      "feishu",
+      "--work-item",
+      "NP-18",
+      "--criterion",
+      "tests"
+    ],
+    [
+      "inspect",
+      "feishu",
+      "--work-item",
+      "NP-18",
+      "--criterion",
+      "tests",
+      "--snapshot-version",
+      "2",
+      "--title-management",
+      "none",
+      "--record",
+      "foreign-record"
+    ],
+    [
+      "inspect",
+      "feishu-health",
+      "--table",
+      "foreign-table"
+    ]
+  ];
+
+  for (const args of scenarios) {
+    let invoked = false;
+    const output = createOutput();
+    const exitCode = await runCli({
+      args,
+      output,
+      inspectFeishu: async () => {
+        invoked = true;
+      },
+      inspectFeishuHealth: async () => {
+        invoked = true;
+      }
+    });
+    assert.equal(exitCode, 2);
+    assert.equal(invoked, false);
+    assert.match(output.text(), /Usage:/);
+  }
+});
+
 test("inspect gitee rejects v1, missing v2 controls, and unknown arguments", async () => {
   const scenarios = [
     [

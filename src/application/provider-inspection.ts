@@ -1,12 +1,24 @@
 import {
+  getFeishuReadCoordinates,
   getGiteeCoordinates,
   getGitHubCoordinates,
   getLinearCoordinates,
   readProjectConfiguration
 } from "../config/project-config.ts";
 import type {
+  FeishuReadEnvironment,
   ProjectConfiguration
 } from "../config/project-config.ts";
+import {
+  createFeishuAdapter
+} from "../connectors/feishu.ts";
+import type {
+  FeishuHealthResult,
+  FeishuProviderSnapshotV2
+} from "../connectors/feishu.ts";
+import type {
+  FeishuFetchLike
+} from "../connectors/feishu-read-client.ts";
 import {
   createGiteeAdapter
 } from "../connectors/gitee.ts";
@@ -67,6 +79,14 @@ interface InspectionEnvironment {
   readonly GH_TOKEN?: string | undefined;
   readonly LINEAR_API_KEY?: string | undefined;
   readonly LINEAR_ACCESS_TOKEN?: string | undefined;
+  readonly TASKSEAL_FEISHU_APP_ID?: string | undefined;
+  readonly TASKSEAL_FEISHU_APP_SECRET?: string | undefined;
+  readonly TASKSEAL_FEISHU_APP_TOKEN?: string | undefined;
+  readonly TASKSEAL_FEISHU_TABLE_ID?: string | undefined;
+  readonly TASKSEAL_FEISHU_RECORD_ID?: string | undefined;
+  readonly TASKSEAL_FEISHU_TITLE_FIELD?: string | undefined;
+  readonly TASKSEAL_FEISHU_STATUS_FIELD?: string | undefined;
+  readonly TASKSEAL_FEISHU_UPDATED_AT_FIELD?: string | undefined;
 }
 
 interface SnapshotV1Options {
@@ -150,6 +170,24 @@ interface GiteeInspectionBaseOptions {
   requiredEvidence: string[];
   now?: (() => unknown) | undefined;
   fetchImpl?: GiteeFetchLike | undefined;
+}
+
+interface FeishuHealthInspectionOptions {
+  cwd: string;
+  configuration?: ProjectConfiguration | undefined;
+  environment?:
+    | (InspectionEnvironment & FeishuReadEnvironment)
+    | undefined;
+  now?: (() => unknown) | undefined;
+  fetchImpl?: FeishuFetchLike | undefined;
+}
+
+interface FeishuInspectionOptions
+  extends FeishuHealthInspectionOptions {
+  workItemId: string;
+  requiredEvidence: string[];
+  snapshotVersion: 2;
+  managedFields: ManagedField[];
 }
 
 type GiteeInspectionOptions =
@@ -287,7 +325,9 @@ type ResolvedSnapshotVersion =
   | ResolvedSnapshotV1
   | ResolvedSnapshotV2;
 
-type InspectionErrorCode = "PROVIDER_MAPPING_INVALID";
+type InspectionErrorCode =
+  | "PROVIDER_MAPPING_INVALID"
+  | "FEISHU_CONFIG_INVALID";
 
 export async function inspectGiteeHealthProvider({
   cwd,
@@ -345,6 +385,90 @@ export async function inspectGiteeProvider({
   return adapter.ports["work-item.read"]({
     repository,
     issueReference,
+    mapping: {
+      workItemId,
+      requiredEvidence:
+        normalizeV2RequiredEvidence(validatedEvidence),
+      managedFields: [...version.managedFields]
+    }
+  });
+}
+
+export async function inspectFeishuHealthProvider({
+  cwd,
+  configuration: providedConfiguration,
+  environment = process.env,
+  now = () => new Date(),
+  fetchImpl = globalThis.fetch
+}: FeishuHealthInspectionOptions): Promise<FeishuHealthResult> {
+  const configuration =
+    providedConfiguration ??
+    (await readProjectConfiguration({ cwd }));
+  const resource = getFeishuReadCoordinates(
+    configuration,
+    environment
+  );
+  const credentials =
+    requireFeishuCredentials(environment);
+  const adapter = createFeishuAdapter({
+    ...credentials,
+    fetchImpl,
+    now
+  });
+
+  return adapter.ports["provider.health"]({
+    appToken: resource.appToken,
+    tableId: resource.tableId,
+    recordId: resource.recordId,
+    fieldMapping: resource.fieldMapping
+  });
+}
+
+export async function inspectFeishuProvider({
+  cwd,
+  configuration: providedConfiguration,
+  environment = process.env,
+  workItemId,
+  requiredEvidence,
+  snapshotVersion,
+  managedFields,
+  now = () => new Date(),
+  fetchImpl = globalThis.fetch
+}: FeishuInspectionOptions): Promise<FeishuProviderSnapshotV2> {
+  requireMappingString(workItemId, "workItemId");
+  const validatedEvidence =
+    requireEvidenceKeys(requiredEvidence);
+  const version = resolveSnapshotVersion({
+    snapshotVersion,
+    managedFields
+  });
+  if (version.schemaVersion !== 2) {
+    throw inspectionError(
+      "PROVIDER_MAPPING_INVALID",
+      "Feishu inspection supports only ProviderSnapshot version 2."
+    );
+  }
+
+  const configuration =
+    providedConfiguration ??
+    (await readProjectConfiguration({ cwd }));
+  const resource = getFeishuReadCoordinates(
+    configuration,
+    environment
+  );
+  const credentials =
+    requireFeishuCredentials(environment);
+  const adapter = createFeishuAdapter({
+    ...credentials,
+    fetchImpl,
+    now
+  });
+
+  return adapter.ports["work-item.read"]({
+    appToken: resource.appToken,
+    tableId: resource.tableId,
+    recordId: resource.recordId,
+    fieldMapping: resource.fieldMapping,
     mapping: {
       workItemId,
       requiredEvidence:
@@ -791,6 +915,40 @@ function firstCredential(
       typeof value === "string" &&
       value.trim().length > 0
   );
+}
+
+function requireFeishuCredentials(
+  environment: InspectionEnvironment
+): {
+  readonly appId: string;
+  readonly appSecret: string;
+} {
+  const appId = normalizeFeishuCredential(
+    environment.TASKSEAL_FEISHU_APP_ID
+  );
+  const appSecret = normalizeFeishuCredential(
+    environment.TASKSEAL_FEISHU_APP_SECRET
+  );
+  return { appId, appSecret };
+}
+
+function normalizeFeishuCredential(
+  value: unknown
+): string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > 1_024 ||
+    value !== value.trim() ||
+    !value.isWellFormed() ||
+    /[\r\n]/.test(value)
+  ) {
+    throw inspectionError(
+      "FEISHU_CONFIG_INVALID",
+      "Feishu application credentials are missing or invalid."
+    );
+  }
+  return value;
 }
 
 function requireMappingString(

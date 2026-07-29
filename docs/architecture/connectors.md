@@ -156,7 +156,7 @@ v1 只保证单一 read-model 实例内串行写入；多个进程并发 whole-f
 - GitHub Issue `#34` 已建立统一 ingress registry gate、per-provider/per-scope ImportPolicy v2、Provider-neutral rich link Domain 与 Gitee 本地 import。
 - GitHub Issue `#48` 已建立 application-owned provenance port 与 GitHub Issue/PR/Check、Linear Issue 单对象只读 verifier；claim 精确绑定 plan event，remote no-event 失败关闭，公开 plan digest 不再被误作来源证明。
 - Generic direct rich append 固定拒绝；read-only AdapterManifest 不自动授予 import，历史 replay 不读取当前 registry/policy。
-- 下一步用飞书多维表格的 token、动态字段和业务 error envelope 对 AdapterManifest v1 做异构压力测试。
+- 飞书多维表格已用 tenant token、动态字段、POST-read、分页和业务 error envelope 完成 AdapterManifest v1 异构压力测试；固定资源通过不透明 scope/object digest 进入 observation，但没有 ingress registration、ImportPolicy 或 apply route。
 - 其他 Provider 的本地 import 仍需独立 registration、Provider-specific normalizer 与精确 scope policy；任何外部写回继续使用独立审批、幂等和审计合同。
 
 只有成功样本与插件边界验证后才考虑：
