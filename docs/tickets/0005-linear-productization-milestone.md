@@ -128,14 +128,14 @@
 
 ## T23 — 用飞书多维表格压力测试 Adapter
 
-- 状态：等待专用只读应用/资源；对应待迁移的 GitHub `#25`。
+- 状态：已完成；由 Linear `NP-11` 汇总跟踪，资源、环境凭证合同、有界 Client、Adapter/CLI/observation 与真实只读验收分别由 `NP-13`、`NP-16`、`NP-17`、`NP-18` 交付。
 - 目的：验证异构 token、动态字段、分页和业务错误能否适配能力合同。
 - 范围：只读 health/work-item probe、字段映射和 Adapter contract 结论。
 - 不包含：创建/更新记录、聊天机器人或生产凭证提交。
 - 依赖：操作者提供专用只读资源；不阻塞 T15–T22 核心链。
 - 验收标准：支持则实现最小 Adapter；不支持则以证据修订 contract。
 - 验证：官方 schema、mocked-real contract、真实只读 smoke 和 secret redaction。
-- 风险与回退：资源缺失时保持 blocked，不以假数据宣称异构边界已验证。
+- 风险与回退：原始资源坐标和凭证只存在于操作者环境；仓库、CLI 与 observation 只使用不透明 digest。飞书未注册 ingress、ImportPolicy 或 apply/write-back，关闭环境配置即可回退为零网络。
 
 ## T24 — 远程团队与商业化基础
 

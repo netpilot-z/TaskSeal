@@ -1,6 +1,6 @@
 # ADR 0003：选择 Gitee 作为第二 Provider
 
-> 后续状态：本 ADR 的只读隔离阶段已经完成；GitHub Issue `#34` 的 registry、per-scope policy、Provider-neutral Domain 与 Gitee 本地 import 决策见 [ADR 0006](./0006-provider-ingress-authorization.md)。
+> 后续状态：本 ADR 的只读隔离阶段已经完成；GitHub Issue `#34` 的 registry、per-scope policy、Provider-neutral Domain 与 Gitee 本地 import 决策见 [ADR 0006](./0006-provider-ingress-authorization.md)。飞书异构压力测试随后由 Linear `NP-11` 完成，资源隐藏与零 import 决策见 [ADR 0017](./0017-feishu-opaque-read-scope.md)。
 
 - 状态：已接受
 - 日期：2026-07-27
