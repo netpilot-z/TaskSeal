@@ -57,8 +57,7 @@ test("project configuration exposes validated non-secret provider coordinates", 
         expectedState: "In Progress",
         targetState: "Done"
       }
-    },
-    mode: "persistent"
+    }
   });
 
   const configuration = await readProjectConfiguration({ cwd });
@@ -421,6 +420,24 @@ test("project configuration reports invalid JSON and provider coordinates safely
       hasCode("FEISHU_CONFIG_INVALID")
     );
   }
+});
+
+test("project configuration preserves the compatible mode field", async (t) => {
+  const cwd =
+    await createTemporaryDirectory(t);
+  await writeConfiguration(cwd, {
+    project: "TaskSeal",
+    mode: "persistent"
+  });
+
+  assert.equal(
+    (
+      await readProjectConfiguration({
+        cwd
+      })
+    ).mode,
+    "persistent"
+  );
 });
 
 async function writeConfiguration(

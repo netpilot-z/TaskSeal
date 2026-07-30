@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
-import { access, readFile, readdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
@@ -41,6 +40,28 @@ import {
   ManagedAttemptRunner
 } from "./application/managed-attempt-runner.ts";
 import {
+  acquireControlRoomLock
+} from "./application/control-room-lock.ts";
+import type {
+  AcquireControlRoomLockOptions,
+  ControlRoomLock
+} from "./application/control-room-lock.ts";
+import {
+  initializeDemo,
+  initializeProject
+} from "./application/project-initialization.ts";
+import {
+  assessRuntimeReadiness,
+  renderRuntimeReadiness,
+  resolveCodexInvocation,
+  runCommand
+} from "./application/runtime-readiness.ts";
+import type {
+  AssessRuntimeReadinessOptions,
+  CommandRunner,
+  RuntimeReadiness
+} from "./application/runtime-readiness.ts";
+import {
   createLocalDecompositionControl
 } from "./decomposition-runtime.ts";
 import { TaskSealService } from "./application/taskseal-service.ts";
@@ -68,12 +89,8 @@ import {
 } from "./storage/provider-operation-journal.ts";
 import type {
   ManagedField,
-  WorkItem,
-  WorkItemCreatedEvent
+  WorkItem
 } from "./domain/workflow.ts";
-import type {
-  CodexAppServerInvocation
-} from "./runners/codex-app-server-client.ts";
 import type {
   ManagedRunnerResult,
   ManagedRunnerRunOptions
@@ -143,23 +160,20 @@ import type {
   TaskSealPluginManifestV1
 } from "./sdk/plugin-manifest.ts";
 
+export {
+  assessRuntimeReadiness as collectDiagnostics,
+  resolveCodexInvocation
+};
+export type {
+  CommandResult,
+  CommandRunner
+} from "./application/runtime-readiness.ts";
+
 export type CliExitCode = 0 | 1 | 2;
 
 export interface OutputPort {
   write(value: string): unknown;
 }
-
-export interface CommandResult {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
-}
-
-export type CommandRunner = (
-  command: string,
-  args: string[],
-  options: { cwd: string }
-) => unknown | Promise<unknown>;
 
 interface RunCliWorkItemOptions {
   cwd: string;
@@ -408,58 +422,12 @@ interface CreateLocalCodexRuntimeOptions {
   environment?: NodeJS.ProcessEnv | undefined;
 }
 
-interface InitializeProjectOptions {
-  cwd: string;
-  now?: (() => Date) | undefined;
-}
-
-interface InitializeProjectResult {
-  created: boolean;
-  workItemId: string;
-}
-
-interface CollectDiagnosticsOptions {
-  cwd: string;
-  commandRunner?: CommandRunner | undefined;
-  nodeVersion?: unknown;
-}
-
-interface CodexDiagnostic {
-  available: boolean;
-  loggedIn: boolean;
-  version: string | null;
-}
-
-interface Diagnostics {
-  node: {
-    ready: boolean;
-    version: string;
-  };
-  project: {
-    ready: boolean;
-  };
-  codex: CodexDiagnostic;
-  ready: boolean;
-}
-
-interface ResolveCodexInvocationOptions {
-  cwd: string;
-  commandRunner?: CommandRunner | undefined;
-  environment?: NodeJS.ProcessEnv | undefined;
-  platform?: NodeJS.Platform | undefined;
-  appExecutables?: readonly string[] | undefined;
-}
-
-interface SelectNewestCodexInvocationOptions {
-  invocations: readonly CodexAppServerInvocation[];
-  cwd: string;
-  commandRunner: CommandRunner;
-}
-
 interface ParsedRunArguments {
   workItemId: string;
   prompt?: string | undefined;
-  readOnly: boolean;
+  workspaceAccess:
+    | "read-only"
+    | "workspace-write";
 }
 
 interface ParsedVersionedArguments {
@@ -519,10 +487,25 @@ interface StartPersistentControlRoomOptions {
   output: OutputPort;
   environment?: NodeJS.ProcessEnv | undefined;
   commandRunner?: CommandRunner | undefined;
+  assessReadiness?:
+    | ((
+        options: AssessRuntimeReadinessOptions
+      ) => Promise<RuntimeReadiness>)
+    | undefined;
   initialize?:
     | ((
-        options: InitializeProjectOptions
+        options: {
+          readonly cwd: string;
+        }
       ) => unknown | Promise<unknown>)
+    | undefined;
+  acquireLock?:
+    | ((
+        options:
+          AcquireControlRoomLockOptions
+      ) =>
+        | ControlRoomLock
+        | Promise<ControlRoomLock>)
     | undefined;
   runtimeFactory?:
     | ((
@@ -605,14 +588,13 @@ const processSignalSource: SignalSourcePort = {
   }
 };
 
-const MINIMUM_NODE_VERSION = [24, 12, 0];
-const MINIMUM_NODE_VERSION_LABEL = "24.12.0";
 const USAGE = `Usage:
   taskseal init
+  taskseal demo init
   taskseal doctor
   taskseal start
   taskseal plugin check <manifest.json>
-  taskseal run <work-item-id> [--prompt <text>] [--read-only]
+  taskseal run <work-item-id> [--prompt <text>] [--read-only|--workspace-write]
   taskseal inspect github-issue --issue <number> --work-item <id> --criterion <key> [--snapshot-version 2 --title-management provider|none]
   taskseal inspect github --issue <number> --pr <number> --check <name> --work-item <id> --attempt <id> --criterion <key> [--snapshot-version 2 --title-management provider|none]
   taskseal inspect linear --issue <identifier-or-uuid> --work-item <id> --criterion <key> [--snapshot-version 2 --title-management provider|none]
@@ -705,22 +687,43 @@ export async function runCli({
   }
 
   if (command === "init") {
-    const result = await initializeProject({ cwd, now });
+    const result =
+      await initializeProject({ cwd });
     output.write(
-      result.created
-        ? `Initialized TaskSeal with ${result.workItemId}.\n`
-        : `TaskSeal is already initialized with ${result.workItemId}.\n`
+      result.configurationCreated
+        ? `Initialized TaskSeal project ${result.project}.\n`
+        : `TaskSeal project ${result.project} is already initialized.\n`
+    );
+    return 0;
+  }
+
+  if (
+    command === "demo" &&
+    args.length === 2 &&
+    args[1] === "init"
+  ) {
+    const result =
+      await initializeDemo({
+        cwd,
+        now
+      });
+    output.write(
+      result.workItemCreated
+        ? `Initialized TaskSeal demo with ${result.workItemId}.\n`
+        : `TaskSeal demo is already initialized with ${result.workItemId}.\n`
     );
     return 0;
   }
 
   if (command === "doctor") {
-    const diagnostics = await collectDiagnostics({
+    const diagnostics = await assessRuntimeReadiness({
       cwd,
       commandRunner,
       nodeVersion
     });
-    output.write(renderDiagnostics(diagnostics));
+    output.write(
+      renderRuntimeReadiness(diagnostics)
+    );
     return diagnostics.ready ? 0 : 1;
   }
 
@@ -750,9 +753,7 @@ export async function runCli({
           cwd,
           workItemId: options.workItemId,
           prompt: options.prompt,
-          sandbox: options.readOnly
-            ? "read-only"
-            : "workspace-write"
+          sandbox: options.workspaceAccess
         })
       );
       output.write(renderRunResult(result));
@@ -1479,390 +1480,6 @@ function captureConfigurationSeedTimestamp(
   return new Date(value.getTime() - 1).toISOString();
 }
 
-export async function initializeProject({
-  cwd,
-  now = () => new Date()
-}: InitializeProjectOptions): Promise<InitializeProjectResult> {
-  const journal = new FileEventJournal({
-    filePath: join(cwd, ".taskseal", "events.jsonl")
-  });
-  const service = await TaskSealService.open({ journal });
-  const existing = service.getWorkItem("TS-1");
-
-  if (existing) {
-    return {
-      created: false,
-      workItemId: existing.id
-    };
-  }
-
-  const event: WorkItemCreatedEvent = {
-    eventId: "taskseal:TS-1:local-created",
-    workItemId: "TS-1",
-    type: "work_item.created",
-    occurredAt: now().toISOString(),
-    payload: {
-      title: "Run the first Codex App Server attempt",
-      requiredEvidence: ["tests"],
-      externalLink: {
-        provider: "taskseal",
-        externalId: "TS-1",
-        url: "http://127.0.0.1:4317/work-items/TS-1"
-      }
-    }
-  };
-
-  await service.append(event);
-
-  return {
-    created: true,
-    workItemId: event.workItemId
-  };
-}
-
-export async function collectDiagnostics({
-  cwd,
-  commandRunner = runCommand,
-  nodeVersion = process.versions.node
-}: CollectDiagnosticsOptions): Promise<Diagnostics> {
-  const parsedNodeVersion = parseNodeVersion(nodeVersion);
-  const node = {
-    ready:
-      parsedNodeVersion !== null &&
-      compareVersions(
-        parsedNodeVersion,
-        MINIMUM_NODE_VERSION
-      ) >= 0,
-    version:
-      typeof nodeVersion === "string"
-        ? nodeVersion.startsWith("v")
-          ? nodeVersion
-          : `v${nodeVersion}`
-        : String(nodeVersion)
-  };
-  const project = await inspectProjectConfiguration(cwd);
-  let codex: CodexDiagnostic;
-
-  try {
-    const codexInvocation = await resolveCodexInvocation({
-      cwd,
-      commandRunner
-    });
-
-    if (!codexInvocation) {
-      throw new Error("Codex executable not found.");
-    }
-
-    const versionResult = readCommandResult(
-      await commandRunner(
-        codexInvocation.command,
-        [...codexInvocation.argsPrefix, "--version"],
-        { cwd }
-      )
-    );
-
-    if (versionResult.exitCode !== 0) {
-      codex = {
-        available: false,
-        loggedIn: false,
-        version: null
-      };
-    } else {
-      const loginResult = readCommandResult(
-        await commandRunner(
-          codexInvocation.command,
-          [...codexInvocation.argsPrefix, "login", "status"],
-          { cwd }
-        )
-      );
-      codex = {
-        available: true,
-        loggedIn:
-          loginResult.exitCode === 0 &&
-          /logged in/i.test(
-            `${loginResult.stdout}\n${loginResult.stderr}`
-          ),
-        version: versionResult.stdout.trim()
-      };
-    }
-  } catch {
-    codex = {
-      available: false,
-      loggedIn: false,
-      version: null
-    };
-  }
-
-  return {
-    node,
-    project,
-    codex,
-    ready:
-      node.ready &&
-      project.ready &&
-      codex.available &&
-      codex.loggedIn
-  };
-}
-
-export async function resolveCodexInvocation({
-  cwd,
-  commandRunner = runCommand,
-  environment = process.env,
-  platform = process.platform,
-  appExecutables
-}: ResolveCodexInvocationOptions): Promise<
-  CodexAppServerInvocation | null
-> {
-  if (
-    typeof environment.TASKSEAL_CODEX_BIN === "string" &&
-    environment.TASKSEAL_CODEX_BIN.trim().length > 0
-  ) {
-    return invocationForCandidate(environment.TASKSEAL_CODEX_BIN);
-  }
-
-  if (platform !== "win32") {
-    return {
-      command: "codex",
-      argsPrefix: []
-    };
-  }
-
-  const candidates: string[] = [];
-
-  try {
-    const result = readCommandResult(
-      await commandRunner(
-        "where.exe",
-        ["codex"],
-        { cwd }
-      )
-    );
-
-    if (result.exitCode === 0) {
-      candidates.push(
-        ...result.stdout
-          .split(/\r?\n/)
-          .map((value) => value.trim())
-          .filter(
-            (value) =>
-              value.toLowerCase().endsWith(".cmd") ||
-              value.toLowerCase().endsWith(".exe")
-          )
-      );
-    }
-  } catch {
-    // Codex App discovery below can still provide a usable binary.
-  }
-
-  candidates.push(
-    ...(appExecutables ??
-      (await discoverCodexAppExecutables(environment.LOCALAPPDATA)))
-  );
-
-  const invocations: CodexAppServerInvocation[] = [];
-
-  for (const candidate of [...new Set(candidates)]) {
-    const invocation = await invocationForCandidate(candidate);
-
-    if (invocation) {
-      invocations.push(invocation);
-    }
-  }
-
-  return selectNewestCodexInvocation({
-    invocations,
-    cwd,
-    commandRunner
-  });
-}
-
-async function discoverCodexAppExecutables(
-  localAppData: unknown
-): Promise<string[]> {
-  if (typeof localAppData !== "string" || localAppData.length === 0) {
-    return [];
-  }
-
-  const binDirectory = join(localAppData, "OpenAI", "Codex", "bin");
-  const candidates = [join(binDirectory, "codex.exe")];
-
-  try {
-    const entries = await readdir(binDirectory, { withFileTypes: true });
-    candidates.push(
-      ...entries
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => join(binDirectory, entry.name, "codex.exe"))
-    );
-  } catch {
-    return [];
-  }
-
-  const usable = await Promise.all(
-    candidates.map(async (candidate) => {
-      try {
-        await access(candidate);
-        return candidate;
-      } catch {
-        return null;
-      }
-    })
-  );
-  return usable.filter(
-    (candidate): candidate is string =>
-      candidate !== null
-  );
-}
-
-async function selectNewestCodexInvocation({
-  invocations,
-  cwd,
-  commandRunner
-}: SelectNewestCodexInvocationOptions): Promise<
-  CodexAppServerInvocation | null
-> {
-  let selected: {
-    invocation: CodexAppServerInvocation;
-    version: number[];
-  } | null = null;
-
-  for (const invocation of invocations) {
-    try {
-      const result = readCommandResult(
-        await commandRunner(
-          invocation.command,
-          [...invocation.argsPrefix, "--version"],
-          { cwd }
-        )
-      );
-      const version = parseCodexVersion(result.stdout);
-
-      if (
-        result.exitCode === 0 &&
-        version &&
-        (!selected || compareVersions(version, selected.version) > 0)
-      ) {
-        selected = {
-          invocation,
-          version
-        };
-      }
-    } catch {
-      // Ignore inaccessible or incomplete installations.
-    }
-  }
-
-  return selected?.invocation ?? null;
-}
-
-function parseCodexVersion(value: unknown): number[] | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-
-  const match = /\b(\d+)\.(\d+)\.(\d+)/.exec(value);
-  return match ? match.slice(1).map(Number) : null;
-}
-
-function parseNodeVersion(value: unknown): number[] | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-
-  const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(value);
-  return match ? match.slice(1).map(Number) : null;
-}
-
-function compareVersions(
-  left: readonly number[],
-  right: readonly number[]
-): number {
-  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
-    const difference = (left[index] ?? 0) - (right[index] ?? 0);
-
-    if (difference !== 0) {
-      return difference;
-    }
-  }
-
-  return 0;
-}
-
-async function invocationForCandidate(
-  candidate: string
-): Promise<CodexAppServerInvocation | null> {
-  if (!candidate.toLowerCase().endsWith(".cmd")) {
-    return {
-      command: candidate,
-      argsPrefix: []
-    };
-  }
-
-  const codexScript = join(
-    dirname(candidate),
-    "node_modules",
-    "@openai",
-    "codex",
-    "bin",
-    "codex.js"
-  );
-
-  try {
-    await access(codexScript);
-    return {
-      command: process.execPath,
-      argsPrefix: [codexScript]
-    };
-  } catch {
-    return null;
-  }
-}
-
-async function inspectProjectConfiguration(
-  cwd: string
-): Promise<{ ready: boolean }> {
-  try {
-    const content = await readFile(join(cwd, "config", "project.json"), "utf8");
-    const configuration: unknown = JSON.parse(content);
-
-    return {
-      ready:
-        isRecord(configuration) &&
-        typeof configuration.project === "string" &&
-        configuration.project.length > 0
-    };
-  } catch {
-    return { ready: false };
-  }
-}
-
-function renderDiagnostics(
-  diagnostics: Diagnostics
-): string {
-  const lines = [
-    formatDiagnostic(
-      diagnostics.node.ready,
-      `Node ${diagnostics.node.version}`,
-      `requires Node ${MINIMUM_NODE_VERSION_LABEL} or newer`
-    ),
-    formatDiagnostic(
-      diagnostics.project.ready,
-      "Project configuration",
-      "missing or invalid"
-    ),
-    diagnostics.codex.available
-      ? `✓ Codex ${diagnostics.codex.version} — ready`
-      : "× Codex binary — not available",
-    formatDiagnostic(
-      diagnostics.codex.loggedIn,
-      "Codex login",
-      "not ready"
-    )
-  ];
-
-  return `${lines.join("\n")}\n`;
-}
-
 function parseRunArguments(
   args: readonly string[]
 ): ParsedRunArguments | null {
@@ -1878,12 +1495,21 @@ function parseRunArguments(
 
   let prompt: string | undefined;
   let readOnly = false;
+  let workspaceWrite = false;
 
   for (let index = 0; index < options.length; index += 1) {
     const option = options[index];
 
     if (option === "--read-only" && !readOnly) {
       readOnly = true;
+      continue;
+    }
+
+    if (
+      option === "--workspace-write" &&
+      !workspaceWrite
+    ) {
+      workspaceWrite = true;
       continue;
     }
 
@@ -1901,10 +1527,16 @@ function parseRunArguments(
     return null;
   }
 
+  if (readOnly && workspaceWrite) {
+    return null;
+  }
+
   return {
     workItemId,
     ...(prompt === undefined ? {} : { prompt }),
-    readOnly
+    workspaceAccess: workspaceWrite
+      ? "workspace-write"
+      : "read-only"
   };
 }
 
@@ -2590,40 +2222,15 @@ function readErrorMessage(
     : fallback;
 }
 
-function readCommandResult(value: unknown): CommandResult {
-  if (
-    !isRecord(value) ||
-    typeof value.exitCode !== "number" ||
-    !Number.isInteger(value.exitCode) ||
-    typeof value.stdout !== "string" ||
-    typeof value.stderr !== "string"
-  ) {
-    throw new TypeError(
-      "TaskSeal command runner returned an invalid result."
-    );
-  }
-
-  return {
-    exitCode: value.exitCode,
-    stdout: value.stdout,
-    stderr: value.stderr
-  };
-}
-
-function formatDiagnostic(
-  ready: boolean,
-  label: string,
-  failure: string
-): string {
-  return ready ? `✓ ${label} — ready` : `× ${label} — ${failure}`;
-}
-
 export async function startPersistentControlRoom({
   cwd,
   output,
   environment = process.env,
   commandRunner = runCommand,
+  assessReadiness = assessRuntimeReadiness,
   initialize = initializeProject,
+  acquireLock =
+    acquireControlRoomLock,
   runtimeFactory = createLocalCodexRuntime,
   providerObservationRuntimeFactory =
     createLocalProviderObservationRuntime,
@@ -2654,102 +2261,147 @@ export async function startPersistentControlRoom({
     );
   }
 
+  const readiness =
+    await assessReadiness({
+      cwd,
+      commandRunner,
+      environment
+    });
+  if (!readiness.ready) {
+    throw Object.assign(
+      new Error(
+        "TaskSeal runtime is not ready. Run taskseal doctor for details."
+      ),
+      { code: "TASKSEAL_NOT_READY" }
+    );
+  }
+
   await initialize({ cwd });
-  const { readModel: providerObservations } =
-    await providerObservationRuntimeFactory({ cwd });
-  const providerOperations =
-    await providerOperationQueryFactory({ cwd });
-  const {
-    service,
-    runner,
-    decomposition = null
-  } = await runtimeFactory({
-    cwd,
-    commandRunner,
-    environment
-  });
-  const acceptanceRuntime =
-    acceptanceRuntimeFactory !== undefined
-      ? await acceptanceRuntimeFactory({
-          cwd,
-          environment,
-          service,
-          providerOperations
-        })
-      : providerOperationQueryFactory ===
-          createLocalProviderOperationRuntime
-        ? await createControlRoomAcceptanceRuntime({
+  const lock =
+    await acquireLock({ cwd });
+  try {
+    const {
+      readModel:
+        providerObservations
+    } =
+      await providerObservationRuntimeFactory({
+        cwd
+      });
+    const providerOperations =
+      await providerOperationQueryFactory({
+        cwd
+      });
+    const {
+      service,
+      runner,
+      decomposition = null
+    } = await runtimeFactory({
+      cwd,
+      commandRunner,
+      environment
+    });
+    const acceptanceRuntime =
+      acceptanceRuntimeFactory !== undefined
+        ? await acceptanceRuntimeFactory({
             cwd,
             environment,
             service,
             providerOperations
           })
-        : disabledAcceptanceRuntime(
-            providerOperations
+        : providerOperationQueryFactory ===
+            createLocalProviderOperationRuntime
+          ? await createControlRoomAcceptanceRuntime({
+              cwd,
+              environment,
+              service,
+              providerOperations
+            })
+          : disabledAcceptanceRuntime(
+              providerOperations
+            );
+    const providerStatus =
+      new ProviderSyncProjectionQuery({
+        observations:
+          providerObservations,
+        operations:
+          acceptanceRuntime
+            .providerOperations
+      });
+    const server = serverFactory({
+      service,
+      providerStatus,
+      acceptance:
+        acceptanceRuntime.acceptance,
+      acceptanceCapabilities:
+        acceptanceRuntime.capabilities,
+      operatorId:
+        acceptanceRuntime.operatorId,
+      decomposition,
+      maxConcurrentRuns,
+      runWorkItem: (options) => {
+        if (
+          options.runnerId !==
+            undefined &&
+          runner.manifest?.runnerId !==
+            options.runnerId
+        ) {
+          throw Object.assign(
+            new Error(
+              "The approved decomposition runner is not available."
+            ),
+            {
+              code:
+                "RUNNER_NOT_AVAILABLE"
+            }
           );
-  const providerStatus =
-    new ProviderSyncProjectionQuery({
-      observations: providerObservations,
-      operations:
-        acceptanceRuntime
-          .providerOperations
+        }
+        return runner.run({
+          workItemId:
+            options.workItemId,
+          cwd,
+          instruction:
+            options.prompt,
+          workspaceAccess:
+            options.sandbox,
+          timeoutMs:
+            options.timeoutMs,
+          signal: options.signal,
+          terminalization:
+            options.terminalization
+        });
+      }
     });
-  const server = serverFactory({
-    service,
-    providerStatus,
-    acceptance:
-      acceptanceRuntime.acceptance,
-    acceptanceCapabilities:
-      acceptanceRuntime.capabilities,
-    operatorId:
-      acceptanceRuntime.operatorId,
-    decomposition,
-    maxConcurrentRuns,
-    runWorkItem: (options) => {
-      if (
-        options.runnerId !==
-          undefined &&
-        runner.manifest?.runnerId !==
-          options.runnerId
-      ) {
-        throw Object.assign(
-          new Error(
-            "The approved decomposition runner is not available."
-          ),
-          {
-            code:
-              "RUNNER_NOT_AVAILABLE"
-          }
+
+    await new Promise<void>(
+      (resolve, reject) => {
+        server.once(
+          "error",
+          (error) =>
+            reject(error)
+        );
+        server.listen(
+          port,
+          host,
+          () => resolve()
         );
       }
-      return runner.run({
-        workItemId:
-          options.workItemId,
-        cwd,
-        instruction: options.prompt,
-        workspaceAccess:
-          options.sandbox,
-        timeoutMs:
-          options.timeoutMs,
-        signal: options.signal,
-        terminalization:
-          options.terminalization
-      });
-    }
-  });
+    );
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", (error) => reject(error));
-    server.listen(port, host, () => resolve());
-  });
-
-  installShutdownHandlers({
-    server,
-    signalSource,
-    output
-  });
-  output.write(`TaskSeal Control Room: http://${host}:${port}\n`);
-  return server;
+    installShutdownHandlers({
+      server,
+      signalSource,
+      output,
+      releaseLock: () =>
+        lock.release()
+    });
+    output.write(
+      `TaskSeal Control Room: http://${host}:${port}\n`
+    );
+    return server;
+  } catch (error) {
+    await lock.release();
+    throw error;
+  }
 }
 
 async function createControlRoomAcceptanceRuntime({
@@ -2824,13 +2476,30 @@ function readMaxConcurrentRuns(
 function installShutdownHandlers({
   server,
   signalSource,
-  output
+  output,
+  releaseLock
 }: {
   server: ControlRoomServerPort;
   signalSource: SignalSourcePort;
   output: OutputPort;
+  releaseLock: () => Promise<void>;
 }): void {
   let shuttingDown = false;
+  let release:
+    Promise<void> | undefined;
+
+  const releaseOnce = () => {
+    release ??= releaseLock();
+    return release;
+  };
+  const reportFailure = (
+    error: unknown
+  ) => {
+    output.write(
+      `TaskSeal shutdown failed: ${renderSafeMessage(error)}\n`
+    );
+    signalSource.exitCode = 1;
+  };
 
   const cleanup = () => {
     signalSource.removeListener("SIGINT", handleSignal);
@@ -2843,18 +2512,19 @@ function installShutdownHandlers({
 
     shuttingDown = true;
     shutdownServer(server)
-      .catch((error) => {
-        output.write(
-          `TaskSeal shutdown failed: ${renderSafeMessage(error)}\n`
-        );
-        signalSource.exitCode = 1;
-      })
+      .then(releaseOnce)
+      .catch(reportFailure)
       .finally(cleanup);
   };
 
   signalSource.once("SIGINT", handleSignal);
   signalSource.once("SIGTERM", handleSignal);
-  server.once("close", cleanup);
+  server.once("close", () => {
+    cleanup();
+    releaseOnce().catch(
+      reportFailure
+    );
+  });
 }
 
 async function shutdownServer(
@@ -2888,40 +2558,6 @@ function renderSafeMessage(error: unknown): string {
     error,
     "Unknown shutdown error."
   ).slice(0, 2_000);
-}
-
-function runCommand(
-  command: string,
-  args: string[],
-  { cwd }: { cwd: string }
-): Promise<CommandResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      shell: false,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"]
-    });
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-    child.once("error", reject);
-    child.once("close", (exitCode) => {
-      resolve({
-        exitCode: exitCode ?? 1,
-        stdout,
-        stderr
-      });
-    });
-  });
 }
 
 function isRecord(

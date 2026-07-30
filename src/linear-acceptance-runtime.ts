@@ -93,9 +93,11 @@ export async function createLocalLinearAcceptanceRuntime({
       cwd
     });
   const coordinates =
-    getLinearAcceptanceCoordinates(
-      configuration
-    );
+    configuration.linear === undefined
+      ? null
+      : getLinearAcceptanceCoordinates(
+          configuration
+        );
   const actor =
     normalizeOptionalActor(
       environment
@@ -103,7 +105,7 @@ export async function createLocalLinearAcceptanceRuntime({
     );
 
   if (
-    coordinates.enabled &&
+    coordinates?.enabled &&
     actor === null
   ) {
     throw runtimeError(
@@ -135,7 +137,10 @@ export async function createLocalLinearAcceptanceRuntime({
     });
   }
 
-  if (!coordinates.enabled) {
+  if (
+    coordinates === null ||
+    !coordinates.enabled
+  ) {
     return Object.freeze({
       acceptance:
         new AcceptanceDeliveryCoordinator({

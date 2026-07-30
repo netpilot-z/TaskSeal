@@ -129,29 +129,102 @@ test("the POSIX source-checkout CLI executes through its raw entrypoint", () => 
   assert.match(result.stdout, /Usage:/);
 });
 
-test("init creates one local work item and remains idempotent", async (t) => {
+test("init creates project scaffolding without a WorkItem and remains idempotent", async (t) => {
   const cwd = await createTemporaryDirectory(t);
   const output = createOutput();
-  const now = () => new Date("2026-07-26T09:00:00.000Z");
 
-  assert.equal(await runCli({ args: ["init"], cwd, output, now }), 0);
-  assert.equal(await runCli({ args: ["init"], cwd, output, now }), 0);
+  assert.equal(
+    await runCli({
+      args: ["init"],
+      cwd,
+      output
+    }),
+    0
+  );
+  assert.equal(
+    await runCli({
+      args: ["init"],
+      cwd,
+      output
+    }),
+    0
+  );
 
   const journal = new FileEventJournal({
     filePath: join(cwd, ".taskseal", "events.jsonl")
   });
   const events = await journal.readAll();
+  const configuration: unknown =
+    JSON.parse(
+      await readFile(
+        join(
+          cwd,
+          "config",
+          "project.json"
+        ),
+        "utf8"
+      )
+    );
+
+  assert.deepEqual(events, []);
+  assert.equal(
+    typeof readJsonPath(
+      configuration,
+      "project"
+    ),
+    "string"
+  );
+  assert.doesNotMatch(
+    JSON.stringify(configuration),
+    new RegExp(escapeRegExp(cwd))
+  );
+});
+
+test("demo init explicitly creates the sample WorkItem once", async (t) => {
+  const cwd = await createTemporaryDirectory(t);
+  const output = createOutput();
+  const now = () =>
+    new Date(
+      "2026-07-26T09:00:00.000Z"
+    );
+
+  assert.equal(
+    await runCli({
+      args: ["demo", "init"],
+      cwd,
+      output,
+      now
+    }),
+    0
+  );
+  assert.equal(
+    await runCli({
+      args: ["demo", "init"],
+      cwd,
+      output,
+      now
+    }),
+    0
+  );
+
+  const journal =
+    new FileEventJournal({
+      filePath: join(
+        cwd,
+        ".taskseal",
+        "events.jsonl"
+      )
+    });
+  const events = await journal.readAll();
 
   assert.equal(events.length, 1);
   assert.equal(
-    readJsonPath(events[0], "type"),
-    "work_item.created"
-  );
-  assert.equal(
-    readJsonPath(events[0], "workItemId"),
+    readJsonPath(
+      events[0],
+      "workItemId"
+    ),
     "TS-1"
   );
-  assert.doesNotMatch(JSON.stringify(events), new RegExp(escapeRegExp(cwd)));
 });
 
 test("doctor reports project and Codex readiness without command stderr", async (t) => {
@@ -277,6 +350,135 @@ test("doctor enforces the Node 24.12.0 runtime minimum", async (t) => {
     0
   );
   assert.match(supportedOutput.text(), /Node v24\.12\.0 .*ready/);
+});
+
+test("doctor rejects unverified Node major versions", async (t) => {
+  const cwd = await createTemporaryDirectory(t);
+  await mkdir(join(cwd, "config"), { recursive: true });
+  await writeFile(
+    join(cwd, "config", "project.json"),
+    JSON.stringify({ project: "TaskSeal" })
+  );
+  const output = createOutput();
+
+  const exitCode = await runCli({
+    args: ["doctor"],
+    cwd,
+    output,
+    nodeVersion: "25.0.0",
+    commandRunner: async (_command, args) => ({
+      exitCode: 0,
+      stdout:
+        args[0] === "--version"
+          ? "codex-cli 0.135.0\n"
+          : "Logged in using ChatGPT\n",
+      stderr: ""
+    })
+  });
+
+  assert.equal(exitCode, 1);
+  assert.match(
+    output.text(),
+    /Node v25\.0\.0 .*requires Node >=24\.12\.0 <25/
+  );
+});
+
+test("doctor validates configured integration shapes", async (t) => {
+  const cwd = await createTemporaryDirectory(t);
+  await mkdir(join(cwd, "config"), { recursive: true });
+  await writeFile(
+    join(cwd, "config", "project.json"),
+    JSON.stringify({
+      project: "TaskSeal",
+      github: {
+        repository: "not-a-repository"
+      }
+    })
+  );
+  const output = createOutput();
+
+  const exitCode = await runCli({
+    args: ["doctor"],
+    cwd,
+    output,
+    commandRunner: async (_command, args) => ({
+      exitCode: 0,
+      stdout:
+        args[0] === "--version"
+          ? "codex-cli 0.135.0\n"
+          : "Logged in using ChatGPT\n",
+      stderr: ""
+    })
+  });
+
+  assert.equal(exitCode, 1);
+  assert.match(
+    output.text(),
+    /Project configuration .*missing or invalid/
+  );
+});
+
+test("doctor rejects project configuration fields outside the public schema", async (t) => {
+  const cwd = await createTemporaryDirectory(t);
+  await mkdir(join(cwd, "config"), { recursive: true });
+  await writeFile(
+    join(cwd, "config", "project.json"),
+    JSON.stringify({
+      project: "TaskSeal",
+      localAbsolutePath: "private"
+    })
+  );
+
+  const exitCode = await runCli({
+    args: ["doctor"],
+    cwd,
+    output: createOutput(),
+    commandRunner: async (_command, args) => ({
+      exitCode: 0,
+      stdout:
+        args[0] === "--version"
+          ? "codex-cli 0.135.0\n"
+          : "Logged in using ChatGPT\n",
+      stderr: ""
+    })
+  });
+
+  assert.equal(exitCode, 1);
+});
+
+test("doctor rejects an invalid configured Linear capability", async (t) => {
+  const cwd = await createTemporaryDirectory(t);
+  await mkdir(join(cwd, "config"), { recursive: true });
+  await writeFile(
+    join(cwd, "config", "project.json"),
+    JSON.stringify({
+      project: "TaskSeal",
+      linear: {
+        workspace: "netpilot-z",
+        team: "netpilot",
+        project: "TaskSeal",
+        acceptance: {
+          enabled: true
+        }
+      }
+    })
+  );
+
+  const exitCode = await runCli({
+    args: ["doctor"],
+    cwd,
+    output: createOutput(),
+    commandRunner: async (_command, args) => ({
+      exitCode: 0,
+      stdout:
+        args[0] === "--version"
+          ? "codex-cli 0.135.0\n"
+          : "Logged in using ChatGPT\n",
+      stderr: ""
+    })
+  });
+
+  assert.equal(exitCode, 1);
 });
 
 test("doctor fails clearly when Codex is unavailable", async (t) => {
@@ -482,6 +684,26 @@ test("persistent start wires one service and runner into the Control Room", asyn
       PORT: "0",
       TASKSEAL_MAX_CONCURRENT_RUNS: "2"
     },
+    assessReadiness: async () => ({
+      node: {
+        ready: true,
+        version: "v24.12.0",
+        failure: ""
+      },
+      project: { ready: true },
+      capabilities: {
+        github: "disabled",
+        linear: "disabled",
+        gitee: "disabled",
+        feishu: "disabled"
+      },
+      codex: {
+        available: true,
+        loggedIn: true,
+        version: "codex-cli test"
+      },
+      ready: true
+    }),
     signalSource,
     initialize: async () => {
       initialized = true;
@@ -667,6 +889,123 @@ test("persistent start rejects an invalid bounded concurrency setting before ini
   }
 });
 
+test("persistent start rejects the same invalid project configuration as doctor before initialization", async (t) => {
+  const cwd = await createTemporaryDirectory(t);
+  await mkdir(join(cwd, "config"), { recursive: true });
+  await writeFile(
+    join(cwd, "config", "project.json"),
+    JSON.stringify({
+      project: "TaskSeal",
+      github: {
+        repository: "not-a-repository"
+      }
+    })
+  );
+  let initialized = false;
+
+  await assert.rejects(
+    startPersistentControlRoom({
+      cwd,
+      output: createOutput(),
+      environment: {
+        HOST: "127.0.0.1",
+        PORT: "0"
+      },
+      commandRunner: async (command, args) => ({
+        exitCode: 0,
+        stdout:
+          command === "where.exe"
+            ? "codex-path.exe\n"
+            : args[0] === "--version"
+              ? "codex-cli 0.135.0\n"
+              : "Logged in using ChatGPT\n",
+        stderr: ""
+      }),
+      initialize: async () => {
+        initialized = true;
+      },
+      signalSource: new EventEmitter()
+    }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "TASKSEAL_NOT_READY"
+  );
+  assert.equal(initialized, false);
+});
+
+test("persistent start rejects an existing Control Room lock before opening runtime journals", async (t) => {
+  const cwd =
+    await createTemporaryDirectory(t);
+  let initialized = false;
+  let runtimeCalls = 0;
+
+  await assert.rejects(
+    startPersistentControlRoom({
+      cwd,
+      output: createOutput(),
+      environment: {
+        HOST: "127.0.0.1",
+        PORT: "0"
+      },
+      assessReadiness:
+        async () => ({
+          node: {
+            ready: true,
+            version: "v24.12.0",
+            failure: ""
+          },
+          project: {
+            ready: true
+          },
+          capabilities: {
+            github: "disabled",
+            linear: "disabled",
+            gitee: "disabled",
+            feishu: "disabled"
+          },
+          codex: {
+            available: true,
+            loggedIn: true,
+            version:
+              "codex-cli test"
+          },
+          ready: true
+        }),
+      initialize: async () => {
+        initialized = true;
+      },
+      acquireLock: async () => {
+        throw Object.assign(
+          new Error(
+            "already running"
+          ),
+          {
+            code:
+              "CONTROL_ROOM_ALREADY_RUNNING"
+          }
+        );
+      },
+      runtimeFactory: async () => {
+        runtimeCalls += 1;
+        throw new Error(
+          "runtime must stay closed"
+        );
+      },
+      signalSource:
+        new EventEmitter()
+    }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code ===
+        "CONTROL_ROOM_ALREADY_RUNNING"
+  );
+
+  assert.equal(initialized, true);
+  assert.equal(runtimeCalls, 0);
+});
+
 test("run delegates one work item to Codex with an explicit safety mode", async (t) => {
   const cwd = await createTemporaryDirectory(t);
   const output = createOutput();
@@ -716,6 +1055,84 @@ test("run delegates one work item to Codex with an explicit safety mode", async 
     /Runner execution: turn-9/
   );
   assert.match(output.text(), /Ready\./);
+});
+
+test("run defaults to read-only workspace access", async (t) => {
+  const cwd = await createTemporaryDirectory(t);
+  const calls: unknown[] = [];
+
+  const exitCode = await runCli({
+    args: ["run", "TS-9"],
+    cwd,
+    output: createOutput(),
+    runWorkItem: async (options) => {
+      calls.push(options);
+      return {
+        attemptId: "attempt-9",
+        outcome: "completed"
+      };
+    }
+  });
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(calls, [
+    {
+      cwd,
+      workItemId: "TS-9",
+      prompt: undefined,
+      sandbox: "read-only"
+    }
+  ]);
+});
+
+test("run grants workspace write only through an explicit flag", async (t) => {
+  const cwd = await createTemporaryDirectory(t);
+  const calls: unknown[] = [];
+
+  const exitCode = await runCli({
+    args: ["run", "TS-9", "--workspace-write"],
+    cwd,
+    output: createOutput(),
+    runWorkItem: async (options) => {
+      calls.push(options);
+      return {
+        attemptId: "attempt-9",
+        outcome: "completed"
+      };
+    }
+  });
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(calls, [
+    {
+      cwd,
+      workItemId: "TS-9",
+      prompt: undefined,
+      sandbox: "workspace-write"
+    }
+  ]);
+});
+
+test("run rejects conflicting workspace access flags before invoking the Runner", async (t) => {
+  const cwd = await createTemporaryDirectory(t);
+  let invoked = false;
+
+  const exitCode = await runCli({
+    args: [
+      "run",
+      "TS-9",
+      "--read-only",
+      "--workspace-write"
+    ],
+    cwd,
+    output: createOutput(),
+    runWorkItem: async () => {
+      invoked = true;
+    }
+  });
+
+  assert.equal(exitCode, 2);
+  assert.equal(invoked, false);
 });
 
 test("run returns a failing exit code for non-completed turns", async (t) => {

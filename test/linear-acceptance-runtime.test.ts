@@ -72,6 +72,54 @@ test("disabled acceptance transition opens local decision without reading creden
   );
 });
 
+test("local acceptance remains available when Linear is not configured", async (t) => {
+  const cwd = await mkdtemp(
+    join(
+      tmpdir(),
+      "taskseal-local-acceptance-"
+    )
+  );
+  t.after(() =>
+    rm(cwd, {
+      recursive: true,
+      force: true
+    })
+  );
+  await mkdir(
+    join(cwd, "config"),
+    { recursive: true }
+  );
+  await writeFile(
+    join(cwd, "config", "project.json"),
+    JSON.stringify({
+      project: "TaskSeal"
+    })
+  );
+  let fetchCalls = 0;
+
+  const runtime =
+    await createLocalLinearAcceptanceRuntime({
+      cwd,
+      service: servicePort(),
+      environment: {
+        TASKSEAL_HUMAN_ACTOR:
+          "operator.jeffrey"
+      },
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        throw new Error("must not fetch");
+      }
+    });
+
+  assert.ok(runtime.acceptance);
+  assert.deepEqual(runtime.capabilities, {
+    decideAcceptance: true,
+    linearTransition: false,
+    reconcileLinearTransition: false
+  });
+  assert.equal(fetchCalls, 0);
+});
+
 test("missing local actor disables local decision when transition is disabled", async (t) => {
   const cwd = await createProject(
     t,

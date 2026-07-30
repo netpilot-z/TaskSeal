@@ -424,6 +424,9 @@ test("a corrupt observation store cannot change an inspect result but fails runt
       cwd,
       output: createOutput(),
       initialize: async () => {},
+      assessReadiness:
+        async () =>
+          readyRuntime(),
       commandRunner: async () => {
         commandCalls += 1;
         return {
@@ -478,6 +481,35 @@ test("a corrupt observation store cannot change an inspect result but fails runt
   assert.equal(exitCode, 0);
   assert.deepEqual(JSON.parse(output.text()), snapshot);
 });
+
+function readyRuntime() {
+  return {
+    node: {
+      ready: true,
+      version: "v24.12.0",
+      failure: ""
+    },
+    project: {
+      ready: true
+    },
+    capabilities: {
+      github:
+        "ready" as const,
+      linear:
+        "ready" as const,
+      gitee:
+        "disabled" as const,
+      feishu:
+        "disabled" as const
+    },
+    codex: {
+      available: true,
+      loggedIn: true,
+      version: "codex-cli test"
+    },
+    ready: true
+  };
+}
 
 function createSnapshot() {
   return {

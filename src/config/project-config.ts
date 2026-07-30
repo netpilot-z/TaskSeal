@@ -116,7 +116,31 @@ export async function readProjectConfiguration({
 
   if (
     !isRecord(parsed) ||
-    !isNonEmptyString(parsed.project)
+    !isNonEmptyString(parsed.project) ||
+    !Object.keys(parsed).every((key) =>
+      [
+        "project",
+        "github",
+        "gitee",
+        "feishu",
+        "linear",
+        "mode"
+      ].includes(key)
+    ) ||
+    ![
+      parsed.github,
+      parsed.gitee,
+      parsed.feishu,
+      parsed.linear
+    ].every(
+      (value) =>
+        value === undefined ||
+        isRecord(value)
+    ) ||
+    (
+      parsed.mode !== undefined &&
+      !isNonEmptyString(parsed.mode)
+    )
   ) {
     throw configError(
       "PROJECT_CONFIG_INVALID",
@@ -138,7 +162,9 @@ export async function readProjectConfiguration({
     ...(isRecord(parsed.linear)
       ? { linear: { ...parsed.linear } }
       : {}),
-    ...(isNonEmptyString(parsed.mode) ? { mode: parsed.mode } : {})
+    ...(isNonEmptyString(parsed.mode)
+      ? { mode: parsed.mode }
+      : {})
   };
 }
 

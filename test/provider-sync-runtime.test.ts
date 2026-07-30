@@ -174,6 +174,30 @@ test("a corrupt operation journal prevents persistent startup before runner or s
         write() {}
       },
       initialize: async () => {},
+      assessReadiness:
+        async () => ({
+          node: {
+            ready: true,
+            version: "v24.12.0",
+            failure: ""
+          },
+          project: {
+            ready: true
+          },
+          capabilities: {
+            github: "ready",
+            linear: "ready",
+            gitee: "disabled",
+            feishu: "disabled"
+          },
+          codex: {
+            available: true,
+            loggedIn: true,
+            version:
+              "codex-cli test"
+          },
+          ready: true
+        }),
       providerObservationRuntimeFactory:
         async () => ({
           readModel: {
