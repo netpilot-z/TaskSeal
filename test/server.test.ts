@@ -108,6 +108,11 @@ test("the local API exposes the workflow and can run the demo to acceptance", as
   assert.equal(hubResponse.status, 200);
   assert.equal(readJsonPath(hub, "schemaVersion"), "project-hub/v1");
   assert.equal(readJsonPath(hub, "summary", "projects"), 1);
+  const demoConnectionsResponse = await fetch(`${baseUrl}/api/connections`);
+  const demoConnections: unknown = await demoConnectionsResponse.json();
+  assert.equal(demoConnectionsResponse.status, 200);
+  assert.equal(readJsonPath(demoConnections, "schemaVersion"), "connections/v1");
+  assert.equal(readJsonPath(demoConnections, "capabilities", "explicitProbe"), false);
 
   const runResponse = await fetch(`${baseUrl}/api/demo/run-all`, {
     method: "POST"

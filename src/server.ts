@@ -18,6 +18,7 @@ import type {
   HomeSnapshot
 } from "./dashboard/home-projection.ts";
 import { projectHubSnapshot } from "./dashboard/project-hub.ts";
+import type { ProjectHubQueryPort } from "./dashboard/project-hub.ts";
 import { replayDemoSteps } from "./demo/scenario.ts";
 import type {
   AcceptanceDeliveryLinearSync,
@@ -33,6 +34,14 @@ import type {
 import type {
   ProviderSyncQueryPort
 } from "./application/provider-sync-projection.ts";
+import {
+  ConnectionProbeError,
+  createConfigurationConnectionProbe
+} from "./application/connection-probe.ts";
+import type {
+  ConnectionProbePort,
+  ConnectionProbeProvider
+} from "./application/connection-probe.ts";
 import {
   projectConnections
 } from "./application/connection-projection.ts";
@@ -206,6 +215,8 @@ export interface PersistentTaskSealServerOptions {
   runWorkItem: RunWorkItem;
   maxConcurrentRuns?: number | undefined;
   configuration?: PersistentConfigurationPort | null | undefined;
+  connectionProbe?: ConnectionProbePort | null | undefined;
+  projectHub?: ProjectHubQueryPort | null | undefined;
   steps?: never;
   initialStep?: never;
 }
@@ -245,6 +256,8 @@ interface PersistentRuntime {
   maxConcurrentRuns: number;
   csrfToken: string;
   configuration: PersistentConfigurationPort | null;
+  connectionProbe: ConnectionProbePort;
+  projectHub: ProjectHubQueryPort | null;
 }
 
 type ServerRuntime = DemoRuntime | PersistentRuntime;
@@ -269,6 +282,10 @@ interface ConfigurationDraftRequestBody {
   readonly expectedRevision: string;
   readonly scope: "user" | "project" | "local";
   readonly document: Readonly<Record<string, unknown>>;
+}
+
+interface ConnectionProbeRequestBody {
+  readonly expectedConfigurationRevision: string;
 }
 
 interface DecompositionPreviewRequestBody {
@@ -569,6 +586,10 @@ export function createTaskSealServer(
       }
 
       if (request.method === "GET" && pathname === "/api/project-hub") {
+        if (runtime.mode === "persistent" && runtime.projectHub) {
+          requireTrustedHost(request.headers.host);
+          return writeJson(response, 200, await runtime.projectHub.read());
+        }
         const snapshot =
           runtime.mode === "persistent"
             ? buildPersistentSnapshot(
@@ -601,11 +622,13 @@ export function createTaskSealServer(
       }
 
       if (
-        runtime.mode === "persistent" &&
         request.method === "GET" &&
         pathname === "/api/connections"
       ) {
         requireTrustedHost(request.headers.host);
+        if (runtime.mode === "demo") {
+          return writeJson(response, 200, buildDemoConnectionsResponse());
+        }
         const configuration = requireConfiguration(runtime.configuration);
         const view = await configuration.inspect();
         let providerSync = null;
@@ -614,13 +637,44 @@ export function createTaskSealServer(
         } catch {
           // A provider observation outage must not hide safe configuration truth.
         }
-        return writeJson(
-          response,
-          200,
-          projectConnections({
+        return writeJson(response, 200, {
+          ...projectConnections({
             configuration: view,
             providerSync,
             activeRuntimeRevision: configuration.activeRuntimeRevision
+          }),
+          security: { csrfToken: runtime.csrfToken },
+          capabilities: { explicitProbe: true }
+        });
+      }
+
+      const connectionProbeMatch =
+        runtime.mode === "persistent" &&
+        request.method === "POST" &&
+        /^\/api\/connections\/(github|linear|gitee|feishu)\/probe$/.exec(pathname);
+
+      if (connectionProbeMatch && runtime.mode === "persistent") {
+        validatePersistentWriteRequest(request, runtime.csrfToken);
+        const configuration = requireConfiguration(runtime.configuration);
+        const body = validateConnectionProbeBody(
+          await readJsonBody(request, 16 * 1024)
+        );
+        const view = await configuration.inspect();
+        let providerSync = null;
+        try {
+          providerSync = await runtime.providerStatus.list();
+        } catch {
+          // The explicit probe remains useful when persisted observations are unavailable.
+        }
+        return writeJson(
+          response,
+          200,
+          await runtime.connectionProbe.probe({
+            provider: connectionProbeMatch[1] as ConnectionProbeProvider,
+            expectedConfigurationRevision: body.expectedConfigurationRevision,
+            configuration: view,
+            providerSync,
+            signal: AbortSignal.timeout(5_000)
           })
         );
       }
@@ -1315,7 +1369,9 @@ function createServerRuntime(
       ) ||
       !isValidConfigurationRuntime(
         configuration
-      )
+      ) ||
+      !isValidConnectionProbeRuntime(options.connectionProbe) ||
+      !isValidProjectHubRuntime(options.projectHub)
     ) {
       throw new TypeError(
         "Persistent TaskSeal server requires a service and runWorkItem."
@@ -1334,7 +1390,10 @@ function createServerRuntime(
       maxConcurrentRuns:
         options.maxConcurrentRuns ?? 1,
       csrfToken: randomBytes(32).toString("base64url"),
-      configuration
+      configuration,
+      connectionProbe:
+        options.connectionProbe ?? createConfigurationConnectionProbe(),
+      projectHub: options.projectHub ?? null
     };
   }
 
@@ -1360,6 +1419,42 @@ interface HomeServerResponse extends HomeSnapshot {
   };
 }
 
+function buildDemoConnectionsResponse() {
+  const configurationRevision = `sha256:${"0".repeat(64)}`;
+  const setupUrls: Record<ConnectionProbeProvider, string> = {
+    github: "https://github.com/settings/tokens",
+    linear: "https://linear.app/settings/api",
+    gitee: "https://gitee.com/profile/personal_access_tokens",
+    feishu: "https://open.feishu.cn/app"
+  };
+  return {
+    schemaVersion: "connections/v1" as const,
+    generatedAt: new Date().toISOString(),
+    configurationRevision,
+    runtimeRevision: configurationRevision,
+    activeRuntimeRevision: null,
+    connections: (Object.keys(setupUrls) as ConnectionProbeProvider[]).map((id) => ({
+      id,
+      configured: false,
+      capability: "disabled" as const,
+      credential: {
+        requirement: "optional" as const,
+        status: "not-configured" as const,
+        bindings: [] as readonly string[]
+      },
+      connectivity: {
+        status: "not-configured" as const,
+        basis: "configuration" as const,
+        observedAt: null
+      },
+      activation: "next-operation" as const,
+      setupUrl: setupUrls[id]
+    })),
+    security: { csrfToken: null },
+    capabilities: { explicitProbe: false }
+  };
+}
+
 function isValidConfigurationRuntime(
   configuration: PersistentConfigurationPort | null
 ): boolean {
@@ -1377,6 +1472,22 @@ function isValidConfigurationRuntime(
       typeof configuration.applyChange === "function" &&
       typeof configuration.applyDraft === "function"
     );
+}
+
+function isValidConnectionProbeRuntime(
+  probe: ConnectionProbePort | null | undefined
+): boolean {
+  return probe === null ||
+    probe === undefined ||
+    (isRecord(probe) && typeof probe.probe === "function");
+}
+
+function isValidProjectHubRuntime(
+  projectHub: ProjectHubQueryPort | null | undefined
+): boolean {
+  return projectHub === null ||
+    projectHub === undefined ||
+    (isRecord(projectHub) && typeof projectHub.read === "function");
 }
 
 function isValidDecompositionRuntime(
@@ -1843,6 +1954,26 @@ async function readJsonBody(
       "TaskSeal run request must contain valid JSON."
     );
   }
+}
+
+function validateConnectionProbeBody(
+  body: unknown
+): ConnectionProbeRequestBody {
+  if (
+    !isRecord(body) ||
+    !hasExactKeys(body, ["expectedConfigurationRevision"]) ||
+    typeof body.expectedConfigurationRevision !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/.test(body.expectedConfigurationRevision)
+  ) {
+    throw new HttpError(
+      400,
+      "INVALID_CONNECTION_PROBE_REQUEST",
+      "Connection probes require the current configuration revision."
+    );
+  }
+  return {
+    expectedConfigurationRevision: body.expectedConfigurationRevision
+  };
 }
 
 function validateConfigurationChangeBody(
@@ -2484,6 +2615,15 @@ function normalizeResponseError(
                 "SERVICE_REOPEN_REQUIRED"
           ? "TaskSeal service must be reopened before requests can continue."
           : "TaskSeal service request failed."
+    };
+  }
+
+  if (error instanceof ConnectionProbeError) {
+    return {
+      statusCode:
+        error.code === "CONNECTION_REVISION_CONFLICT" ? 409 : 404,
+      code: error.code,
+      message: error.message
     };
   }
 

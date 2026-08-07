@@ -481,6 +481,10 @@ function safeErrorMessage(error) {
 
 function revealLoadError() {
   elements.settingsError.hidden = false;
+  const message = elements.settingsError.querySelector("strong");
+  if (message && window.location.pathname === "/settings") {
+    message.textContent = "当前为演示运行时；持久化运行时才提供配置编辑。连接页仍可查看安全占位状态。";
+  }
   elements.generalForm.hidden = true;
   elements.projectForm.hidden = true;
 }

@@ -187,6 +187,59 @@ test("running Control Room exposes identity-bound configuration change and draft
   });
 });
 
+test("connections expose an explicit CSRF-bound local-only probe", async (t) => {
+  const cwd = await createProject(t);
+  const view = await inspectConfiguration({ cwd, environment: {} });
+  const server = createTaskSealServer({
+    service: createPersistentService(),
+    providerStatus: { async list() { return emptyProviderStatus(); } },
+    async runWorkItem() {},
+    configuration: {
+      instanceId: "88888888-8888-4888-8888-888888888888",
+      activeRuntimeRevision: view.runtimeRevision,
+      async inspect() { return view; },
+      async readDraft() { throw new Error("unused"); },
+      async applyChange() { throw new Error("unused"); },
+      async applyDraft() { throw new Error("unused"); }
+    }
+  });
+  t.after(() => server.shutdown());
+  const baseUrl = await listen(server);
+
+  const connectionsResponse = await fetch(`${baseUrl}/api/connections`);
+  assert.equal(connectionsResponse.status, 200);
+  const connections = await connectionsResponse.json() as {
+    schemaVersion: string;
+    configurationRevision: string;
+    security: { csrfToken: string };
+    capabilities: { explicitProbe: boolean };
+  };
+  assert.equal(connections.schemaVersion, "connections/v1");
+  assert.equal(connections.capabilities.explicitProbe, true);
+
+  const probeResponse = await fetch(`${baseUrl}/api/connections/github/probe`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-taskseal-csrf-token": connections.security.csrfToken
+    },
+    body: JSON.stringify({
+      expectedConfigurationRevision: connections.configurationRevision
+    })
+  });
+  assert.equal(probeResponse.status, 200);
+  const probe = await probeResponse.json() as {
+    schemaVersion: string;
+    provider: string;
+    networkAttempted: boolean;
+    status: string;
+  };
+  assert.equal(probe.schemaVersion, "connection-probe/v1");
+  assert.equal(probe.provider, "github");
+  assert.equal(probe.networkAttempted, false);
+  assert.equal(probe.status, "not-configured");
+});
+
 function createPersistentService(): PersistentServicePort {
   return {
     snapshot() {

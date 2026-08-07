@@ -2534,7 +2534,8 @@ h3 {
 .connection-card-heading h2 { margin: 3px 0 0; text-transform: capitalize; }
 .connection-facts { display: grid; gap: 8px; color: var(--muted-foreground); font-size: 13px; }
 .connection-facts strong { color: var(--foreground); }
-.connection-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: auto; }
+.connection-card-footer { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: auto; }
+.connection-probe-result { margin: -8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 @media (max-width: 760px) { .connection-grid { grid-template-columns: 1fr; } }
 
 @media (prefers-reduced-motion: reduce) {

@@ -25,7 +25,15 @@ const copy = {
   open: "打开官方设置",
   binding: "绑定",
   basis: "依据",
-  noBinding: "没有环境绑定"
+  noBinding: "没有环境绑定",
+  probe: "检查连接",
+  probing: "检查中…",
+  probeUnavailable: "检查结果不可用",
+  probeReady: "本地配置可用",
+  probeObserved: "最近观察可用",
+  probeMissing: "缺少必要配置",
+  probeNotConfigured: "尚未配置",
+  probeNoNetwork: "仅检查本地配置和最近观察，未访问外部网络"
 };
 
 elements.retry.addEventListener("click", load);
@@ -50,10 +58,13 @@ async function load() {
 function render(snapshot) {
   elements.revision.textContent = shortRevision(snapshot.configurationRevision);
   elements.updated.textContent = `更新于 ${new Date(snapshot.generatedAt).toLocaleTimeString()}`;
-  elements.list.innerHTML = snapshot.connections.map(renderConnection).join("");
+  elements.list.innerHTML = snapshot.connections.map((connection) => renderConnection(connection, snapshot)).join("");
+  for (const button of elements.list.querySelectorAll("[data-connection-probe]")) {
+    button.addEventListener("click", () => probe(button.dataset.connectionProbe, snapshot));
+  }
 }
 
-function renderConnection(connection) {
+function renderConnection(connection, snapshot) {
   const connectivity = connection.connectivity.status;
   const credential = connection.credential.status;
   const tone = connectivity === "unavailable" || credential === "missing" ? "warning" : connectivity === "observed" ? "success" : "muted";
@@ -66,9 +77,50 @@ function renderConnection(connection) {
         <span>${escapeHtml(credentialLabel(credential))}</span>
         <span>${escapeHtml(copy.binding)}: ${escapeHtml(bindings)}</span>
       </div>
-      <div class="connection-card-footer"><span class="ui-badge ui-badge--muted">${escapeHtml(connection.activation === "next-operation" ? copy.nextOperation : copy.restartRequired)}</span><a class="ui-button ui-button--secondary ui-button--sm" href="${escapeAttribute(connection.setupUrl)}" target="_blank" rel="noreferrer">${escapeHtml(copy.open)}</a></div>
+      <div class="connection-card-footer"><span class="ui-badge ui-badge--muted">${escapeHtml(connection.activation === "next-operation" ? copy.nextOperation : copy.restartRequired)}</span><button class="ui-button ui-button--secondary ui-button--sm" type="button" data-connection-probe="${escapeAttribute(connection.id)}" ${snapshot.capabilities?.explicitProbe === false ? "disabled" : ""}>${escapeHtml(copy.probe)}</button><a class="ui-button ui-button--secondary ui-button--sm" href="${escapeAttribute(connection.setupUrl)}" target="_blank" rel="noreferrer">${escapeHtml(copy.open)}</a></div>
+      <p class="connection-probe-result" data-connection-probe-result="${escapeAttribute(connection.id)}" aria-live="polite">${escapeHtml(copy.probeNoNetwork)}</p>
     </article>
   `;
+}
+
+async function probe(provider, snapshot) {
+  if (!provider) return;
+  const button = elements.list.querySelector(`[data-connection-probe="${CSS.escape(provider)}"]`);
+  const result = elements.list.querySelector(`[data-connection-probe-result="${CSS.escape(provider)}"]`);
+  if (!(button instanceof HTMLButtonElement) || !(result instanceof HTMLElement)) return;
+  button.disabled = true;
+  button.textContent = copy.probing;
+  try {
+    const response = await fetch(`/api/connections/${encodeURIComponent(provider)}/probe`, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        "x-taskseal-csrf-token": snapshot.security?.csrfToken ?? ""
+      },
+      body: JSON.stringify({ expectedConfigurationRevision: snapshot.configurationRevision })
+    });
+    const value = await response.json().catch(() => null);
+    if (!response.ok || value?.schemaVersion !== "connection-probe/v1") {
+      throw new Error(value?.error ?? copy.probeUnavailable);
+    }
+    result.textContent = `${probeLabel(value.status)} · ${value.summary}`;
+  } catch (error) {
+    result.textContent = error instanceof Error ? error.message : copy.probeUnavailable;
+  } finally {
+    button.disabled = false;
+    button.textContent = copy.probe;
+  }
+}
+
+function probeLabel(value) {
+  return {
+    "configuration-ready": copy.probeReady,
+    observed: copy.probeObserved,
+    "credential-missing": copy.probeMissing,
+    "not-configured": copy.probeNotConfigured,
+    "observation-unavailable": copy.unavailable
+  }[value] ?? value;
 }
 
 function connectivityLabel(value) { return copy[value] ?? value; }

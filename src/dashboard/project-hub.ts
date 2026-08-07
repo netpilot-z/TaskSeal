@@ -5,6 +5,10 @@ export interface ProjectHubSource {
   read(): Promise<HomeSnapshot>;
 }
 
+export interface ProjectHubQueryPort {
+  read(): Promise<ProjectHubSnapshot>;
+}
+
 export interface ProjectHubProject {
   readonly projectRef: string;
   readonly availability: "fresh" | "stale" | "unavailable";
