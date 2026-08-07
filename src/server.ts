@@ -19,6 +19,13 @@ import type {
 } from "./dashboard/home-projection.ts";
 import { projectHubSnapshot } from "./dashboard/project-hub.ts";
 import type { ProjectHubQueryPort } from "./dashboard/project-hub.ts";
+import {
+  collectProjectWorkItems,
+  createProjectOperationsQuery
+} from "./application/project-operations-query.ts";
+import {
+  projectOperationsViewFromHub
+} from "./application/project-operations-query.ts";
 import { replayDemoSteps } from "./demo/scenario.ts";
 import type {
   AcceptanceDeliveryLinearSync,
@@ -555,6 +562,57 @@ export function createTaskSealServer(
   const lastErrors = new Map<string, RuntimeError>();
   let shutdownPromise: Promise<void> | null = null;
 
+  const readOperations = async (input: {
+    readonly projectRef?: string | undefined;
+    readonly workItemId?: string | undefined;
+  } = {}) => {
+    if (runtime.mode === "setup") {
+      throw new HttpError(
+        403,
+        "CAPABILITY_DISABLED",
+        "Project operations are unavailable in SetupRuntime."
+      );
+    }
+    if (runtime.mode === "persistent" && runtime.projectHub) {
+      return projectOperationsViewFromHub({
+        projectHub: await runtime.projectHub.read(),
+        runtime: {
+          mode: "live",
+          freshness: "fresh",
+          source: "control-room"
+        },
+        input
+      });
+    }
+    const snapshot = runtime.mode === "persistent"
+      ? buildPersistentSnapshot(
+          runtime.service,
+          requireAttemptRuns(attemptRuns),
+          lastErrors,
+          runtime.csrfToken,
+          runtime.acceptanceCapabilities,
+          runtime.operatorId,
+          decompositionDispatcher,
+          runtime.decomposition
+        )
+      : buildDemoSnapshot(runtime.steps, runtime.currentStep);
+    let projectName = "Current project";
+    if (runtime.mode === "persistent" && runtime.configuration) {
+      const configuration = await runtime.configuration.inspect();
+      projectName = configuration.effective?.project ?? projectName;
+    }
+    const home = buildHomeServerResponse(snapshot, projectName);
+    return createProjectOperationsQuery({
+      sources: [{
+        projectRef: home.project.key,
+        runtime: runtime.mode === "persistent" ? "live" : "offline",
+        async read() {
+          return home;
+        }
+      }]
+    }).snapshot(input);
+  };
+
   const server = createServer(async (request, response) => {
     try {
       const pathname = readRequestPathname(request.url);
@@ -645,6 +703,51 @@ export function createTaskSealServer(
           200,
           buildHomeServerResponse(snapshot, projectName)
         );
+      }
+
+      if (request.method === "GET" && pathname === "/api/status") {
+        return writeJson(response, 200, await readOperations());
+      }
+
+      if (request.method === "GET" && pathname === "/api/work-items") {
+        const operations = await readOperations();
+        const projects = operations.projectHub.projects;
+        const workItems = projects.flatMap((project) =>
+          collectProjectWorkItems(project).map((workItem) => ({
+            projectRef: project.projectRef,
+            workItem
+          }))
+        );
+        return writeJson(response, 200, {
+          schemaVersion: "work-items/v1",
+          generatedAt: operations.generatedAt,
+          runtime: operations.runtime,
+          workItems
+        });
+      }
+
+      const workItemMatch =
+        /^\/api\/work-items\/([^/]+)$/.exec(pathname);
+      if (request.method === "GET" && workItemMatch) {
+        const workItemId = decodePathSegment(workItemMatch[1]!);
+        const operations = await readOperations({
+          workItemId
+        });
+        const selected = operations.selected?.workItem ?? null;
+        if (selected === null) {
+          throw new HttpError(
+            404,
+            "WORK_ITEM_NOT_FOUND",
+            `TaskSeal work item ${workItemId} does not exist.`
+          );
+        }
+        return writeJson(response, 200, {
+          schemaVersion: "work-item/v1",
+          generatedAt: operations.generatedAt,
+          runtime: operations.runtime,
+          projectRef: operations.selected?.projectRef ?? "current",
+          workItem: selected
+        });
       }
 
       if (request.method === "GET" && pathname === "/api/project-hub") {

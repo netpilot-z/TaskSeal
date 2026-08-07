@@ -46,8 +46,16 @@ import {
   ManagedAttemptRunner
 } from "./application/managed-attempt-runner.ts";
 import {
-  acquireControlRoomLock
+  acquireControlRoomLock,
+  readControlRoomInstance
 } from "./application/control-room-lock.ts";
+import {
+  collectProjectWorkItems,
+  createProjectOperationsQuery
+} from "./application/project-operations-query.ts";
+import type {
+  ProjectOperationsView
+} from "./application/project-operations-query.ts";
 import type {
   AcquireControlRoomLockOptions,
   ControlRoomLock
@@ -119,6 +127,9 @@ import {
   CodexAppServerRunnerAdapter
 } from "./runners/codex-runner.ts";
 import { createTaskSealServer } from "./server.ts";
+import {
+  projectHomeSnapshot
+} from "./dashboard/home-projection.ts";
 import { FileEventJournal } from "./storage/event-journal.ts";
 import {
   FileProviderObservationStorage
@@ -488,6 +499,15 @@ interface ParsedGlobalArguments {
     | undefined;
 }
 
+interface ParsedStatusArguments {
+  readonly json: boolean;
+  readonly watch: boolean;
+}
+
+type ParsedWorkCommand =
+  | { readonly action: "list"; readonly json: boolean }
+  | { readonly action: "show"; readonly workItemId: string; readonly json: boolean };
+
 type ParsedConfigurationCommand =
   | {
       readonly action: "list" | "validate";
@@ -710,6 +730,7 @@ const USAGE = `Usage:
   taskseal setup
   taskseal integration test <github|linear|gitee|feishu> [--json]
   taskseal doctor
+  taskseal status [--watch] [--json]
   taskseal config list [--json] [--lang auto|en|zh-CN]
   taskseal config get <field> [--json] [--lang auto|en|zh-CN]
   taskseal config validate [--json] [--lang auto|en|zh-CN]
@@ -718,6 +739,8 @@ const USAGE = `Usage:
   taskseal config edit <user|project|local> [--json] [--lang auto|en|zh-CN]
   taskseal config template <github|linear|feishu|gitee> [--json]
   taskseal start
+  taskseal work list [--json]
+  taskseal work show <work-item> [--json]
   taskseal plugin check <manifest.json>
   taskseal run <work-item-id> [--prompt <text>] [--read-only|--workspace-write]
   taskseal inspect github-issue --issue <number> --work-item <id> --criterion <key> [--snapshot-version 2 --title-management provider|none]
@@ -746,8 +769,10 @@ const HELP_TOPICS = new Set([
   "setup",
   "integration",
   "doctor",
+  "status",
   "config",
   "start",
+  "work",
   "plugin",
   "run",
   "inspect",
@@ -1070,6 +1095,89 @@ export async function runCli({
         `TaskSeal integration test failed${renderErrorCode(error)}: ${readErrorMessage(
           error,
           "Unable to inspect the selected provider."
+        ).slice(0, 2_000)}\n`
+      );
+      return 1;
+    }
+  }
+
+  if (command === "status") {
+    const parsed = parseStatusArguments(args.slice(1));
+    if (parsed === null) {
+      output.write(USAGE);
+      return 2;
+    }
+    try {
+      const operations = await readProjectOperations({
+        cwd,
+        environment,
+        now
+      });
+      output.write(parsed.json
+        ? `${JSON.stringify({
+            ...operations,
+            watch: parsed.watch
+          }, null, 2)}\n`
+        : renderProjectOperationsStatus(operations, parsed.watch));
+      return 0;
+    } catch (error) {
+      output.write(
+        `TaskSeal status failed${renderErrorCode(error)}: ${readErrorMessage(
+          error,
+          "Unable to read project operations."
+        ).slice(0, 2_000)}\n`
+      );
+      return 1;
+    }
+  }
+
+  if (command === "work") {
+    const parsed = parseWorkCommand(args.slice(1));
+    if (parsed === null) {
+      output.write(USAGE);
+      return 2;
+    }
+    try {
+      const operations = await readProjectOperations({
+        cwd,
+        environment,
+        now,
+        workItemId:
+          parsed.action === "show"
+            ? parsed.workItemId
+            : undefined
+      });
+      if (parsed.action === "show" && operations.selected?.workItem === null) {
+        output.write(
+          `TaskSeal work item ${parsed.workItemId} does not exist.\n`
+        );
+        return 1;
+      }
+      output.write(parsed.json
+        ? `${JSON.stringify({
+            schemaVersion: parsed.action === "show"
+              ? "work-item/v1"
+              : "work-items/v1",
+            generatedAt: operations.generatedAt,
+            runtime: operations.runtime,
+            ...(parsed.action === "show"
+              ? {
+                  projectRef: operations.selected?.projectRef ?? "current",
+                  workItem: operations.selected?.workItem ?? null
+                }
+              : {
+                  workItems: listProjectWorkItems(operations)
+                })
+          }, null, 2)}\n`
+        : parsed.action === "show"
+          ? renderWorkItem(operations)
+          : renderWorkItemList(operations));
+      return 0;
+    } catch (error) {
+      output.write(
+        `TaskSeal work query failed${renderErrorCode(error)}: ${readErrorMessage(
+          error,
+          "Unable to read work items."
         ).slice(0, 2_000)}\n`
       );
       return 1;
@@ -3138,6 +3246,236 @@ function renderIntegrationProbe(result: {
     result.summary,
     ""
   ].join("\n");
+}
+
+async function readProjectOperations({
+  cwd,
+  environment = process.env,
+  now = () => new Date(),
+  workItemId
+}: {
+  readonly cwd: string;
+  readonly environment?: NodeJS.ProcessEnv | undefined;
+  readonly now?: (() => Date) | undefined;
+  readonly workItemId?: string | undefined;
+}): Promise<ProjectOperationsView> {
+  const instance = await readControlRoomInstance({ cwd }).catch(() => null);
+  if (instance !== null) {
+    try {
+      const response = await fetch(
+        `http://${instance.host}:${instance.port}/api/status`,
+        { signal: AbortSignal.timeout(1_500) }
+      );
+      if (response.ok) {
+        const value: unknown = await response.json();
+        if (isProjectOperationsView(value)) {
+          if (workItemId === undefined) {
+            return value;
+          }
+          const projectRef = value.selected?.projectRef ??
+            value.projectHub.projects[0]?.projectRef;
+          if (projectRef === undefined) {
+            return value;
+          }
+          const project = value.projectHub.projects.find(
+            (candidate) => candidate.projectRef === projectRef
+          );
+          const workItem = project === undefined
+            ? null
+            : collectProjectWorkItems(project)
+                .find((candidate) => candidate.ref.workItemId === workItemId) ?? null;
+          return {
+            ...value,
+            selected: {
+              projectRef,
+              workItem
+            }
+          };
+        }
+      }
+    } catch {
+      // A stale or fenced instance falls back to the durable journal below.
+    }
+  }
+
+  let projectName = "Current project";
+  try {
+    const configuration = await inspectConfiguration({
+      cwd,
+      environment,
+      userConfigurationPath: resolveUserConfigurationPath({ environment })
+    });
+    projectName = configuration.effective?.project ?? projectName;
+  } catch {
+    // An unconfigured workspace still has a useful empty operations view.
+  }
+  const service = await TaskSealService.open({
+    journal: new FileEventJournal({
+      filePath: join(cwd, ".taskseal", "events.jsonl")
+    })
+  });
+  const home = projectHomeSnapshot({
+    dashboard: service.snapshot(),
+    mode: "persistent",
+    project: {
+      key: "current",
+      name: projectName
+    },
+    freshness: "stale",
+    runtime: {
+      maxConcurrentRuns: 0,
+      activeCount: 0,
+      availableSlots: 0,
+      runs: [],
+      errors: {}
+    },
+    now: now()
+  });
+  return createProjectOperationsQuery({
+    sources: [{
+      projectRef: "current",
+      runtime: "offline",
+      async read() {
+        return home;
+      }
+    }],
+    now
+  }).snapshot({ workItemId });
+}
+
+function isProjectOperationsView(value: unknown): value is ProjectOperationsView {
+  return isRecord(value) &&
+    value.schemaVersion === "project-operations/v1" &&
+    isRecord(value.runtime) &&
+    (value.runtime.mode === "live" || value.runtime.mode === "offline") &&
+    isRecord(value.projectHub) &&
+    value.projectHub.schemaVersion === "project-hub/v1";
+}
+
+function parseStatusArguments(
+  args: readonly string[]
+): ParsedStatusArguments | null {
+  const jsonCount = args.filter((value) => value === "--json").length;
+  const watchCount = args.filter((value) => value === "--watch").length;
+  if (jsonCount > 1 || watchCount > 1) {
+    return null;
+  }
+  const values = args.filter(
+    (value) => value !== "--json" && value !== "--watch"
+  );
+  return values.length === 0
+    ? { json: jsonCount === 1, watch: watchCount === 1 }
+    : null;
+}
+
+function parseWorkCommand(
+  args: readonly string[]
+): ParsedWorkCommand | null {
+  const jsonCount = args.filter((value) => value === "--json").length;
+  if (jsonCount > 1) {
+    return null;
+  }
+  const values = args.filter((value) => value !== "--json");
+  if (values.length === 1 && values[0] === "list") {
+    return { action: "list", json: jsonCount === 1 };
+  }
+  if (
+    values.length === 2 &&
+    values[0] === "show" &&
+    typeof values[1] === "string" &&
+    values[1].length > 0 &&
+    !values[1].startsWith("-")
+  ) {
+    return {
+      action: "show",
+      workItemId: values[1],
+      json: jsonCount === 1
+    };
+  }
+  return null;
+}
+
+function listProjectWorkItems(
+  operations: ProjectOperationsView
+): readonly {
+  readonly projectRef: string;
+  readonly workItem: ReturnType<typeof collectProjectWorkItems>[number];
+}[] {
+  return operations.projectHub.projects.flatMap((project) =>
+    collectProjectWorkItems(project).map((workItem) => ({
+      projectRef: project.projectRef,
+      workItem
+    }))
+  );
+}
+
+function renderProjectOperationsStatus(
+  operations: ProjectOperationsView,
+  watch: boolean
+): string {
+  const lines = [
+    `Runtime: ${operations.runtime.mode} (${operations.runtime.freshness})`,
+    `Projects: ${operations.projectHub.summary.projects}`,
+    `Running now: ${operations.projectHub.summary.running}`,
+    `Needs attention: ${operations.projectHub.summary.needsAttention}`,
+    `Next up: ${operations.projectHub.summary.nextUp}`
+  ];
+  for (const project of operations.projectHub.projects) {
+    lines.push(`\n[${project.projectRef}] ${project.snapshot?.project.name ?? "Unavailable"}`);
+    if (project.snapshot === null) {
+      lines.push("  unavailable");
+      continue;
+    }
+    for (const task of project.snapshot.runningNow) {
+      lines.push(`  RUNNING  ${task.ref.workItemId}  ${task.name}${formatElapsed(task)}`);
+    }
+    for (const task of project.snapshot.needsAttention) {
+      lines.push(`  ATTENTION ${task.ref.workItemId}  ${task.name} → ${task.attention?.nextAction ?? "review"}`);
+    }
+    for (const task of project.snapshot.nextUp) {
+      lines.push(`  NEXT     ${task.ref.workItemId}  ${task.name}`);
+    }
+  }
+  if (watch) {
+    lines.push("\nWatch: bounded snapshot (run again to refresh).");
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function renderWorkItemList(operations: ProjectOperationsView): string {
+  const items = listProjectWorkItems(operations);
+  if (items.length === 0) {
+    return "No WorkItems found.\n";
+  }
+  return `${items.map(({ projectRef, workItem }) =>
+    `${projectRef}  ${workItem.ref.workItemId}  ${workItem.status.code}  ${workItem.name}`
+  ).join("\n")}\n`;
+}
+
+function renderWorkItem(operations: ProjectOperationsView): string {
+  const task = operations.selected?.workItem;
+  if (!task) {
+    return "WorkItem not found.\n";
+  }
+  return [
+    `${task.ref.workItemId}  ${task.name}`,
+    `Status: ${task.status.code}`,
+    `Elapsed: ${formatElapsed(task).trim() || "-"}`,
+    `Evidence: ${task.deliveryGate.passed}/${task.deliveryGate.total} passed, ${task.deliveryGate.missing} missing, ${task.deliveryGate.failed} failed`,
+    `Next: ${task.attention?.nextAction ?? task.nextStep?.code ?? "-"}`,
+    ""
+  ].join("\n");
+}
+
+function formatElapsed(
+  task: ReturnType<typeof collectProjectWorkItems>[number]
+): string {
+  if (!task.elapsed) {
+    return "";
+  }
+  const minutes = Math.floor(task.elapsed.elapsedMs / 60_000);
+  const seconds = Math.floor(task.elapsed.elapsedMs / 1_000) % 60;
+  return `  (${minutes}m ${seconds}s)`;
 }
 
 function renderErrorCode(error: unknown): string {

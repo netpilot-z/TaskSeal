@@ -1511,6 +1511,37 @@ test("unknown commands return a usage error", async (t) => {
   assert.match(output.text(), /Usage:/);
 });
 
+test("status reads an empty local journal offline without opening Codex", async (t) => {
+  const cwd = await createTemporaryDirectory(t);
+  const output = createOutput();
+
+  const exitCode = await runCli({
+    args: ["status", "--json"],
+    cwd,
+    output
+  });
+
+  assert.equal(exitCode, 0);
+  const result: unknown = JSON.parse(output.text());
+  assert.equal(readJsonPath(result, "schemaVersion"), "project-operations/v1");
+  assert.equal(readJsonPath(result, "runtime", "mode"), "offline");
+  assert.equal(readJsonPath(result, "projectHub", "summary", "projects"), 1);
+});
+
+test("work list is a read-only projection and does not require an initialized project", async (t) => {
+  const cwd = await createTemporaryDirectory(t);
+  const output = createOutput();
+
+  const exitCode = await runCli({
+    args: ["work", "list"],
+    cwd,
+    output
+  });
+
+  assert.equal(exitCode, 0);
+  assert.match(output.text(), /No WorkItems found/);
+});
+
 function createOutput(): OutputPort & {
   text(): string;
 } {
