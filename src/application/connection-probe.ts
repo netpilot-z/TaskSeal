@@ -7,6 +7,8 @@ export type ConnectionProbeStatus =
   | "not-configured"
   | "credential-missing"
   | "configuration-ready"
+  | "connected"
+  | "unauthorized"
   | "observed"
   | "observation-unavailable";
 
@@ -16,8 +18,10 @@ export interface ConnectionProbeResult {
   readonly checkedAt: string;
   readonly configurationRevision: string;
   readonly status: ConnectionProbeStatus;
-  readonly basis: "configuration-and-last-observation";
-  readonly networkAttempted: false;
+  readonly basis:
+    | "configuration-and-last-observation"
+    | "configuration-and-network";
+  readonly networkAttempted: boolean;
   readonly observedAt: string | null;
   readonly summary: string;
 }
@@ -30,6 +34,16 @@ export interface ConnectionProbeInput {
   readonly signal?: AbortSignal | undefined;
   readonly now?: Date | undefined;
 }
+
+export interface NetworkConnectionProbeResult {
+  readonly status: "connected" | "unauthorized" | "unavailable";
+  readonly summary: string;
+  readonly observedAt?: string | null | undefined;
+}
+
+export type NetworkConnectionProbeAdapter = (
+  input: ConnectionProbeInput
+) => NetworkConnectionProbeResult | Promise<NetworkConnectionProbeResult>;
 
 export interface ConnectionProbePort {
   probe(input: ConnectionProbeInput): ConnectionProbeResult | Promise<ConnectionProbeResult>;
@@ -59,6 +73,47 @@ export function createConfigurationConnectionProbe(): ConnectionProbePort {
   return {
     probe(input) {
       return probeConfiguration(input);
+    }
+  };
+}
+
+export function createNetworkConnectionProbe({
+  adapters
+}: {
+  readonly adapters: Partial<Record<ConnectionProbeProvider, NetworkConnectionProbeAdapter>>;
+}): ConnectionProbePort {
+  return {
+    async probe(input) {
+      const local = probeConfiguration(input);
+      const adapter = adapters[input.provider];
+      if (
+        adapter === undefined ||
+        local.status === "not-configured" ||
+        local.status === "credential-missing"
+      ) {
+        return local;
+      }
+      try {
+        const network = await adapter(input);
+        return {
+          ...local,
+          status: network.status === "unavailable"
+            ? "observation-unavailable"
+            : network.status,
+          basis: "configuration-and-network",
+          networkAttempted: true,
+          observedAt: network.observedAt ?? local.observedAt,
+          summary: network.summary
+        };
+      } catch {
+        return {
+          ...local,
+          status: "observation-unavailable",
+          basis: "configuration-and-network",
+          networkAttempted: true,
+          summary: "The provider connection could not be verified within the bounded probe."
+        };
+      }
     }
   };
 }
@@ -138,6 +193,10 @@ function summaryFor(
         : "A provider observation is available.";
     case "configuration-ready":
       return "Configuration is ready; no external network request was made.";
+    case "connected":
+      return "The provider accepted the bounded read-only connection check.";
+    case "unauthorized":
+      return "The provider rejected the configured credentials or scope.";
   }
 }
 

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="TaskSeal 项目运行总览" />
+    <title>TaskSeal 项目总览</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="home-page">
+    <a class="skip-link" href="#projects-main">跳到主要内容</a>
+    <div class="app-shell">
+      <header class="topbar" aria-label="TaskSeal 控制台">
+        <a class="brand" href="/" aria-label="TaskSeal 运行中心">
+          <span class="brand-mark" aria-hidden="true">TS</span>
+          <span>
+            <strong>TaskSeal</strong>
+            <small>OPERATIONS CENTER</small>
+          </span>
+        </a>
+        <nav class="primary-nav" aria-label="主导航">
+          <a href="/">运行中心</a>
+          <a class="is-active" href="/projects" aria-current="page">项目总览</a>
+          <a href="/connections">连接</a>
+        </nav>
+        <span class="ui-badge ui-badge--muted" id="projects-freshness">读取中</span>
+      </header>
+
+      <main id="projects-main" class="home-main">
+        <section class="home-heading" aria-labelledby="projects-title">
+          <div>
+            <p class="eyebrow">项目总览</p>
+            <h1 id="projects-title">所有项目现在的运行状态</h1>
+            <p class="home-subtitle">只显示影响交付的事实：正在执行、需要处理、下一批工作和项目可用性。</p>
+          </div>
+          <span class="ui-badge ui-badge--muted" id="projects-updated">等待快照</span>
+        </section>
+
+        <section class="home-summary" aria-label="项目运行摘要">
+          <div class="home-summary-item"><span>项目</span><strong id="projects-count">—</strong></div>
+          <div class="home-summary-item home-summary-item--accent"><span>正在执行</span><strong id="projects-running">—</strong></div>
+          <div class="home-summary-item home-summary-item--danger"><span>需要处理</span><strong id="projects-attention">—</strong></div>
+          <div class="home-summary-item"><span>下一批</span><strong id="projects-next">—</strong></div>
+        </section>
+
+        <div id="projects-error" class="ui-alert ui-alert--danger" role="alert" hidden>
+          <strong>无法读取项目总览</strong>
+          <p id="projects-error-message">请确认运行中心已启动，然后重试。</p>
+          <button class="ui-button ui-button--secondary" id="projects-retry" type="button">重试</button>
+        </div>
+
+        <section id="project-cards" class="project-grid" aria-live="polite" aria-label="项目列表">
+          <div class="ui-skeleton-list"><span></span><span></span></div>
+        </section>
+        <p id="projects-live" class="visually-hidden" role="status" aria-live="polite"></p>
+      </main>
+    </div>
+    <script type="module" src="/projects.js"></script>
+  </body>
+</html>

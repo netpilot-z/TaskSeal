@@ -26,6 +26,9 @@ import {
 import {
   projectOperationsViewFromHub
 } from "./application/project-operations-query.ts";
+import type {
+  ProjectRegistryPort
+} from "./application/project-registry.ts";
 import { replayDemoSteps } from "./demo/scenario.ts";
 import type {
   AcceptanceDeliveryLinearSync,
@@ -207,6 +210,7 @@ export interface SetupTaskSealServerOptions {
   readonly configuration: ConfigurationAuthority;
   readonly readiness: () => RuntimeReadiness | Promise<RuntimeReadiness>;
   readonly connectionProbe?: ConnectionProbePort | null | undefined;
+  readonly networkConnectionProbe?: never;
   readonly service?: never;
   readonly providerStatus?: never;
   readonly acceptance?: never;
@@ -244,7 +248,9 @@ export interface PersistentTaskSealServerOptions {
   maxConcurrentRuns?: number | undefined;
   configuration?: PersistentConfigurationPort | null | undefined;
   connectionProbe?: ConnectionProbePort | null | undefined;
+  networkConnectionProbe?: ConnectionProbePort | null | undefined;
   projectHub?: ProjectHubQueryPort | null | undefined;
+  projectRegistry?: ProjectRegistryPort | null | undefined;
   steps?: never;
   initialStep?: never;
 }
@@ -286,7 +292,9 @@ interface PersistentRuntime {
   csrfToken: string;
   configuration: PersistentConfigurationPort | null;
   connectionProbe: ConnectionProbePort;
+  networkConnectionProbe: ConnectionProbePort | null;
   projectHub: ProjectHubQueryPort | null;
+  projectRegistry: ProjectRegistryPort | null;
 }
 
 interface SetupRuntime {
@@ -462,6 +470,20 @@ const STATIC_FILES = new Map<string, StaticFile>([
     }
   ],
   [
+    "/projects",
+    {
+      url: new URL("../public/projects.html", import.meta.url),
+      contentType: "text/html; charset=utf-8"
+    }
+  ],
+  [
+    "/projects.js",
+    {
+      url: new URL("../public/projects.js", import.meta.url),
+      contentType: "text/javascript; charset=utf-8"
+    }
+  ],
+  [
     "/ui-primitives.js",
     {
       url: new URL("../public/ui-primitives.js", import.meta.url),
@@ -602,14 +624,21 @@ export function createTaskSealServer(
       projectName = configuration.effective?.project ?? projectName;
     }
     const home = buildHomeServerResponse(snapshot, projectName);
+    const registrySources =
+      runtime.mode === "persistent" && runtime.projectRegistry
+        ? await runtime.projectRegistry.list()
+        : [];
     return createProjectOperationsQuery({
-      sources: [{
-        projectRef: home.project.key,
-        runtime: runtime.mode === "persistent" ? "live" : "offline",
-        async read() {
-          return home;
-        }
-      }]
+      sources: [
+        {
+          projectRef: home.project.key,
+          runtime: runtime.mode === "persistent" ? "live" : "offline",
+          async read() {
+            return home;
+          }
+        },
+        ...registrySources
+      ]
     }).snapshot(input);
   };
 
@@ -762,6 +791,11 @@ export function createTaskSealServer(
           requireTrustedHost(request.headers.host);
           return writeJson(response, 200, await runtime.projectHub.read());
         }
+        if (runtime.mode === "persistent" && runtime.projectRegistry) {
+          requireTrustedHost(request.headers.host);
+          const operations = await readOperations();
+          return writeJson(response, 200, operations.projectHub);
+        }
         const snapshot =
           runtime.mode === "persistent"
             ? buildPersistentSnapshot(
@@ -825,7 +859,12 @@ export function createTaskSealServer(
           security: {
             csrfToken: runtime.csrfToken
           },
-          capabilities: { explicitProbe: true }
+          capabilities: {
+            explicitProbe: true,
+            networkProbe:
+              runtime.mode === "persistent" &&
+              runtime.networkConnectionProbe !== null
+          }
         });
       }
 
@@ -844,9 +883,22 @@ export function createTaskSealServer(
       const connectionProbeMatch =
         (runtime.mode === "persistent" || runtime.mode === "setup") &&
         request.method === "POST" &&
-        /^\/api\/connections\/(github|linear|gitee|feishu)\/probe$/.exec(pathname);
+        /^\/api\/connections\/(github|linear|gitee|feishu)\/(probe|verify)$/.exec(pathname);
 
       if (connectionProbeMatch && (runtime.mode === "persistent" || runtime.mode === "setup")) {
+        const networkProbe =
+          connectionProbeMatch[2] === "verify"
+            ? runtime.mode === "persistent"
+              ? runtime.networkConnectionProbe
+              : null
+            : runtime.connectionProbe;
+        if (networkProbe === null) {
+          throw new HttpError(
+            503,
+            "NETWORK_PROBE_UNAVAILABLE",
+            "Network provider verification is not enabled for this runtime."
+          );
+        }
         validatePersistentWriteRequest(request, runtime.csrfToken);
         const configuration = runtime.mode === "setup"
           ? runtime.configuration
@@ -866,7 +918,7 @@ export function createTaskSealServer(
         return writeJson(
           response,
           200,
-          await runtime.connectionProbe.probe({
+          await networkProbe.probe({
             provider: connectionProbeMatch[1] as ConnectionProbeProvider,
             expectedConfigurationRevision: body.expectedConfigurationRevision,
             configuration: view,
@@ -1604,7 +1656,9 @@ function createServerRuntime(
         configuration
       ) ||
       !isValidConnectionProbeRuntime(options.connectionProbe) ||
-      !isValidProjectHubRuntime(options.projectHub)
+      !isValidConnectionProbeRuntime(options.networkConnectionProbe) ||
+      !isValidProjectHubRuntime(options.projectHub) ||
+      !isValidProjectRegistryRuntime(options.projectRegistry)
     ) {
       throw new TypeError(
         "Persistent TaskSeal server requires a service and runWorkItem."
@@ -1626,7 +1680,9 @@ function createServerRuntime(
       configuration,
       connectionProbe:
         options.connectionProbe ?? createConfigurationConnectionProbe(),
-      projectHub: options.projectHub ?? null
+      networkConnectionProbe: options.networkConnectionProbe ?? null,
+      projectHub: options.projectHub ?? null,
+      projectRegistry: options.projectRegistry ?? null
     };
   }
 
@@ -1684,7 +1740,7 @@ function buildDemoConnectionsResponse() {
       setupUrl: setupUrls[id]
     })),
     security: { csrfToken: null },
-    capabilities: { explicitProbe: false }
+    capabilities: { explicitProbe: false, networkProbe: false }
   };
 }
 
@@ -1732,6 +1788,14 @@ function isValidProjectHubRuntime(
   return projectHub === null ||
     projectHub === undefined ||
     (isRecord(projectHub) && typeof projectHub.read === "function");
+}
+
+function isValidProjectRegistryRuntime(
+  registry: ProjectRegistryPort | null | undefined
+): boolean {
+  return registry === null ||
+    registry === undefined ||
+    (isRecord(registry) && typeof registry.list === "function");
 }
 
 function isValidDecompositionRuntime(

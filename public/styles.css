@@ -3323,6 +3323,73 @@ h3 {
   gap: 20px;
 }
 
+.project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  gap: 16px;
+}
+
+.project-card {
+  display: grid;
+  gap: 18px;
+  min-height: 260px;
+}
+
+.project-card--unavailable {
+  border-color: rgba(255, 130, 119, 0.4);
+}
+
+.project-card-copy {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.project-card-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.project-card-summary strong {
+  color: var(--text);
+  font-size: 18px;
+}
+
+.project-task-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.project-task-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.project-task-list li > span:last-child {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.project-task-list strong,
+.project-task-list small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-task-list small {
+  color: var(--muted);
+}
+
 .ui-card {
   border: 1px solid var(--border);
   border-radius: 16px;

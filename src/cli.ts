@@ -30,12 +30,16 @@ import {
 import {
   ProviderSyncProjectionQuery
 } from "./application/provider-sync-projection.ts";
+import type {
+  ConnectionProbePort,
+  ConnectionProbeProvider
+} from "./application/connection-probe.ts";
 import {
   probeConfiguration
 } from "./application/connection-probe.ts";
-import type {
-  ConnectionProbeProvider
-} from "./application/connection-probe.ts";
+import {
+  createProviderConnectionProbe
+} from "./application/provider-connection-probe.ts";
 import {
   ObservedSnapshotImportFacade
 } from "./application/observed-snapshot-import.ts";
@@ -53,6 +57,12 @@ import {
   collectProjectWorkItems,
   createProjectOperationsQuery
 } from "./application/project-operations-query.ts";
+import {
+  createLocalProjectRegistry
+} from "./application/project-registry.ts";
+import type {
+  ProjectRegistryPort
+} from "./application/project-registry.ts";
 import type {
   ProjectOperationsView
 } from "./application/project-operations-query.ts";
@@ -681,6 +691,8 @@ interface StartPersistentControlRoomOptions {
             | PersistentDecompositionControlPort
             | null
             | undefined;
+          networkConnectionProbe?: ConnectionProbePort | null | undefined;
+          projectRegistry?: ProjectRegistryPort | null | undefined;
           maxConcurrentRuns: number;
           runWorkItem: (
             options: RunWorkItemOptions
@@ -728,7 +740,7 @@ const USAGE = `Usage:
   taskseal init
   taskseal demo init
   taskseal setup
-  taskseal integration test <github|linear|gitee|feishu> [--json]
+  taskseal integration test <github|linear|gitee|feishu> [--connect] [--json]
   taskseal doctor
   taskseal status [--watch] [--json]
   taskseal config list [--json] [--lang auto|en|zh-CN]
@@ -1080,12 +1092,22 @@ export async function runCli({
             ? resolveUserConfigurationPath({ environment })
             : userConfigurationPath
       });
-      const result = probeConfiguration({
-        provider: parsed.provider,
-        expectedConfigurationRevision: configuration.revision,
-        configuration,
-        providerSync: null
-      });
+      const result = parsed.connect
+        ? await createProviderConnectionProbe({
+            cwd,
+            environment
+          }).probe({
+            provider: parsed.provider,
+            expectedConfigurationRevision: configuration.revision,
+            configuration,
+            providerSync: null
+          })
+        : probeConfiguration({
+            provider: parsed.provider,
+            expectedConfigurationRevision: configuration.revision,
+            configuration,
+            providerSync: null
+          });
       output.write(parsed.json
         ? `${JSON.stringify(result, null, 2)}\n`
         : renderIntegrationProbe(result));
@@ -3211,11 +3233,15 @@ function renderSetupError(error: unknown): string {
 
 function parseIntegrationTestArguments(
   args: readonly string[]
-): { provider: ConnectionProbeProvider; json: boolean } | null {
+): { provider: ConnectionProbeProvider; json: boolean; connect: boolean } | null {
   const json = args.filter((value) => value === "--json").length;
-  const values = args.filter((value) => value !== "--json");
+  const connect = args.filter((value) => value === "--connect").length;
+  const values = args.filter(
+    (value) => value !== "--json" && value !== "--connect"
+  );
   if (
     json > 1 ||
+    connect > 1 ||
     values.length !== 2 ||
     values[0] !== "test"
   ) {
@@ -3230,7 +3256,7 @@ function parseIntegrationTestArguments(
   ) {
     return null;
   }
-  return { provider, json: json === 1 };
+  return { provider, json: json === 1, connect: connect === 1 };
 }
 
 function renderIntegrationProbe(result: {
@@ -3783,6 +3809,14 @@ export async function startPersistentControlRoom({
         acceptanceRuntime.operatorId,
       decomposition,
       maxConcurrentRuns,
+      networkConnectionProbe: createProviderConnectionProbe({
+        cwd,
+        environment
+      }),
+      projectRegistry: createLocalProjectRegistry({
+        cwd,
+        environment
+      }),
       runWorkItem: (options) => {
         if (
           options.runnerId !==

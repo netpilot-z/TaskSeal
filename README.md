@@ -34,6 +34,7 @@ npm start
 ```
 
 打开 `http://127.0.0.1:7331` 查看当前正在执行、需要处理和下一批任务；进入
+`http://127.0.0.1:7331/projects` 查看所有已登记项目，进入
 `http://127.0.0.1:7331/connections` 查看连接真相，进入 `/settings` 编辑配置。首页不再
 要求先选择 WorkItem，运行、取消和验收只在任务上下文中出现。Connections 只展示 effective
 配置来源、凭据存在性和最近观察，不返回 Secret；Provider 坐标保存后按 operation revision
@@ -43,6 +44,23 @@ npm start
 - `demo init`：额外幂等创建示例 WorkItem `TS-1`。
 - `run`：默认 `read-only`；只有显式传入 `--workspace-write` 才允许 Agent 修改工作区。
 - `start`：启动单个本地 Control Room；同一工作区的第二个实例会被拒绝。
+- `status`：读取统一项目运行视图；未启动 Control Room 时只重放本地 journal 并标记为 offline。
+- `work list/show`：按项目查看 WorkItem 名称、状态、耗时、证据门禁和下一动作。
+- `integration test <provider>` 默认只检查本地配置；追加 `--connect` 才执行一次有界的只读联网验证。
+
+如果需要在项目总览中登记同一工作区下的其他项目，可创建 `config/projects.json`：
+
+```json
+{
+  "schemaVersion": "project-registry/v1",
+  "projects": [
+    { "projectRef": "other-project", "workspace": "projects/other-project", "name": "Other Project" }
+  ]
+}
+```
+
+登记项只允许工作区内的相对路径；总览只读已验证的 loopback Control Room 或本地 journal，
+不会自动启动其他项目、抢占写锁或执行 Provider 写操作。
 
 ### 安装到其他仓库
 

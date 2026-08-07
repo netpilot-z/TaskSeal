@@ -240,6 +240,60 @@ test("connections expose an explicit CSRF-bound local-only probe", async (t) => 
   assert.equal(probe.status, "not-configured");
 });
 
+test("network verification is explicit and separate from the local probe", async (t) => {
+  const cwd = await createProject(t);
+  const view = await inspectConfiguration({ cwd, environment: {} });
+  let calls = 0;
+  const server = createTaskSealServer({
+    service: createPersistentService(),
+    providerStatus: { async list() { return emptyProviderStatus(); } },
+    async runWorkItem() {},
+    networkConnectionProbe: {
+      async probe(input) {
+        calls += 1;
+        return {
+          schemaVersion: "connection-probe/v1" as const,
+          provider: input.provider,
+          checkedAt: "2026-08-07T12:00:00.000Z",
+          configurationRevision: input.configuration.revision,
+          status: "connected" as const,
+          basis: "configuration-and-network" as const,
+          networkAttempted: true,
+          observedAt: null,
+          summary: "verified"
+        };
+      }
+    },
+    configuration: {
+      instanceId: "99999999-9999-4999-8999-999999999999",
+      activeRuntimeRevision: view.runtimeRevision,
+      async inspect() { return view; },
+      async readDraft() { throw new Error("unused"); },
+      async applyChange() { throw new Error("unused"); },
+      async applyDraft() { throw new Error("unused"); }
+    }
+  });
+  t.after(() => server.shutdown());
+  const baseUrl = await listen(server);
+  const connections = await (await fetch(`${baseUrl}/api/connections`)).json() as {
+    configurationRevision: string;
+    security: { csrfToken: string };
+    capabilities: { networkProbe: boolean };
+  };
+  assert.equal(connections.capabilities.networkProbe, true);
+  const response = await fetch(`${baseUrl}/api/connections/github/verify`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-taskseal-csrf-token": connections.security.csrfToken
+    },
+    body: JSON.stringify({ expectedConfigurationRevision: connections.configurationRevision })
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).status, "connected");
+  assert.equal(calls, 1);
+});
+
 test("SetupRuntime exposes configuration/readiness but hard-denies operational data", async (t) => {
   const cwd = await createProject(t);
   const view = await inspectConfiguration({ cwd, environment: {} });
