@@ -31,6 +31,12 @@ import {
   ProviderSyncProjectionQuery
 } from "./application/provider-sync-projection.ts";
 import {
+  probeConfiguration
+} from "./application/connection-probe.ts";
+import type {
+  ConnectionProbeProvider
+} from "./application/connection-probe.ts";
+import {
   ObservedSnapshotImportFacade
 } from "./application/observed-snapshot-import.ts";
 import {
@@ -372,6 +378,10 @@ type StartControlRoom = (
   options: StartControlRoomOptions
 ) => unknown | Promise<unknown>;
 
+type StartSetupRuntime = (
+  options: StartSetupRuntimeOptions
+) => unknown | Promise<unknown>;
+
 type CheckPluginManifest = (
   options:
     CheckTaskSealPluginManifestFileOptions
@@ -390,6 +400,7 @@ export interface RunCliOptions {
   userConfigurationPath?: string | null | undefined;
   detectedLocales?: readonly string[] | undefined;
   startControlRoom?: StartControlRoom | undefined;
+  startSetupRuntime?: StartSetupRuntime | undefined;
   runWorkItem?: RunCliWorkItem | undefined;
   inspectGitHubIssue?: InspectGitHubIssue | undefined;
   inspectGitHub?: InspectGitHub | undefined;
@@ -660,6 +671,21 @@ interface StartPersistentControlRoomOptions {
   signalSource?: SignalSourcePort | undefined;
 }
 
+interface StartSetupRuntimeOptions {
+  cwd: string;
+  output: OutputPort;
+  environment?: NodeJS.ProcessEnv | undefined;
+  commandRunner?: CommandRunner | undefined;
+  assessReadiness?:
+    ((options: AssessRuntimeReadinessOptions) => Promise<RuntimeReadiness>) |
+    undefined;
+  configurationAuthorityFactory?:
+    ((context: InspectConfigurationOptions) => ConfigurationAuthority) |
+    undefined;
+  serverFactory?: typeof createTaskSealServer | undefined;
+  signalSource?: SignalSourcePort | undefined;
+}
+
 const processSignalSource: SignalSourcePort = {
   get exitCode() {
     return process.exitCode;
@@ -681,6 +707,8 @@ const USAGE = `Usage:
   taskseal help [command]
   taskseal init
   taskseal demo init
+  taskseal setup
+  taskseal integration test <github|linear|gitee|feishu> [--json]
   taskseal doctor
   taskseal config list [--json] [--lang auto|en|zh-CN]
   taskseal config get <field> [--json] [--lang auto|en|zh-CN]
@@ -715,6 +743,8 @@ They do not read the current project and do not include credentials.
 const HELP_TOPICS = new Set([
   "init",
   "demo",
+  "setup",
+  "integration",
   "doctor",
   "config",
   "start",
@@ -794,6 +824,7 @@ export async function runCli({
   userConfigurationPath = null,
   detectedLocales = ["en"],
   startControlRoom = startPersistentControlRoom,
+  startSetupRuntime: startSetupRuntimeOverride,
   runWorkItem,
   inspectGitHubIssue,
   inspectGitHub,
@@ -990,6 +1021,61 @@ export async function runCli({
     return 0;
   }
 
+  if (command === "setup") {
+    if (args.length !== 1) {
+      output.write(USAGE);
+      return 2;
+    }
+    try {
+      await (startSetupRuntimeOverride ?? startSetupRuntime)({
+        cwd,
+        output,
+        environment,
+        commandRunner
+      });
+      return 0;
+    } catch (error) {
+      output.write(renderSetupError(error));
+      return 1;
+    }
+  }
+
+  if (command === "integration") {
+    const parsed = parseIntegrationTestArguments(args.slice(1));
+    if (!parsed) {
+      output.write(USAGE);
+      return 2;
+    }
+    try {
+      const configuration = await inspectConfiguration({
+        cwd,
+        environment,
+        userConfigurationPath:
+          userConfigurationPath === undefined
+            ? resolveUserConfigurationPath({ environment })
+            : userConfigurationPath
+      });
+      const result = probeConfiguration({
+        provider: parsed.provider,
+        expectedConfigurationRevision: configuration.revision,
+        configuration,
+        providerSync: null
+      });
+      output.write(parsed.json
+        ? `${JSON.stringify(result, null, 2)}\n`
+        : renderIntegrationProbe(result));
+      return 0;
+    } catch (error) {
+      output.write(
+        `TaskSeal integration test failed${renderErrorCode(error)}: ${readErrorMessage(
+          error,
+          "Unable to inspect the selected provider."
+        ).slice(0, 2_000)}\n`
+      );
+      return 1;
+    }
+  }
+
   if (command === "doctor") {
     const resolvedUserConfigurationPath =
       userConfigurationPath === undefined
@@ -1027,6 +1113,30 @@ export async function runCli({
 
   if (command === "start") {
     try {
+      if (
+        args.length === 0 &&
+        startControlRoom === startPersistentControlRoom
+      ) {
+        const readiness = await assessRuntimeReadiness({
+          cwd,
+          commandRunner,
+          nodeVersion,
+          environment,
+          userConfigurationPath:
+            userConfigurationPath === undefined
+              ? resolveUserConfigurationPath({ environment })
+              : userConfigurationPath
+        });
+        if (!readiness.ready) {
+          await (startSetupRuntimeOverride ?? startSetupRuntime)({
+            cwd,
+            output,
+            environment,
+            commandRunner
+          });
+          return 0;
+        }
+      }
       await startControlRoom({ cwd, output, environment });
       return 0;
     } catch (error) {
@@ -2977,6 +3087,59 @@ function renderStartError(
   })}\n`;
 }
 
+function renderSetupError(error: unknown): string {
+  const code = renderErrorCode(error);
+  if (
+    isRecord(error) &&
+    error.code === "SETUP_PORT_UNAVAILABLE"
+  ) {
+    return `TaskSeal SetupRuntime could not bind its loopback port${code}.\n`;
+  }
+  return `TaskSeal SetupRuntime failed${code}: ${readErrorMessage(
+    error,
+    "Unknown setup error."
+  ).slice(0, 2_000)}\n`;
+}
+
+function parseIntegrationTestArguments(
+  args: readonly string[]
+): { provider: ConnectionProbeProvider; json: boolean } | null {
+  const json = args.filter((value) => value === "--json").length;
+  const values = args.filter((value) => value !== "--json");
+  if (
+    json > 1 ||
+    values.length !== 2 ||
+    values[0] !== "test"
+  ) {
+    return null;
+  }
+  const provider = values[1];
+  if (
+    provider !== "github" &&
+    provider !== "linear" &&
+    provider !== "gitee" &&
+    provider !== "feishu"
+  ) {
+    return null;
+  }
+  return { provider, json: json === 1 };
+}
+
+function renderIntegrationProbe(result: {
+  readonly provider: string;
+  readonly status: string;
+  readonly networkAttempted: boolean;
+  readonly summary: string;
+}): string {
+  return [
+    `Provider: ${result.provider}`,
+    `Status: ${result.status}`,
+    `Network: ${result.networkAttempted ? "attempted" : "not attempted"}`,
+    result.summary,
+    ""
+  ].join("\n");
+}
+
 function renderErrorCode(error: unknown): string {
   return isRecord(error) &&
     typeof error.code === "string" &&
@@ -2994,6 +3157,92 @@ function readErrorMessage(
     error.message.length > 0
     ? error.message
     : fallback;
+}
+
+export async function startSetupRuntime({
+  cwd,
+  output,
+  environment = process.env,
+  commandRunner = runCommand,
+  assessReadiness = assessRuntimeReadiness,
+  configurationAuthorityFactory = createLocalConfigurationAuthority,
+  serverFactory = createTaskSealServer,
+  signalSource = processSignalSource
+}: StartSetupRuntimeOptions): Promise<ControlRoomServerPort> {
+  const host = environment.HOST ?? "127.0.0.1";
+  const environmentPort =
+    environment.PORT === undefined
+      ? null
+      : Number(environment.PORT);
+  if (
+    typeof host !== "string" ||
+    !["127.0.0.1", "localhost", "::1"].includes(host.toLowerCase()) ||
+    (environmentPort !== null &&
+      (!Number.isInteger(environmentPort) ||
+        environmentPort < 0 ||
+        environmentPort > 65_535))
+  ) {
+    throw new TypeError(
+      "TaskSeal SetupRuntime requires a loopback HOST and valid PORT."
+    );
+  }
+
+  const userConfigurationPath =
+    resolveUserConfigurationPath({ environment });
+  const configurationView = await inspectConfiguration({
+    cwd,
+    environment,
+    userConfigurationPath
+  });
+  const configuredPort = configurationView.fields.find(
+    (field) => field.key === "runtime.port"
+  )?.value;
+  const port = environmentPort ??
+    (typeof configuredPort === "number"
+      ? configuredPort
+      : DEFAULT_CONTROL_ROOM_PORT);
+  const configuration = configurationAuthorityFactory({
+    cwd,
+    environment,
+    userConfigurationPath
+  });
+  const server = serverFactory({
+    setup: true,
+    configuration,
+    readiness: () => assessReadiness({
+      cwd,
+      commandRunner,
+      environment,
+      userConfigurationPath
+    })
+  });
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", (error) => reject(error));
+      server.listen(port, host, () => resolve());
+    });
+  } catch (error) {
+    if (
+      isRecord(error) &&
+      (error.code === "EACCES" || error.code === "EADDRINUSE")
+    ) {
+      throw Object.assign(
+        new Error("The SetupRuntime loopback port is unavailable."),
+        { code: "SETUP_PORT_UNAVAILABLE" }
+      );
+    }
+    throw error;
+  }
+
+  installShutdownHandlers({
+    server,
+    signalSource,
+    output,
+    releaseLock: async () => {}
+  });
+  output.write(`TaskSeal SetupRuntime: http://${host}:${port}/setup\n`);
+  return server;
 }
 
 export async function startPersistentControlRoom({

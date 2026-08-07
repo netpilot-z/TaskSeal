@@ -56,6 +56,9 @@ import type {
   ConfigurationAuthority
 } from "./application/configuration-authority.ts";
 import type {
+  RuntimeReadiness
+} from "./application/runtime-readiness.ts";
+import type {
   ConfigurationChangeInput
 } from "./application/configuration-control.ts";
 import type { DashboardProjection } from "./dashboard/projection.ts";
@@ -192,6 +195,24 @@ export interface DemoTaskSealServerOptions {
   decomposition?: never;
 }
 
+export interface SetupTaskSealServerOptions {
+  readonly setup: true;
+  readonly configuration: ConfigurationAuthority;
+  readonly readiness: () => RuntimeReadiness | Promise<RuntimeReadiness>;
+  readonly connectionProbe?: ConnectionProbePort | null | undefined;
+  readonly service?: never;
+  readonly providerStatus?: never;
+  readonly acceptance?: never;
+  readonly acceptanceCapabilities?: never;
+  readonly operatorId?: never;
+  readonly decomposition?: never;
+  readonly runWorkItem?: never;
+  readonly maxConcurrentRuns?: never;
+  readonly projectHub?: never;
+  readonly steps?: never;
+  readonly initialStep?: never;
+}
+
 export interface PersistentTaskSealServerOptions {
   service: PersistentServicePort;
   providerStatus: ProviderSyncQueryPort;
@@ -223,7 +244,8 @@ export interface PersistentTaskSealServerOptions {
 
 export type TaskSealServerOptions =
   | DemoTaskSealServerOptions
-  | PersistentTaskSealServerOptions;
+  | PersistentTaskSealServerOptions
+  | SetupTaskSealServerOptions;
 
 export type TaskSealServer =
   ReturnType<typeof createServer> & {
@@ -260,7 +282,15 @@ interface PersistentRuntime {
   projectHub: ProjectHubQueryPort | null;
 }
 
-type ServerRuntime = DemoRuntime | PersistentRuntime;
+interface SetupRuntime {
+  mode: "setup";
+  configuration: ConfigurationAuthority;
+  readiness: () => RuntimeReadiness | Promise<RuntimeReadiness>;
+  connectionProbe: ConnectionProbePort;
+  csrfToken: string;
+}
+
+type ServerRuntime = DemoRuntime | PersistentRuntime | SetupRuntime;
 
 interface RuntimeError {
   code: string;
@@ -446,6 +476,13 @@ const STATIC_FILES = new Map<string, StaticFile>([
     }
   ],
   [
+    "/setup",
+    {
+      url: new URL("../public/settings.html", import.meta.url),
+      contentType: "text/html; charset=utf-8"
+    }
+  ],
+  [
     "/settings.js",
     {
       url: new URL("../public/settings.js", import.meta.url),
@@ -522,6 +559,17 @@ export function createTaskSealServer(
     try {
       const pathname = readRequestPathname(request.url);
 
+      if (
+        runtime.mode === "setup" &&
+        isSetupForbiddenPath(request.method, pathname)
+      ) {
+        throw new HttpError(
+          403,
+          "CAPABILITY_DISABLED",
+          "This operational capability is unavailable until the project is ready."
+        );
+      }
+
       if (request.method === "GET" && pathname === "/health") {
         const health = readFencedHealth(runtime);
 
@@ -535,6 +583,13 @@ export function createTaskSealServer(
       }
 
       if (request.method === "GET" && pathname === "/api/dashboard") {
+        if (runtime.mode === "setup") {
+          throw new HttpError(
+            403,
+            "CAPABILITY_DISABLED",
+            "Dashboard data is unavailable in SetupRuntime."
+          );
+        }
         return writeJson(
           response,
           200,
@@ -557,6 +612,13 @@ export function createTaskSealServer(
       }
 
       if (request.method === "GET" && pathname === "/api/home") {
+        if (runtime.mode === "setup") {
+          throw new HttpError(
+            403,
+            "CAPABILITY_DISABLED",
+            "Operational task data is unavailable in SetupRuntime."
+          );
+        }
         const snapshot =
           runtime.mode === "persistent"
             ? buildPersistentSnapshot(
@@ -586,6 +648,13 @@ export function createTaskSealServer(
       }
 
       if (request.method === "GET" && pathname === "/api/project-hub") {
+        if (runtime.mode === "setup") {
+          throw new HttpError(
+            403,
+            "CAPABILITY_DISABLED",
+            "Project operations are unavailable in SetupRuntime."
+          );
+        }
         if (runtime.mode === "persistent" && runtime.projectHub) {
           requireTrustedHost(request.headers.host);
           return writeJson(response, 200, await runtime.projectHub.read());
@@ -629,42 +698,67 @@ export function createTaskSealServer(
         if (runtime.mode === "demo") {
           return writeJson(response, 200, buildDemoConnectionsResponse());
         }
-        const configuration = requireConfiguration(runtime.configuration);
+        const configuration = runtime.mode === "setup"
+          ? runtime.configuration
+          : requireConfiguration(runtime.configuration);
         const view = await configuration.inspect();
         let providerSync = null;
-        try {
-          providerSync = await runtime.providerStatus.list();
-        } catch {
-          // A provider observation outage must not hide safe configuration truth.
+        if (runtime.mode === "persistent") {
+          try {
+            providerSync = await runtime.providerStatus.list();
+          } catch {
+            // A provider observation outage must not hide safe configuration truth.
+          }
         }
         return writeJson(response, 200, {
           ...projectConnections({
             configuration: view,
             providerSync,
-            activeRuntimeRevision: configuration.activeRuntimeRevision
+            activeRuntimeRevision:
+              runtime.mode === "persistent"
+                ? (configuration as PersistentConfigurationPort).activeRuntimeRevision
+                : null
           }),
-          security: { csrfToken: runtime.csrfToken },
+          security: {
+            csrfToken: runtime.csrfToken
+          },
           capabilities: { explicitProbe: true }
         });
       }
 
+      if (
+        runtime.mode === "setup" &&
+        request.method === "GET" &&
+        pathname === "/api/readiness"
+      ) {
+        requireTrustedHost(request.headers.host);
+        return writeJson(response, 200, {
+          schemaVersion: "runtime-readiness/v1",
+          readiness: await runtime.readiness()
+        });
+      }
+
       const connectionProbeMatch =
-        runtime.mode === "persistent" &&
+        (runtime.mode === "persistent" || runtime.mode === "setup") &&
         request.method === "POST" &&
         /^\/api\/connections\/(github|linear|gitee|feishu)\/probe$/.exec(pathname);
 
-      if (connectionProbeMatch && runtime.mode === "persistent") {
+      if (connectionProbeMatch && (runtime.mode === "persistent" || runtime.mode === "setup")) {
         validatePersistentWriteRequest(request, runtime.csrfToken);
-        const configuration = requireConfiguration(runtime.configuration);
+        const configuration = runtime.mode === "setup"
+          ? runtime.configuration
+          : requireConfiguration(runtime.configuration);
         const body = validateConnectionProbeBody(
           await readJsonBody(request, 16 * 1024)
         );
         const view = await configuration.inspect();
         let providerSync = null;
-        try {
-          providerSync = await runtime.providerStatus.list();
-        } catch {
-          // The explicit probe remains useful when persisted observations are unavailable.
+        if (runtime.mode === "persistent") {
+          try {
+            providerSync = await runtime.providerStatus.list();
+          } catch {
+            // The explicit probe remains useful when persisted observations are unavailable.
+          }
         }
         return writeJson(
           response,
@@ -705,29 +799,37 @@ export function createTaskSealServer(
       }
 
       if (
-        runtime.mode === "persistent" &&
+        (runtime.mode === "persistent" || runtime.mode === "setup") &&
         request.method === "GET" &&
         pathname === "/api/configuration"
       ) {
         requireTrustedHost(request.headers.host);
-        const configuration = requireConfiguration(runtime.configuration);
+        const configuration = runtime.mode === "setup"
+          ? runtime.configuration
+          : requireConfiguration(runtime.configuration);
         const view = await configuration.inspect();
         return writeJson(response, 200, {
           schemaVersion: "control-room-configuration/v1",
-          instanceId: configuration.instanceId,
+          instanceId: runtime.mode === "persistent"
+            ? (configuration as PersistentConfigurationPort).instanceId
+            : "setup-runtime",
           csrfToken: runtime.csrfToken,
           configuration: view,
           runtime: {
-            activeRevision: configuration.activeRuntimeRevision,
+            activeRevision: runtime.mode === "persistent"
+              ? (configuration as PersistentConfigurationPort).activeRuntimeRevision
+              : null,
             desiredRevision: view.runtimeRevision,
             restartRequired:
-              configuration.activeRuntimeRevision !== view.runtimeRevision
+              runtime.mode === "persistent"
+                ? (configuration as PersistentConfigurationPort).activeRuntimeRevision !== view.runtimeRevision
+                : false
           }
         });
       }
 
       const configurationDraftMatch =
-        runtime.mode === "persistent" &&
+        (runtime.mode === "persistent" || runtime.mode === "setup") &&
         request.method === "GET" &&
         /^\/api\/configuration\/drafts\/(user|project|local)$/.exec(
           pathname
@@ -735,27 +837,33 @@ export function createTaskSealServer(
 
       if (
         configurationDraftMatch &&
-        runtime.mode === "persistent"
+        (runtime.mode === "persistent" || runtime.mode === "setup")
       ) {
         requireTrustedHost(request.headers.host);
-        const configuration = requireConfiguration(runtime.configuration);
+        const configuration = runtime.mode === "setup"
+          ? runtime.configuration
+          : requireConfiguration(runtime.configuration);
         const scope = configurationDraftMatch[1] as
           | "user"
           | "project"
           | "local";
         return writeJson(response, 200, {
-          instanceId: configuration.instanceId,
+          instanceId: runtime.mode === "persistent"
+            ? (configuration as PersistentConfigurationPort).instanceId
+            : "setup-runtime",
           draft: await configuration.readDraft(scope)
         });
       }
 
       if (
-        runtime.mode === "persistent" &&
+        (runtime.mode === "persistent" || runtime.mode === "setup") &&
         request.method === "POST" &&
         pathname === "/api/configuration/change"
       ) {
         validatePersistentWriteRequest(request, runtime.csrfToken);
-        const configuration = requireConfiguration(runtime.configuration);
+        const configuration = runtime.mode === "setup"
+          ? runtime.configuration
+          : requireConfiguration(runtime.configuration);
         const body = validateConfigurationChangeBody(
           await readJsonBody(request, 256 * 1024)
         );
@@ -770,12 +878,14 @@ export function createTaskSealServer(
       }
 
       if (
-        runtime.mode === "persistent" &&
+        (runtime.mode === "persistent" || runtime.mode === "setup") &&
         request.method === "POST" &&
         pathname === "/api/configuration/draft"
       ) {
         validatePersistentWriteRequest(request, runtime.csrfToken);
-        const configuration = requireConfiguration(runtime.configuration);
+        const configuration = runtime.mode === "setup"
+          ? runtime.configuration
+          : requireConfiguration(runtime.configuration);
         const body = validateConfigurationDraftBody(
           await readJsonBody(request, 256 * 1024)
         );
@@ -1330,6 +1440,26 @@ export function createTaskSealServer(
 function createServerRuntime(
   options: TaskSealServerOptions
 ): ServerRuntime {
+  if ("setup" in options && options.setup === true) {
+    if (
+      !isValidConfigurationAuthority(options.configuration) ||
+      typeof options.readiness !== "function" ||
+      !isValidConnectionProbeRuntime(options.connectionProbe)
+    ) {
+      throw new TypeError(
+        "Setup TaskSeal server requires configuration and readiness ports."
+      );
+    }
+    return {
+      mode: "setup",
+      configuration: options.configuration,
+      readiness: options.readiness,
+      connectionProbe:
+        options.connectionProbe ?? createConfigurationConnectionProbe(),
+      csrfToken: randomBytes(32).toString("base64url")
+    };
+  }
+
   const service = options.service;
   const steps = options.steps;
 
@@ -1472,6 +1602,17 @@ function isValidConfigurationRuntime(
       typeof configuration.applyChange === "function" &&
       typeof configuration.applyDraft === "function"
     );
+}
+
+function isValidConfigurationAuthority(
+  configuration: ConfigurationAuthority
+): boolean {
+  return isRecord(configuration) &&
+    (configuration.kind === "local" || configuration.kind === "running-instance") &&
+    typeof configuration.inspect === "function" &&
+    typeof configuration.readDraft === "function" &&
+    typeof configuration.applyChange === "function" &&
+    typeof configuration.applyDraft === "function";
 }
 
 function isValidConnectionProbeRuntime(
@@ -1897,6 +2038,22 @@ function requireDecompositionDispatcher(
 
 function clampStep(value: number, maximum: number): number {
   return Math.max(0, Math.min(value, maximum));
+}
+
+function isSetupForbiddenPath(
+  method: string | undefined,
+  pathname: string
+): boolean {
+  if (method === "GET" && pathname === "/health") return false;
+  if (method === "GET" && pathname === "/api/configuration") return false;
+  if (method === "GET" && pathname === "/api/connections") return false;
+  if (method === "GET" && pathname === "/api/readiness") return false;
+  if (method === "GET" && pathname.startsWith("/api/presentation/catalog")) return false;
+  if (method === "GET" && pathname.startsWith("/api/configuration/drafts/")) return false;
+  if (method === "POST" && pathname === "/api/configuration/change") return false;
+  if (method === "POST" && pathname === "/api/configuration/draft") return false;
+  if (method === "POST" && /^\/api\/connections\/(github|linear|gitee|feishu)\/probe$/.test(pathname)) return false;
+  return pathname.startsWith("/api/");
 }
 
 async function readJsonBody(

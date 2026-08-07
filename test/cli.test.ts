@@ -353,6 +353,71 @@ test("doctor enforces the Node 24.12.0 runtime minimum", async (t) => {
   assert.match(supportedOutput.text(), /Node v24\.12\.0 .*ready/);
 });
 
+test("setup command delegates to the restricted SetupRuntime instead of operational start", async () => {
+  const writes: string[] = [];
+  let received: unknown = null;
+  const exitCode = await runCli({
+    args: ["setup"],
+    cwd: process.cwd(),
+    output: { write(value) { writes.push(value); } },
+    startSetupRuntime: async (options) => {
+      received = {
+        cwd: options.cwd,
+        environment: options.environment
+      };
+    }
+  });
+  assert.equal(exitCode, 0);
+  assert.equal((received as { cwd: string }).cwd, process.cwd());
+  assert.deepEqual(writes, []);
+});
+
+test("bare CLI enters SetupRuntime when the default operational start is not ready", async (t) => {
+  const cwd = await createTemporaryDirectory(t);
+  const output = createOutput();
+  let setup = false;
+  const exitCode = await runCli({
+    args: [],
+    cwd,
+    output,
+    environment: {},
+    nodeVersion: "24.12.0",
+    startControlRoom: startPersistentControlRoom,
+    startSetupRuntime: async () => {
+      setup = true;
+    }
+  });
+  assert.equal(exitCode, 0);
+  assert.equal(setup, true);
+});
+
+test("integration test uses the same redacted configuration probe contract as the Web route", async (t) => {
+  const cwd = await createTemporaryDirectory(t);
+  await mkdir(join(cwd, "config"), { recursive: true });
+  await writeFile(
+    join(cwd, "config", "project.json"),
+    JSON.stringify({ project: "TaskSeal", github: { repository: "netpilot-z/TaskSeal" } })
+  );
+  const output = createOutput();
+  const exitCode = await runCli({
+    args: ["integration", "test", "github", "--json"],
+    cwd,
+    output,
+    environment: {}
+  });
+  assert.equal(exitCode, 0);
+  const result = JSON.parse(output.text()) as {
+    schemaVersion: string;
+    provider: string;
+    networkAttempted: boolean;
+    status: string;
+  };
+  assert.equal(result.schemaVersion, "connection-probe/v1");
+  assert.equal(result.provider, "github");
+  assert.equal(result.networkAttempted, false);
+  assert.equal(result.status, "configuration-ready");
+});
+
 test("doctor rejects unverified Node major versions", async (t) => {
   const cwd = await createTemporaryDirectory(t);
   await mkdir(join(cwd, "config"), { recursive: true });

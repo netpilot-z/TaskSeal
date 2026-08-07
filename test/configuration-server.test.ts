@@ -240,6 +240,66 @@ test("connections expose an explicit CSRF-bound local-only probe", async (t) => 
   assert.equal(probe.status, "not-configured");
 });
 
+test("SetupRuntime exposes configuration/readiness but hard-denies operational data", async (t) => {
+  const cwd = await createProject(t);
+  const view = await inspectConfiguration({ cwd, environment: {} });
+  const server = createTaskSealServer({
+    setup: true,
+    configuration: {
+      kind: "local",
+      async inspect() { return view; },
+      async readDraft(scope) {
+        return {
+          schemaVersion: "configuration-draft/v1" as const,
+          revision: view.revision,
+          target: {
+            scope,
+            path: "config/project.json" as const,
+            revision: view.source.revision
+          },
+          document: { project: "TaskSeal" }
+        };
+      },
+      async applyChange() { throw new Error("unused"); },
+      async applyDraft() { throw new Error("unused"); }
+    },
+    async readiness() {
+      return {
+        node: { ready: true, version: "v24.12.0", failure: "" },
+        project: { ready: false },
+        capabilities: { github: "disabled", linear: "disabled", gitee: "disabled", feishu: "disabled" },
+        codex: { available: false, loggedIn: false, version: null },
+        ready: false
+      };
+    }
+  });
+  t.after(() => server.shutdown());
+  const baseUrl = await listen(server);
+
+  const pageResponse = await fetch(`${baseUrl}/setup`);
+  assert.equal(pageResponse.status, 200);
+  assert.match(await pageResponse.text(), /Settings and connections/);
+
+  const configResponse = await fetch(`${baseUrl}/api/configuration`);
+  assert.equal(configResponse.status, 200);
+  const envelope = await configResponse.json() as {
+    instanceId: string;
+    csrfToken: string;
+    configuration: { revision: string };
+  };
+  assert.equal(envelope.instanceId, "setup-runtime");
+  assert.equal(typeof envelope.csrfToken, "string");
+  assert.equal(envelope.configuration.revision, view.revision);
+
+  const readinessResponse = await fetch(`${baseUrl}/api/readiness`);
+  assert.equal(readinessResponse.status, 200);
+  assert.equal((await readinessResponse.json() as { readiness: { ready: boolean } }).readiness.ready, false);
+
+  const dashboardResponse = await fetch(`${baseUrl}/api/dashboard`);
+  assert.equal(dashboardResponse.status, 403);
+  assert.equal((await dashboardResponse.json() as { error: string }).error, "CAPABILITY_DISABLED");
+});
+
 function createPersistentService(): PersistentServicePort {
   return {
     snapshot() {

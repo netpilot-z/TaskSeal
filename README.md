@@ -54,6 +54,7 @@ npm pack
 npm install <path-to-taskseal-tarball>
 npm exec -- taskseal init
 npm exec -- taskseal doctor
+npm exec -- taskseal setup
 npm exec -- taskseal start
 ```
 

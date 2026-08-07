@@ -10,6 +10,8 @@ import { setButtonBusy } from "/ui-primitives.js";
 
 await initializePresentation();
 
+const setupMode = window.location.pathname === "/setup";
+
 const PROJECT_BASIC_KEYS = new Set(["project", "mode"]);
 const PROVIDER_FIELD_PREFIXES = {
   github: "github.",
@@ -92,6 +94,15 @@ function render() {
   renderIntegrations();
   renderSources();
   applyTranslations(document);
+  applySetupPresentation();
+}
+
+function applySetupPresentation() {
+  if (!setupMode) return;
+  document.title = "TaskSeal Setup";
+  document.querySelector("[data-i18n=\"settings.hero.kicker\"]")?.replaceChildren("SETUP");
+  document.querySelector("[data-i18n=\"settings.hero.title\"]")?.replaceChildren("配置运行中心");
+  document.querySelector("[data-i18n=\"settings.hero.copy\"]")?.replaceChildren("先完成项目、Provider 和运行前置条件，再启动正式运行中心。");
 }
 
 function renderRuntimeState() {
@@ -482,7 +493,7 @@ function safeErrorMessage(error) {
 function revealLoadError() {
   elements.settingsError.hidden = false;
   const message = elements.settingsError.querySelector("strong");
-  if (message && window.location.pathname === "/settings") {
+  if (message && (window.location.pathname === "/settings" || setupMode)) {
     message.textContent = "当前为演示运行时；持久化运行时才提供配置编辑。连接页仍可查看安全占位状态。";
   }
   elements.generalForm.hidden = true;
