@@ -631,6 +631,22 @@ export function createAcceptanceControlState(
     decision,
     matchingOperation
   });
+  const decisionBlockReason =
+    decision !== null
+      ? "decision-recorded"
+      : !snapshot.capabilities
+          ?.decideAcceptance
+        ? "operator-unavailable"
+        : decompositionBlockLabel !== null
+          ? "decomposition-blocked"
+          : !workItem ||
+              !eligibleStatus ||
+              !terminalAttempt ||
+              !workItem.acceptanceReviewRevision
+            ? "review-unavailable"
+            : busy || dashboardTruthPending
+              ? "busy"
+              : null;
 
   return {
     canAccept:
@@ -644,6 +660,9 @@ export function createAcceptanceControlState(
     operatorId:
       snapshot.security?.operatorId ??
       null,
+    decisionFormAvailable:
+      decisionBlockReason === null,
+    decisionBlockReason,
     currentDecision: decision,
     acceptanceHistory:
       workItem?.acceptanceHistory ?? [],
@@ -824,6 +843,60 @@ export function createAccessibleSnapshotState(snapshot) {
       })
     }))
   };
+}
+
+export function createAttemptTimeline(
+  workItems,
+  statusLabels = {},
+  limit = 12
+) {
+  const attempts = workItems
+    .flatMap((workItem) =>
+      workItem.attempts.map((attempt) => ({
+        workItem,
+        attempt
+      }))
+    )
+    .toSorted(
+      (left, right) =>
+        Date.parse(right.attempt.startedAt) -
+        Date.parse(left.attempt.startedAt)
+    )
+    .slice(0, limit);
+
+  if (attempts.length === 0) {
+    return [
+      {
+        number: 1,
+        source: "TaskSeal",
+        label: "Waiting for the first Codex attempt",
+        summary: null,
+        startedAt: null,
+        completed: false,
+        active: true,
+        latest: true
+      }
+    ];
+  }
+
+  return attempts.map(
+    ({ workItem, attempt }, index) => ({
+      number: attempts.length - index,
+      source: attempt.agentId,
+      label: `${workItem.id} · ${attempt.id} · ${
+        statusLabels[attempt.status] ?? attempt.status
+      }`,
+      summary:
+        typeof attempt.summary === "string" &&
+        attempt.summary.length > 0
+          ? attempt.summary
+          : null,
+      startedAt: attempt.startedAt,
+      completed: attempt.status !== "running",
+      active: attempt.status === "running",
+      latest: index === 0
+    })
+  );
 }
 
 export function createAccessibleOrchestrationState(

@@ -33,6 +33,38 @@ const credentialPattern =
   /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|lin_api_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,})\b/;
 
 test(
+  "package smoke accepts npm and pnpm pack metadata envelopes",
+  () => {
+    const file = {
+      path: "public/settings.html"
+    };
+    const npmMetadata =
+      readPackMetadata(
+        `prepack output\n${JSON.stringify([
+          {
+            filename: "taskseal.tgz",
+            entryCount: 1,
+            files: [file]
+          }
+        ])}`
+      );
+    const pnpmMetadata =
+      readPackMetadata(
+        `prepack output\n${JSON.stringify({
+          filename:
+            "C:\\packages\\taskseal.tgz",
+          files: [file]
+        })}`
+      );
+
+    assert.deepEqual(
+      npmMetadata,
+      pnpmMetadata
+    );
+  }
+);
+
+test(
   "packed TaskSeal installs in isolation and exposes only the compiled CLI and versioned SDK",
   { timeout: 120_000 },
   async (t) => {
@@ -102,7 +134,10 @@ test(
 
     assert.ok(
       metadata.entryCount > 0 &&
-        metadata.entryCount < 200
+        // The local Control Room now ships the Connections, Home and primitive
+        // modules as first-class static assets; keep the package bounded while
+        // allowing those additive entrypoints.
+        metadata.entryCount < 220
     );
     assert.equal(
       metadata.entryCount,
@@ -131,9 +166,7 @@ test(
         "install",
         archivePath,
         "--offline",
-        "--ignore-scripts",
-        "--no-audit",
-        "--no-fund"
+        "--ignore-scripts"
       ],
       consumerDirectory
     );
@@ -223,6 +256,96 @@ test(
     assert.equal(
       version.stdout.trim(),
       "0.0.0-experiment.3"
+    );
+    await mkdir(
+      join(consumerDirectory, "config")
+    );
+    await writeFile(
+      join(
+        consumerDirectory,
+        "config",
+        "project.json"
+      ),
+      JSON.stringify({ project: "PackageSmoke" }),
+      "utf8"
+    );
+    const configuration =
+      await runInstalledCli(
+        [
+          "config",
+          "list",
+          "--json",
+          "--lang",
+          "zh-CN"
+        ],
+        consumerDirectory
+      );
+    const configurationView =
+      JSON.parse(configuration.stdout) as {
+        schemaVersion?: unknown;
+        fields?: Array<{
+          key?: unknown;
+          value?: unknown;
+          source?: unknown;
+        }>;
+      };
+    assert.equal(
+      configurationView.schemaVersion,
+      "configuration-view/v1"
+    );
+    assert.deepEqual(
+      configurationView.fields?.find(
+        (field) => field.key === "runtime.port"
+      ),
+      {
+        key: "runtime.port",
+        value: 7331,
+        source: "built-in",
+        editableScopes: ["local"],
+        sensitive: false,
+        restartRequired: true
+      }
+    );
+    assert.doesNotMatch(
+      configuration.stdout,
+      new RegExp(
+        consumerDirectory.replace(
+          /[.*+?^${}()|[\]\\]/g,
+          "\\$&"
+        )
+      )
+    );
+    const configurationSet =
+      await runInstalledCli(
+        [
+          "config",
+          "set",
+          "runtime.port",
+          "4400",
+          "--json"
+        ],
+        consumerDirectory
+      );
+    assert.equal(
+      (
+        JSON.parse(configurationSet.stdout) as {
+          applied?: unknown;
+        }
+      ).applied,
+      true
+    );
+    assert.deepEqual(
+      JSON.parse(
+        await readFile(
+          join(
+            consumerDirectory,
+            ".taskseal",
+            "config.local.json"
+          ),
+          "utf8"
+        )
+      ),
+      { runtime: { port: 4400 } }
     );
 
     const unsupportedNodePath =
@@ -415,40 +538,73 @@ interface PackMetadata {
 function readPackMetadata(
   output: string
 ): PackMetadata {
-  const arrayStart =
-    output.lastIndexOf("\n[");
-  const json =
-    arrayStart === -1
-      ? output.slice(
-          output.indexOf("[")
-        )
-      : output.slice(
-          arrayStart + 1
-        );
-  const parsed =
-    JSON.parse(json) as unknown;
-  assert.ok(
-    Array.isArray(parsed) &&
-      parsed.length === 1
+  const lines =
+    output.split(/\r?\n/);
+  let parsed: unknown;
+  for (
+    let index = 0;
+    index < lines.length;
+    index += 1
+  ) {
+    const json =
+      lines
+        .slice(index)
+        .join("\n")
+        .trim();
+    if (!/^[{[]/.test(json)) {
+      continue;
+    }
+    try {
+      parsed = JSON.parse(json) as unknown;
+      break;
+    } catch {
+      // Prepack output can contain non-JSON lines before the metadata envelope.
+    }
+  }
+  assert.notEqual(
+    parsed,
+    undefined,
+    "Package manager did not emit JSON pack metadata"
   );
+  if (Array.isArray(parsed)) {
+    assert.equal(parsed.length, 1);
+  }
   const metadata =
-    parsed[0] as Partial<
+    (Array.isArray(parsed)
+      ? parsed[0]
+      : parsed) as Partial<
       PackMetadata
     >;
-  assert.equal(
-    typeof metadata.filename,
-    "string"
-  );
-  assert.equal(
-    typeof metadata.entryCount,
-    "number"
+  const metadataFilename =
+    metadata.filename;
+  assert.ok(
+    typeof metadataFilename ===
+      "string"
   );
   assert.ok(
     Array.isArray(
       metadata.files
     )
   );
-  return metadata as PackMetadata;
+  if (metadata.entryCount !== undefined) {
+    assert.equal(
+      typeof metadata.entryCount,
+      "number"
+    );
+  }
+  const filename =
+    metadataFilename
+      .replaceAll("\\", "/")
+      .split("/")
+      .at(-1);
+  assert.ok(filename);
+  return {
+    filename,
+    entryCount:
+      metadata.entryCount ??
+      metadata.files.length,
+    files: metadata.files
+  };
 }
 
 function assertPublishedContents(
@@ -479,6 +635,7 @@ function assertPublishedContents(
 
   for (const required of [
     "dist/bin/taskseal.js",
+    "dist/presentation/i18n.js",
     "dist/sdk/runner-v1.d.ts",
     "dist/sdk/provider-v1.d.ts",
     "dist/sdk/plugin-manifest.d.ts",
@@ -486,7 +643,10 @@ function assertPublishedContents(
     "examples/provider-memory/contract.test.js",
     "schemas/project-config.schema.json",
     "schemas/plugin-manifest.schema.json",
-    "public/index.html"
+    "public/index.html",
+    "public/presentation.js",
+    "public/settings.html",
+    "public/settings.js"
   ]) {
     assert.ok(
       paths.includes(required),
@@ -543,15 +703,30 @@ async function runInstalledCli(
   stdout: string;
   stderr: string;
 }> {
+  const packageManagerArgs =
+    isPnpmInvocation()
+      ? [
+          "exec",
+          "taskseal",
+          ...args
+        ]
+      : [
+          "exec",
+          "--offline",
+          "--",
+          "taskseal",
+          ...args
+        ];
   return runNpm(
-    [
-      "exec",
-      "--offline",
-      "--",
-      "taskseal",
-      ...args
-    ],
+    packageManagerArgs,
     cwd
+  );
+}
+
+function isPnpmInvocation(): boolean {
+  return /(?:^|\/)pnpm(?:\.c?js)?$/i.test(
+    (process.env.npm_execpath ?? "")
+      .replaceAll("\\", "/")
   );
 }
 

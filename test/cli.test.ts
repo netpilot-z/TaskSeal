@@ -25,6 +25,7 @@ import type {
   OutputPort
 } from "../src/cli.ts";
 import type { ManagedRunnerRunOptions } from "../src/application/managed-attempt-runner.ts";
+import type { ConfigurationView } from "../src/application/configuration-control.ts";
 import type {
   PersistentServicePort,
   PersistentTaskSealServerOptions
@@ -563,8 +564,86 @@ test("no command keeps the compatible start behavior", async (t) => {
   assert.equal(started, true);
 });
 
+test("start renders a safe actionable port error without throwing a process stack", async (t) => {
+  const cwd = await createTemporaryDirectory(t);
+  const output = createOutput();
+
+  const exitCode = await runCli({
+    args: ["start"],
+    cwd,
+    output,
+    startControlRoom: async () => {
+      throw Object.assign(
+        new Error("listen EACCES: permission denied 127.0.0.1:4317"),
+        { code: "CONTROL_ROOM_PORT_UNAVAILABLE" }
+      );
+    }
+  });
+
+  assert.equal(exitCode, 1);
+  assert.equal(
+    output.text(),
+    "TaskSeal could not open its Control Room port [CONTROL_ROOM_PORT_UNAVAILABLE]. Choose another port with `taskseal config set runtime.port <port>` or the PORT environment variable.\n"
+  );
+  assert.doesNotMatch(output.text(), /EACCES|node:net|at Server/);
+});
+
+test("start renders the actionable port error in Simplified Chinese", async (t) => {
+  const cwd = await createTemporaryDirectory(t);
+  const output = createOutput();
+
+  assert.equal(
+    await runCli({
+      args: ["start", "--lang", "zh-CN"],
+      cwd,
+      output,
+      environment: {},
+      startControlRoom: async () => {
+        throw Object.assign(new Error("raw bind failure"), {
+          code: "CONTROL_ROOM_PORT_UNAVAILABLE"
+        });
+      }
+    }),
+    1
+  );
+  assert.equal(
+    output.text(),
+    "TaskSeal 无法打开 Control Room 端口 [CONTROL_ROOM_PORT_UNAVAILABLE]。请使用 `taskseal config set runtime.port <port>` 或 PORT 环境变量选择其他端口。\n"
+  );
+});
+
+test("start explains that a verified Control Room lock means the service is already running", async (t) => {
+  const cwd = await createTemporaryDirectory(t);
+  const output = createOutput();
+
+  assert.equal(
+    await runCli({
+      args: ["start", "--lang", "zh-CN"],
+      cwd,
+      output,
+      environment: {},
+      startControlRoom: async () => {
+        throw Object.assign(new Error("already running"), {
+          code: "CONTROL_ROOM_ALREADY_RUNNING",
+          verified: true
+        });
+      }
+    }),
+    0
+  );
+  assert.equal(
+    output.text(),
+    "TaskSeal Control Room 已在运行，无需再次启动。请打开现有页面；如页面不可访问，请再次运行 `taskseal start` 以回收已停止实例留下的锁。\n"
+  );
+});
+
 test("persistent start wires one service and runner into the Control Room", async (t) => {
   const cwd = await createTemporaryDirectory(t);
+  await mkdir(join(cwd, ".taskseal"), { recursive: true });
+  await writeFile(
+    join(cwd, ".taskseal", "config.local.json"),
+    JSON.stringify({ runtime: { port: 4400 } })
+  );
   const output = createOutput();
   const calls: unknown[] = [];
   const service: PersistentServicePort = {
@@ -681,7 +760,6 @@ test("persistent start wires one service and runner into the Control Room", asyn
     output,
     environment: {
       HOST: "127.0.0.1",
-      PORT: "0",
       TASKSEAL_MAX_CONCURRENT_RUNS: "2"
     },
     assessReadiness: async () => ({
@@ -776,6 +854,19 @@ test("persistent start wires one service and runner into the Control Room", asyn
     "operator.jeffrey"
   );
   assert.equal(serverOptions.maxConcurrentRuns, 2);
+  assert.ok(serverOptions.configuration);
+  assert.match(
+    serverOptions.configuration.instanceId,
+    /^[0-9a-f-]{36}$/
+  );
+  assert.equal(
+    (
+      await serverOptions.configuration.inspect()
+    ).fields.find(
+      (field) => field.key === "runtime.port"
+    )?.value,
+    4400
+  );
   const providerProjection =
     await serverOptions.providerStatus.list();
   assert.equal(
@@ -825,7 +916,7 @@ test("persistent start wires one service and runner into the Control Room", asyn
         "RUNNER_NOT_AVAILABLE"
   );
   assert.deepEqual(calls, [
-    { port: 0, host: "127.0.0.1" },
+    { port: 4400, host: "127.0.0.1" },
     {
       workItemId: "TS-1",
       instruction:
@@ -837,13 +928,107 @@ test("persistent start wires one service and runner into the Control Room", asyn
       cwd
     }
   ]);
-  assert.match(output.text(), /http:\/\/127\.0\.0\.1:0/);
+  assert.match(output.text(), /http:\/\/127\.0\.0\.1:4400/);
 
   signalSource.emit("SIGTERM");
   await new Promise<void>((resolve) =>
     setImmediate(() => resolve())
   );
   assert.equal(shutDown, true);
+});
+
+test("persistent start maps a Windows-exclusive port bind failure and releases its lock", async (t) => {
+  const cwd = await createTemporaryDirectory(t);
+  let releases = 0;
+  const providerOperations = {
+    async get() { return null; },
+    async history() { return []; },
+    async listLatest() { return []; }
+  };
+  class PortFailureServer extends EventEmitter {
+    listen(): void {
+      this.emit("error", Object.assign(
+        new Error("listen EACCES: permission denied 127.0.0.1:4317"),
+        {
+          code: "EACCES",
+          address: "127.0.0.1",
+          port: 4317
+        }
+      ));
+    }
+  }
+
+  await assert.rejects(
+    startPersistentControlRoom({
+      cwd,
+      output: createOutput(),
+      environment: { HOST: "127.0.0.1", PORT: "4317" },
+      assessReadiness: async () => ({
+        node: {
+          ready: true,
+          version: "v24.12.0",
+          failure: ""
+        },
+        project: { ready: true },
+        capabilities: {
+          github: "disabled",
+          linear: "disabled",
+          gitee: "disabled",
+          feishu: "disabled"
+        },
+        codex: {
+          available: true,
+          loggedIn: true,
+          version: "codex-cli test"
+        },
+        ready: true
+      }),
+      initialize: async () => {},
+      acquireLock: async () => ({
+        filePath: join(cwd, ".taskseal", "control-room.lock"),
+        async release() { releases += 1; }
+      }),
+      providerObservationRuntimeFactory: async () => ({
+        readModel: {
+          async list() {
+            return {
+              schemaVersion: 1 as const,
+              revision: digestCanonicalJson([]),
+              providers: []
+            };
+          }
+        }
+      }),
+      providerOperationQueryFactory: async () => providerOperations,
+      acceptanceRuntimeFactory: async () => ({
+        acceptance: null,
+        providerOperations,
+        capabilities: {
+          decideAcceptance: false,
+          linearTransition: false,
+          reconcileLinearTransition: false
+        },
+        operatorId: null
+      }),
+      runtimeFactory: async () => ({
+        service: {
+          snapshot() { return {}; },
+          getWorkItem() { return null; }
+        } as unknown as PersistentServicePort,
+        runner: {
+          async run() { return { outcome: "completed" }; }
+        }
+      }),
+      serverFactory: () => new PortFailureServer(),
+      signalSource: new EventEmitter()
+    }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "CONTROL_ROOM_PORT_UNAVAILABLE" &&
+      !/EACCES|127\.0\.0\.1|4317/.test(error.message)
+  );
+  assert.equal(releases, 1);
 });
 
 test("persistent start refuses non-loopback binding", async (t) => {
@@ -986,6 +1171,20 @@ test("persistent start rejects an existing Control Room lock before opening runt
           }
         );
       },
+      resolveAuthority: async () => ({
+        kind: "running-instance",
+        inspect: async () =>
+          ({} as ConfigurationView),
+        readDraft: async () => {
+          throw new Error("not used");
+        },
+        applyChange: async () => {
+          throw new Error("not used");
+        },
+        applyDraft: async () => {
+          throw new Error("not used");
+        }
+      }),
       runtimeFactory: async () => {
         runtimeCalls += 1;
         throw new Error(
@@ -999,7 +1198,9 @@ test("persistent start rejects an existing Control Room lock before opening runt
       error instanceof Error &&
       "code" in error &&
       error.code ===
-        "CONTROL_ROOM_ALREADY_RUNNING"
+        "CONTROL_ROOM_ALREADY_RUNNING" &&
+      "verified" in error &&
+      error.verified === true
   );
 
   assert.equal(initialized, true);

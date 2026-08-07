@@ -11,6 +11,13 @@ import {
   AttemptRunCoordinatorError
 } from "./application/attempt-run-coordinator.ts";
 import { projectDashboard } from "./dashboard/projection.ts";
+import {
+  projectHomeSnapshot
+} from "./dashboard/home-projection.ts";
+import type {
+  HomeSnapshot
+} from "./dashboard/home-projection.ts";
+import { projectHubSnapshot } from "./dashboard/project-hub.ts";
 import { replayDemoSteps } from "./demo/scenario.ts";
 import type {
   AcceptanceDeliveryLinearSync,
@@ -26,6 +33,9 @@ import type {
 import type {
   ProviderSyncQueryPort
 } from "./application/provider-sync-projection.ts";
+import {
+  projectConnections
+} from "./application/connection-projection.ts";
 import type {
   DecompositionExecutionOptions,
   DecompositionProjection
@@ -33,8 +43,19 @@ import type {
 import type {
   RetiredDecompositionRecord
 } from "./application/decomposition-plan-journal.ts";
+import type {
+  ConfigurationAuthority
+} from "./application/configuration-authority.ts";
+import type {
+  ConfigurationChangeInput
+} from "./application/configuration-control.ts";
 import type { DashboardProjection } from "./dashboard/projection.ts";
 import type { DemoStep } from "./demo/scenario.ts";
+import {
+  getPresentationCatalog,
+  SUPPORTED_LOCALES
+} from "./presentation/i18n.ts";
+import type { SupportedLocale } from "./presentation/i18n.ts";
 
 interface StaticFile {
   url: URL;
@@ -75,6 +96,12 @@ export interface RunWorkItemOptions {
 export type RunWorkItem = (
   options: RunWorkItemOptions
 ) => unknown | Promise<unknown>;
+
+export interface PersistentConfigurationPort
+  extends Omit<ConfigurationAuthority, "kind"> {
+  readonly instanceId: string;
+  readonly activeRuntimeRevision: string;
+}
 
 export interface PersistentDecompositionDispatcherPort {
   list(): readonly DecompositionProjection[];
@@ -178,6 +205,7 @@ export interface PersistentTaskSealServerOptions {
     | undefined;
   runWorkItem: RunWorkItem;
   maxConcurrentRuns?: number | undefined;
+  configuration?: PersistentConfigurationPort | null | undefined;
   steps?: never;
   initialStep?: never;
 }
@@ -216,6 +244,7 @@ interface PersistentRuntime {
   runWorkItem: RunWorkItem;
   maxConcurrentRuns: number;
   csrfToken: string;
+  configuration: PersistentConfigurationPort | null;
 }
 
 type ServerRuntime = DemoRuntime | PersistentRuntime;
@@ -229,6 +258,17 @@ interface RuntimeError {
 interface RunRequestBody {
   prompt: string;
   readOnly?: boolean | undefined;
+}
+
+interface ConfigurationChangeRequestBody {
+  readonly expectedRevision: string;
+  readonly change: ConfigurationChangeInput;
+}
+
+interface ConfigurationDraftRequestBody {
+  readonly expectedRevision: string;
+  readonly scope: "user" | "project" | "local";
+  readonly document: Readonly<Record<string, unknown>>;
 }
 
 interface DecompositionPreviewRequestBody {
@@ -347,6 +387,55 @@ const STATIC_FILES = new Map<string, StaticFile>([
     }
   ],
   [
+    "/home.js",
+    {
+      url: new URL("../public/home.js", import.meta.url),
+      contentType: "text/javascript; charset=utf-8"
+    }
+  ],
+  [
+    "/connections",
+    {
+      url: new URL("../public/connections.html", import.meta.url),
+      contentType: "text/html; charset=utf-8"
+    }
+  ],
+  [
+    "/connections.js",
+    {
+      url: new URL("../public/connections.js", import.meta.url),
+      contentType: "text/javascript; charset=utf-8"
+    }
+  ],
+  [
+    "/ui-primitives.js",
+    {
+      url: new URL("../public/ui-primitives.js", import.meta.url),
+      contentType: "text/javascript; charset=utf-8"
+    }
+  ],
+  [
+    "/presentation.js",
+    {
+      url: new URL("../public/presentation.js", import.meta.url),
+      contentType: "text/javascript; charset=utf-8"
+    }
+  ],
+  [
+    "/settings",
+    {
+      url: new URL("../public/settings.html", import.meta.url),
+      contentType: "text/html; charset=utf-8"
+    }
+  ],
+  [
+    "/settings.js",
+    {
+      url: new URL("../public/settings.js", import.meta.url),
+      contentType: "text/javascript; charset=utf-8"
+    }
+  ],
+  [
     "/dashboard-state.js",
     {
       url: new URL("../public/dashboard-state.js", import.meta.url),
@@ -446,7 +535,204 @@ export function createTaskSealServer(
             : buildDemoSnapshot(
                 runtime.steps,
                 runtime.currentStep
+          )
+        );
+      }
+
+      if (request.method === "GET" && pathname === "/api/home") {
+        const snapshot =
+          runtime.mode === "persistent"
+            ? buildPersistentSnapshot(
+                runtime.service,
+                requireAttemptRuns(attemptRuns),
+                lastErrors,
+                runtime.csrfToken,
+                runtime.acceptanceCapabilities,
+                runtime.operatorId,
+                decompositionDispatcher,
+                runtime.decomposition
               )
+            : buildDemoSnapshot(
+                runtime.steps,
+                runtime.currentStep
+              );
+        let projectName = "Current project";
+        if (runtime.mode === "persistent" && runtime.configuration) {
+          const configuration = await runtime.configuration.inspect();
+          projectName = configuration.effective?.project ?? projectName;
+        }
+        return writeJson(
+          response,
+          200,
+          buildHomeServerResponse(snapshot, projectName)
+        );
+      }
+
+      if (request.method === "GET" && pathname === "/api/project-hub") {
+        const snapshot =
+          runtime.mode === "persistent"
+            ? buildPersistentSnapshot(
+                runtime.service,
+                requireAttemptRuns(attemptRuns),
+                lastErrors,
+                runtime.csrfToken,
+                runtime.acceptanceCapabilities,
+                runtime.operatorId,
+                decompositionDispatcher,
+                runtime.decomposition
+              )
+            : buildDemoSnapshot(runtime.steps, runtime.currentStep);
+        let projectName = "Current project";
+        if (runtime.mode === "persistent" && runtime.configuration) {
+          const configuration = await runtime.configuration.inspect();
+          projectName = configuration.effective?.project ?? projectName;
+        }
+        const home = buildHomeServerResponse(snapshot, projectName);
+        return writeJson(
+          response,
+          200,
+          await projectHubSnapshot({
+            sources: [{
+              projectRef: home.project.key,
+              async read() { return home; }
+            }]
+          })
+        );
+      }
+
+      if (
+        runtime.mode === "persistent" &&
+        request.method === "GET" &&
+        pathname === "/api/connections"
+      ) {
+        requireTrustedHost(request.headers.host);
+        const configuration = requireConfiguration(runtime.configuration);
+        const view = await configuration.inspect();
+        let providerSync = null;
+        try {
+          providerSync = await runtime.providerStatus.list();
+        } catch {
+          // A provider observation outage must not hide safe configuration truth.
+        }
+        return writeJson(
+          response,
+          200,
+          projectConnections({
+            configuration: view,
+            providerSync,
+            activeRuntimeRevision: configuration.activeRuntimeRevision
+          })
+        );
+      }
+
+      const presentationCatalogMatch =
+        request.method === "GET" &&
+        /^\/api\/presentation\/catalog\/(en|zh-CN)$/.exec(pathname);
+
+      if (
+        presentationCatalogMatch ||
+        (request.method === "GET" && pathname === "/api/presentation/catalog")
+      ) {
+        const locale = presentationCatalogMatch
+          ? presentationCatalogMatch[1]
+          : readPresentationLocale(request.url);
+        if (!SUPPORTED_LOCALES.includes(locale as SupportedLocale)) {
+          throw new HttpError(
+            404,
+            "PRESENTATION_LOCALE_UNSUPPORTED",
+            "The requested presentation locale is not supported."
+          );
+        }
+        return writeJson(response, 200, {
+          schemaVersion: "presentation-catalog/v1",
+          locale,
+          messages: getPresentationCatalog(locale as SupportedLocale)
+        });
+      }
+
+      if (
+        runtime.mode === "persistent" &&
+        request.method === "GET" &&
+        pathname === "/api/configuration"
+      ) {
+        requireTrustedHost(request.headers.host);
+        const configuration = requireConfiguration(runtime.configuration);
+        const view = await configuration.inspect();
+        return writeJson(response, 200, {
+          schemaVersion: "control-room-configuration/v1",
+          instanceId: configuration.instanceId,
+          csrfToken: runtime.csrfToken,
+          configuration: view,
+          runtime: {
+            activeRevision: configuration.activeRuntimeRevision,
+            desiredRevision: view.runtimeRevision,
+            restartRequired:
+              configuration.activeRuntimeRevision !== view.runtimeRevision
+          }
+        });
+      }
+
+      const configurationDraftMatch =
+        runtime.mode === "persistent" &&
+        request.method === "GET" &&
+        /^\/api\/configuration\/drafts\/(user|project|local)$/.exec(
+          pathname
+        );
+
+      if (
+        configurationDraftMatch &&
+        runtime.mode === "persistent"
+      ) {
+        requireTrustedHost(request.headers.host);
+        const configuration = requireConfiguration(runtime.configuration);
+        const scope = configurationDraftMatch[1] as
+          | "user"
+          | "project"
+          | "local";
+        return writeJson(response, 200, {
+          instanceId: configuration.instanceId,
+          draft: await configuration.readDraft(scope)
+        });
+      }
+
+      if (
+        runtime.mode === "persistent" &&
+        request.method === "POST" &&
+        pathname === "/api/configuration/change"
+      ) {
+        validatePersistentWriteRequest(request, runtime.csrfToken);
+        const configuration = requireConfiguration(runtime.configuration);
+        const body = validateConfigurationChangeBody(
+          await readJsonBody(request, 256 * 1024)
+        );
+        return writeJson(
+          response,
+          200,
+          await configuration.applyChange(
+            body.change,
+            body.expectedRevision
+          )
+        );
+      }
+
+      if (
+        runtime.mode === "persistent" &&
+        request.method === "POST" &&
+        pathname === "/api/configuration/draft"
+      ) {
+        validatePersistentWriteRequest(request, runtime.csrfToken);
+        const configuration = requireConfiguration(runtime.configuration);
+        const body = validateConfigurationDraftBody(
+          await readJsonBody(request, 256 * 1024)
+        );
+        return writeJson(
+          response,
+          200,
+          await configuration.applyDraft(
+            body.scope,
+            body.document,
+            body.expectedRevision
+          )
         );
       }
 
@@ -1012,6 +1298,7 @@ function createServerRuntime(
       options.operatorId ?? null;
     const decomposition =
       options.decomposition ?? null;
+    const configuration = options.configuration ?? null;
     if (
       typeof service.snapshot !== "function" ||
       typeof service.getWorkItem !== "function" ||
@@ -1025,6 +1312,9 @@ function createServerRuntime(
       ) ||
       !isValidDecompositionRuntime(
         decomposition
+      ) ||
+      !isValidConfigurationRuntime(
+        configuration
       )
     ) {
       throw new TypeError(
@@ -1043,7 +1333,8 @@ function createServerRuntime(
       runWorkItem: options.runWorkItem,
       maxConcurrentRuns:
         options.maxConcurrentRuns ?? 1,
-      csrfToken: randomBytes(32).toString("base64url")
+      csrfToken: randomBytes(32).toString("base64url"),
+      configuration
     };
   }
 
@@ -1059,6 +1350,33 @@ function createServerRuntime(
       steps.length
     )
   };
+}
+
+interface HomeServerResponse extends HomeSnapshot {
+  readonly capabilities: Record<string, boolean>;
+  readonly security: {
+    readonly csrfToken: string | null;
+    readonly operatorId: string | null;
+  };
+}
+
+function isValidConfigurationRuntime(
+  configuration: PersistentConfigurationPort | null
+): boolean {
+  return configuration === null ||
+    (
+      isRecord(configuration) &&
+      typeof configuration.instanceId === "string" &&
+      configuration.instanceId.length >= 1 &&
+      configuration.instanceId.length <= 160 &&
+      !/[\u0000-\u001f\u007f-\u009f]/.test(configuration.instanceId) &&
+      typeof configuration.activeRuntimeRevision === "string" &&
+      /^sha256:[0-9a-f]{64}$/.test(configuration.activeRuntimeRevision) &&
+      typeof configuration.inspect === "function" &&
+      typeof configuration.readDraft === "function" &&
+      typeof configuration.applyChange === "function" &&
+      typeof configuration.applyDraft === "function"
+    );
 }
 
 function isValidDecompositionRuntime(
@@ -1361,6 +1679,45 @@ function buildPersistentSnapshot(
   };
 }
 
+function buildHomeServerResponse(
+  snapshot: DemoSnapshot | PersistentSnapshot,
+  projectName: string
+): HomeServerResponse {
+  const home = projectHomeSnapshot({
+    dashboard: snapshot,
+    mode: snapshot.mode,
+    project: {
+      key: "current",
+      name: projectName
+    },
+    freshness:
+      snapshot.mode === "persistent" &&
+      Object.keys(snapshot.runtime.errors).length > 0
+        ? "stale"
+        : "fresh",
+    runtime:
+      snapshot.mode === "persistent"
+        ? {
+            ...snapshot.runtime.capacity,
+            runs: snapshot.runtime.runs,
+            errors: snapshot.runtime.errors
+          }
+        : undefined
+  });
+
+  return {
+    ...home,
+    capabilities: snapshot.capabilities,
+    security:
+      snapshot.mode === "persistent"
+        ? snapshot.security
+        : {
+            csrfToken: null,
+            operatorId: null
+          }
+  };
+}
+
 function requireAttemptRuns(
   value: AttemptRunCoordinator | null
 ): AttemptRunCoordinator {
@@ -1370,6 +1727,30 @@ function requireAttemptRuns(
     );
   }
 
+  return value;
+}
+
+function readPresentationLocale(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  try {
+    return new URL(value, "http://localhost").searchParams.get("locale");
+  } catch {
+    return null;
+  }
+}
+
+function requireConfiguration(
+  value: PersistentConfigurationPort | null
+): PersistentConfigurationPort {
+  if (value === null) {
+    throw new HttpError(
+      403,
+      "CONFIGURATION_CONTROL_DISABLED",
+      "TaskSeal configuration control is disabled."
+    );
+  }
   return value;
 }
 
@@ -1462,6 +1843,84 @@ async function readJsonBody(
       "TaskSeal run request must contain valid JSON."
     );
   }
+}
+
+function validateConfigurationChangeBody(
+  body: unknown
+): ConfigurationChangeRequestBody {
+  if (
+    !isRecord(body) ||
+    !hasExactKeys(body, ["expectedRevision", "change"]) ||
+    typeof body.expectedRevision !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/.test(body.expectedRevision) ||
+    !isRecord(body.change) ||
+    typeof body.change.key !== "string" ||
+    !/^[a-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)*$/.test(
+      body.change.key
+    )
+  ) {
+    throw invalidConfigurationRequest();
+  }
+  if (
+    body.change.operation === "unset" &&
+    hasExactKeys(body.change, ["operation", "key"])
+  ) {
+    return {
+      expectedRevision: body.expectedRevision,
+      change: {
+        operation: "unset",
+        key: body.change.key
+      }
+    };
+  }
+  if (
+    body.change.operation === "set" &&
+    hasExactKeys(body.change, ["operation", "key", "value"])
+  ) {
+    return {
+      expectedRevision: body.expectedRevision,
+      change: {
+        operation: "set",
+        key: body.change.key,
+        value: body.change.value
+      }
+    };
+  }
+  throw invalidConfigurationRequest();
+}
+
+function validateConfigurationDraftBody(
+  body: unknown
+): ConfigurationDraftRequestBody {
+  if (
+    !isRecord(body) ||
+    !hasExactKeys(body, [
+      "expectedRevision",
+      "scope",
+      "document"
+    ]) ||
+    typeof body.expectedRevision !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/.test(body.expectedRevision) ||
+    (body.scope !== "user" &&
+      body.scope !== "project" &&
+      body.scope !== "local") ||
+    !isRecord(body.document)
+  ) {
+    throw invalidConfigurationRequest();
+  }
+  return {
+    expectedRevision: body.expectedRevision,
+    scope: body.scope,
+    document: body.document
+  };
+}
+
+function invalidConfigurationRequest(): HttpError {
+  return new HttpError(
+    400,
+    "INVALID_CONFIGURATION_REQUEST",
+    "TaskSeal configuration request is invalid."
+  );
 }
 
 function validateDecompositionPreviewBody(
@@ -2025,6 +2484,33 @@ function normalizeResponseError(
                 "SERVICE_REOPEN_REQUIRED"
           ? "TaskSeal service must be reopened before requests can continue."
           : "TaskSeal service request failed."
+    };
+  }
+
+  if (
+    isRecord(error) &&
+    (error.name === "ConfigurationControlError" ||
+      error.name === "ConfigurationAuthorityError")
+  ) {
+    const code = readSafeErrorCode(error, "CONFIG_WRITE_FAILED");
+    const statusCode =
+      code === "CONFIG_REVISION_CONFLICT" ||
+      code === "CONFIG_WRITE_LOCKED"
+        ? 409
+        : code === "CONFIG_SOURCE_UNAVAILABLE" ||
+            code === "CONFIG_WRITE_FAILED" ||
+            code === "CONTROL_ROOM_HANDOFF_UNAVAILABLE"
+          ? 503
+          : 422;
+    return {
+      statusCode,
+      code,
+      message:
+        statusCode === 409
+          ? "TaskSeal configuration changed concurrently."
+          : statusCode === 503
+            ? "TaskSeal configuration control is temporarily unavailable."
+            : "TaskSeal rejected the configuration request."
     };
   }
 

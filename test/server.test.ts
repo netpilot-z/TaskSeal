@@ -39,45 +39,12 @@ test("the local API exposes the workflow and can run the demo to acceptance", as
 
   assert.equal(pageResponse.status, 200);
   assert.match(page, /TaskSeal Control Room/);
-  assert.match(page, /Provider operations/);
-  assert.match(
-    page,
-    /id="orchestration-panel"[\s\S]*aria-labelledby="orchestration-heading"/
-  );
-  assert.match(
-    page,
-    /id="orchestration-live-status"[\s\S]*role="status"/
-  );
-  assert.match(
-    page,
-    /id="orchestration-retirements"/
-  );
-  assert.match(
-    page,
-    /id="orchestration-retirement-count"/
-  );
-  assert.match(page, /id="work-item-select"/);
-  assert.match(page, /id="codex-cancel-button"/);
-  assert.match(
-    page,
-    /id="acceptance-accept-button"/
-  );
-  assert.match(
-    page,
-    /id="acceptance-linear-status"/
-  );
-  assert.match(
-    page,
-    /id="acceptance-audit"/
-  );
-  assert.match(
-    page,
-    /id="acceptance-reason"[\s\S]*required[\s\S]*aria-required="true"[\s\S]*aria-describedby="acceptance-reason-help"/
-  );
-  assert.match(
-    page,
-    /id="acceptance-reason-help"/
-  );
+  assert.match(page, /id="running-list"/);
+  assert.match(page, /id="attention-list"/);
+  assert.match(page, /id="next-list"/);
+  assert.match(page, /id="recent-list"/);
+  assert.doesNotMatch(page, /id="work-item-select"/);
+  assert.doesNotMatch(page, /id="acceptance-reason"/);
 
   const providerStateResponse = await fetch(
     `${baseUrl}/provider-state.js`
@@ -91,6 +58,15 @@ test("the local API exposes the workflow and can run the demo to acceptance", as
     await providerStateResponse.text(),
     /createProviderPanelModel/
   );
+  const homeScriptResponse = await fetch(`${baseUrl}/home.js`);
+  assert.equal(homeScriptResponse.status, 200);
+  assert.match(await homeScriptResponse.text(), /api\/home/);
+  const primitiveResponse = await fetch(`${baseUrl}/ui-primitives.js`);
+  assert.equal(primitiveResponse.status, 200);
+  assert.match(await primitiveResponse.text(), /createDialogController/);
+  const connectionsPageResponse = await fetch(`${baseUrl}/connections`);
+  assert.equal(connectionsPageResponse.status, 200);
+  assert.match(await connectionsPageResponse.text(), /连接真相/);
   const appResponse = await fetch(
     `${baseUrl}/app.js`
   );
@@ -122,6 +98,16 @@ test("the local API exposes the workflow and can run the demo to acceptance", as
     readJsonPath(initial, "workItems", 0, "status"),
     "planned"
   );
+  const homeResponse = await fetch(`${baseUrl}/api/home`);
+  const home: unknown = await homeResponse.json();
+  assert.equal(homeResponse.status, 200);
+  assert.equal(readJsonPath(home, "schemaVersion"), "home/v1");
+  assert.equal(readJsonPath(home, "summary", "nextUp"), 1);
+  const hubResponse = await fetch(`${baseUrl}/api/project-hub`);
+  const hub: unknown = await hubResponse.json();
+  assert.equal(hubResponse.status, 200);
+  assert.equal(readJsonPath(hub, "schemaVersion"), "project-hub/v1");
+  assert.equal(readJsonPath(hub, "summary", "projects"), 1);
 
   const runResponse = await fetch(`${baseUrl}/api/demo/run-all`, {
     method: "POST"

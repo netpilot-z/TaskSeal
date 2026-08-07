@@ -315,6 +315,7 @@ test("Provider panel state covers loading, empty, first error, and stale last-kn
 
   assert.equal(loading.phase, "loading");
   assert.equal(firstError.phase, "error");
+  assert.equal(firstError.messageCode, "provider-unavailable");
   assert.equal(empty.phase, "empty");
   assert.equal(
     didAdoptProviderPanelModel(
@@ -329,6 +330,7 @@ test("Provider panel state covers loading, empty, first error, and stale last-kn
   assert.equal(ready.phase, "ready");
   assert.equal(refreshing.phase, "refreshing");
   assert.equal(stale.phase, "stale");
+  assert.equal(stale.messageCode, "provider-refresh-failed");
   assert.equal(stale.model, readyModel);
   assert.equal(
     didAdoptProviderPanelModel(

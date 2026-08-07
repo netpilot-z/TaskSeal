@@ -87,7 +87,7 @@ export type LinearAcceptanceCoordinates =
       readonly targetState: string;
     };
 
-type ProjectConfigErrorCode =
+export type ProjectConfigErrorCode =
   | "PROJECT_CONFIG_INVALID"
   | "GITHUB_CONFIG_INVALID"
   | "GITEE_CONFIG_INVALID"
@@ -114,6 +114,19 @@ export async function readProjectConfiguration({
     );
   }
 
+  try {
+    return parseProjectConfiguration(parsed);
+  } catch {
+    throw configError(
+      "PROJECT_CONFIG_INVALID",
+      "TaskSeal project configuration requires a project name."
+    );
+  }
+}
+
+export function parseProjectConfiguration(
+  parsed: unknown
+): ProjectConfiguration {
   if (
     !isRecord(parsed) ||
     !isNonEmptyString(parsed.project) ||

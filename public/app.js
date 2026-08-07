@@ -3,6 +3,7 @@ import {
   createAccessibleOrchestrationState,
   createAccessibleSnapshotState,
   createAcceptanceControlState,
+  createAttemptTimeline,
   createOrchestrationPanelModel,
   createRunControlState,
   DashboardRequestGate,
@@ -22,6 +23,13 @@ import {
   reduceProviderPanelState,
   shouldPollProviders
 } from "/provider-state.js";
+import {
+  currentLocale,
+  initializePresentation,
+  t
+} from "/presentation.js";
+
+await initializePresentation();
 
 const elements = {
   snapshotTime: document.querySelector("#snapshot-time"),
@@ -103,6 +111,9 @@ const elements = {
     document.querySelector(
       "#acceptance-operator"
     ),
+  acceptanceControls: document.querySelector(
+    "#acceptance-controls"
+  ),
   acceptanceLocalStatus:
     document.querySelector(
       "#acceptance-local-status"
@@ -119,6 +130,18 @@ const elements = {
     document.querySelector(
       "#acceptance-reason-help"
     ),
+  acceptanceDecisionForm: document.querySelector(
+    "#acceptance-decision-form"
+  ),
+  acceptanceUnavailable: document.querySelector(
+    "#acceptance-unavailable"
+  ),
+  acceptanceUnavailableMessage: document.querySelector(
+    "#acceptance-unavailable-message"
+  ),
+  acceptanceSettingsLink: document.querySelector(
+    "#acceptance-settings-link"
+  ),
   acceptanceAudit:
     document.querySelector(
       "#acceptance-audit"
@@ -140,12 +163,73 @@ const elements = {
 };
 
 const statusLabels = {
-  planned: "Planned",
-  running: "Running",
-  reviewing: "Reviewing",
-  blocked: "Blocked",
-  accepted: "Accepted"
+  planned: t("dashboard.status.planned"),
+  running: t("dashboard.status.running"),
+  reviewing: t("dashboard.status.reviewing"),
+  blocked: t("dashboard.status.blocked"),
+  accepted: t("dashboard.status.accepted"),
+  completed: t("dashboard.status.completed"),
+  failed: t("dashboard.status.failed"),
+  interrupted: t("dashboard.status.interrupted"),
+  superseded: t("dashboard.status.superseded")
 };
+const controlLabelKeys = new Map([
+  ["Run Codex", "dashboard.runner.run"],
+  ["Retry Codex", "dashboard.control.retry"],
+  ["Cancel selected", "dashboard.runner.cancel"],
+  ["Dispatching…", "dashboard.control.dispatching"],
+  ["Cancelling…", "dashboard.control.cancelling"],
+  ["Finishing cancellation…", "dashboard.control.finishingCancellation"],
+  ["Saving outcome…", "dashboard.control.savingOutcome"],
+  ["Codex running…", "dashboard.control.running"],
+  ["Use DAG dispatch", "dashboard.control.useDag"],
+  ["Cancellation requested", "dashboard.control.cancellationRequested"],
+  ["Outcome locked", "dashboard.control.outcomeLocked"],
+  ["Accepted", "dashboard.status.accepted"],
+  ["Awaiting human decision", "dashboard.acceptance.awaiting"],
+  ["Accepted locally", "dashboard.acceptance.acceptedLocally"],
+  ["Rejected locally", "dashboard.acceptance.rejectedLocally"],
+  ["Not applicable", "dashboard.acceptance.notApplicable"],
+  ["Disabled", "common.status.disabled"],
+  ["Unavailable", "common.status.invalid"]
+]);
+
+function localizeControlLabel(value) {
+  const key = controlLabelKeys.get(value);
+  return key ? t(key) : value;
+}
+
+function localizeRunStatusLabel(value) {
+  const latest = /^(.*?) · latest attempt (.*?) is ([a-z_]+)$/.exec(value);
+  if (latest) {
+    return t("dashboard.runner.latestAttempt", {
+      workItem: latest[1],
+      attempt: latest[2],
+      status: statusLabels[latest[3]] ?? latest[3]
+    });
+  }
+  if (value === "No work item selected") {
+    return t("dashboard.runner.noSelection");
+  }
+  const patterns = [
+    [/^(.*?) · accepted; explicit reopen is required before another run$/, "dashboard.runner.acceptedStatus", ["workItem"]],
+    [/^(.*?) · cancellation requested for attempt (.*?)$/, "dashboard.runner.cancellationAttemptStatus", ["workItem", "attempt"]],
+    [/^(.*?) · cancellation requested$/, "dashboard.runner.cancellationStatus", ["workItem"]],
+    [/^(.*?) · saving the interrupted terminal outcome$/, "dashboard.runner.savingInterruptedStatus", ["workItem"]],
+    [/^(.*?) · saving the terminal outcome; cancellation is no longer available$/, "dashboard.runner.savingTerminalStatus", ["workItem"]],
+    [/^(.*?) · attempt (.*?) is running$/, "dashboard.runner.runningStatus", ["workItem", "attempt"]],
+    [/^(.*?) · Managed by decomposition (.*?); use DAG dispatch$/, "dashboard.runner.managedStatus", ["workItem", "plan"]],
+    [/^(.*?) · execution capacity is full; retry after a run settles$/, "dashboard.runner.capacityStatus", ["workItem"]],
+    [/^(.*?) · ready to run$/, "dashboard.runner.readyStatus", ["workItem"]]
+  ];
+  for (const [pattern, key, names] of patterns) {
+    const match = pattern.exec(value);
+    if (match) {
+      return t(key, Object.fromEntries(names.map((name, index) => [name, match[index + 1]])));
+    }
+  }
+  return value;
+}
 let demoComplete = false;
 let mode = null;
 let selectedWorkItemId = null;
@@ -178,6 +262,15 @@ const requestGate = new DashboardRequestGate();
 const providerRequestGate = new DashboardRequestGate();
 const acceptanceTruthFence =
   new AcceptanceTruthFence();
+
+document.addEventListener("taskseal:locale-changed", () => {
+  window.location.reload();
+});
+document.addEventListener("taskseal:presentation-error", (event) => {
+  showToast(t("settings.save.failure", {
+    message: event.detail?.message ?? "LOCALE_UPDATE_FAILED"
+  }));
+});
 
 elements.resetButton.addEventListener("click", () =>
   mutateDemo("/api/demo/reset")
@@ -1036,7 +1129,7 @@ async function requestProviderSnapshot({
     );
     renderProviderPanel();
     if (!silent) {
-      showToast(providerPanelState.message);
+      showToast(localizeProviderPanelMessage(providerPanelState));
     }
     return null;
   }
@@ -1084,9 +1177,9 @@ function render(snapshot) {
     );
   csrfToken = snapshot.security?.csrfToken ?? csrfToken;
 
-  elements.snapshotTime.textContent = `Snapshot ${formatTime(
-    snapshot.generatedAt
-  )}`;
+  elements.snapshotTime.textContent = t("dashboard.snapshot.label", {
+    time: formatTime(snapshot.generatedAt)
+  });
   elements.total.textContent = snapshot.summary.total;
   elements.agents.textContent = snapshot.summary.activeAgents;
   elements.reviewing.textContent = snapshot.summary.reviewing;
@@ -1094,9 +1187,11 @@ function render(snapshot) {
 
   elements.demoControls.hidden = !isDemo;
   elements.runnerControls.hidden = isDemo;
-  elements.environmentLabel.textContent = isDemo
-    ? "Fixture demo"
-    : "Persistent journal";
+  elements.environmentLabel.textContent = t(
+    isDemo
+      ? "dashboard.environment.local"
+      : "dashboard.environment.persistent"
+  );
   elements.providerPanel.hidden = isDemo;
   elements.orchestrationPanel.hidden =
     isDemo;
@@ -1118,10 +1213,16 @@ function render(snapshot) {
       snapshot.runtime?.capacity?.maxConcurrentRuns ?? 1;
     elements.stepCounter.textContent =
       activeIds.length > 0
-        ? `${activeIds.length} / ${limit} Codex runs active`
-        : `Journal online · ${limit} run slot${
-            limit === 1 ? "" : "s"
-          }`;
+        ? t("dashboard.runtime.activeRuns", {
+            active: activeIds.length,
+            limit
+          })
+        : t(
+            limit === 1
+              ? "dashboard.runtime.journalOnline"
+              : "dashboard.runtime.journalOnlinePlural",
+            { limit }
+          );
     renderWorkItemSelector(snapshot.workItems);
     initializePrompt(
       snapshot.workItems.find(
@@ -1139,7 +1240,12 @@ function render(snapshot) {
     applyRunControls();
     applyAcceptanceControls();
     renderOrchestration(snapshot);
-    renderTimeline(createAttemptTimeline(snapshot.workItems));
+    renderTimeline(
+      createAttemptTimeline(
+        snapshot.workItems,
+        statusLabels
+      )
+    );
     revealRuntimeError(snapshot.runtime?.errors);
   }
 
@@ -1154,6 +1260,11 @@ function renderOrchestration(snapshot) {
       busy,
       orchestrationMutation
     );
+  elements.orchestrationPanel.dataset.state =
+    model.plans.length === 0 &&
+    model.retirements.length === 0
+      ? "empty"
+      : "ready";
   const renderKey =
     semanticSnapshotKey(model);
   if (
@@ -1178,13 +1289,16 @@ function renderOrchestration(snapshot) {
   elements.orchestrationPanel.hidden =
     !model.visible;
   elements.orchestrationOverview.textContent =
-    model.overview;
+    t("dashboard.orchestration.overview", {
+      active: model.plans.length,
+      retired: model.retirements.length
+    });
   elements.orchestrationPlans.innerHTML =
     model.plans.length === 0
       ? `
       <div class="orchestration-empty">
-        <strong>No active decomposition plans</strong>
-        <p>Approve a bounded plan through the local API, or continue with the retained retirement audit below.</p>
+        <strong>${escapeHtml(t("dashboard.orchestration.noActive"))}</strong>
+        <p>${escapeHtml(t("dashboard.orchestration.noActiveCopy"))}</p>
       </div>
       `
       : model.plans
@@ -1194,13 +1308,15 @@ function renderOrchestration(snapshot) {
           .join("");
   elements.orchestrationRetirementCount
     .textContent =
-      `${model.retirements.length} retired`;
+      t("dashboard.orchestration.retiredCount", {
+        count: model.retirements.length
+      });
   elements.orchestrationRetirements
     .innerHTML =
       model.retirements.length === 0
         ? `
           <li class="orchestration-retirement-empty">
-            No plans have been retired.
+            ${escapeHtml(t("dashboard.orchestration.noRetirements"))}
           </li>
         `
         : model.retirements
@@ -1612,18 +1728,29 @@ function createOrchestrationAnnouncement(
 ) {
   const activeSummary =
     model.plans.length === 0
-      ? "No active decomposition plans."
+      ? t("dashboard.orchestration.announcement.none")
       : model.plans
           .map(
-            (plan) =>
-              `Plan ${plan.planId}: ${plan.progress.acceptedNodes} of ${plan.progress.totalNodes} nodes accepted, ${plan.countsByPhase.running} running, ${plan.countsByPhase.waiting_dependencies} waiting on dependencies, and ${plan.queue.queuedCount} ready in an ephemeral queue.`
+            (plan) => t("dashboard.orchestration.announcement.plan", {
+              plan: plan.planId,
+              accepted: plan.progress.acceptedNodes,
+              total: plan.progress.totalNodes,
+              running: plan.countsByPhase.running,
+              waiting: plan.countsByPhase.waiting_dependencies,
+              ready: plan.queue.queuedCount
+            })
           )
           .join(" ");
   const latest =
     model.retirements[0];
   return latest
-    ? `${activeSummary} ${model.retirements.length} retired plans retained in audit. Latest: ${latest.planId}, ${latest.reasonLabel}, retired by ${latest.retiredBy}.`
-    : `${activeSummary} No retirement records.`;
+    ? `${activeSummary} ${t("dashboard.orchestration.announcement.retired", {
+        count: model.retirements.length,
+        plan: latest.planId,
+        reason: latest.reasonLabel,
+        actor: latest.retiredBy
+      })}`
+    : `${activeSummary} ${t("dashboard.orchestration.announcement.noRetirements")}`;
 }
 
 function restoreRetirementAuditFocus() {
@@ -1853,7 +1980,13 @@ function formatOrchestrationPhase(
 }
 
 function renderProviderPanel() {
-  const { phase, model, message } = providerPanelState;
+  const { phase, model } = providerPanelState;
+  elements.providerPanel.dataset.state =
+    model &&
+    model.cards.length === 0 &&
+    model.operations.length === 0
+      ? "empty"
+      : phase;
   const isLoading =
     phase === "loading" || phase === "refreshing";
   elements.providerContent.setAttribute(
@@ -1861,14 +1994,15 @@ function renderProviderPanel() {
     String(isLoading)
   );
   elements.providerRefresh.textContent = isLoading
-    ? "Refreshing…"
-    : "Refresh";
+    ? t("dashboard.provider.refreshing")
+    : t("common.action.refresh");
   elements.providerRefresh.disabled = phase === "loading";
   elements.providerBanner.hidden = phase !== "stale";
 
   if (phase === "stale") {
     elements.providerBanner.dataset.tone = "warning";
-    elements.providerBanner.textContent = message;
+    elements.providerBanner.textContent =
+      localizeProviderPanelMessage(providerPanelState);
   } else {
     elements.providerBanner.textContent = "";
     delete elements.providerBanner.dataset.tone;
@@ -1886,26 +2020,26 @@ function renderProviderPanel() {
 
   if (phase === "idle" || phase === "loading") {
     elements.providerOverview.textContent =
-      "Loading safe observations";
+      t("dashboard.provider.loading");
     elements.providerCards.innerHTML =
       renderProviderStateMessage({
         className: "provider-state-loading",
         icon: "",
-        title: "Loading Provider observations",
+        title: t("dashboard.provider.loadingTitle"),
         description:
-          "Reading the latest bounded snapshot from the local Control Room."
+          t("dashboard.provider.loadingCopy")
       });
     elements.providerLatestPanel.hidden = true;
   } else if (phase === "error") {
     elements.providerOverview.textContent =
-      "Provider status unavailable";
+      t("dashboard.provider.unavailable");
     elements.providerCards.innerHTML =
       renderProviderStateMessage({
         className: "provider-state-error",
         icon: "!",
-        title: "Provider observations unavailable",
+        title: t("dashboard.provider.unavailableTitle"),
         description:
-          "The workflow remains isolated. Refresh after the observation store is available."
+          t("dashboard.provider.unavailableCopy")
       });
     elements.providerLatestPanel.hidden = true;
   } else if (
@@ -1919,9 +2053,9 @@ function renderProviderPanel() {
       renderProviderStateMessage({
         className: "",
         icon: "○",
-        title: "No Provider observations yet",
+        title: t("dashboard.provider.emptyTitle"),
         description:
-          "Configure a Provider and run an inspection to populate this read model."
+          t("dashboard.provider.emptyCopy")
       });
     elements.providerLatestPanel.hidden = true;
   } else if (model) {
@@ -1939,7 +2073,7 @@ function renderProviderPanel() {
             className: "",
             icon: "○",
             title:
-              "No Provider observations yet",
+              t("dashboard.provider.emptyTitle"),
             description:
               "Controlled operations remain visible while the observation read model is empty."
           });
@@ -2202,9 +2336,7 @@ function announceProviderPanel() {
     return;
   }
 
-  const summary = createProviderAccessibleSummary(
-    providerPanelState
-  );
+  const summary = localizeProviderAccessibleSummary(providerPanelState);
   const key = semanticSnapshotKey(summary);
 
   if (key === announcedProviderKey) {
@@ -2256,11 +2388,13 @@ function applyRunControls() {
     busy
   );
   elements.codexRunButton.disabled = !control.canRun;
-  elements.codexRunButton.textContent = control.runLabel;
+  elements.codexRunButton.textContent = localizeControlLabel(control.runLabel);
   elements.codexCancelButton.disabled =
     !control.canCancel;
+  elements.codexCancelButton.hidden =
+    !control.canCancel;
   elements.codexCancelButton.textContent =
-    control.cancelLabel;
+    localizeControlLabel(control.cancelLabel);
   if (
     control.statusLabel !==
     lastRunnerStatusLabel
@@ -2268,7 +2402,7 @@ function applyRunControls() {
     lastRunnerStatusLabel =
       control.statusLabel;
     elements.runnerStatus.textContent =
-      control.statusLabel;
+      localizeRunStatusLabel(control.statusLabel);
   }
   elements.workItemSelect.disabled =
     latestSnapshot.workItems.length === 0 ||
@@ -2316,32 +2450,68 @@ function applyAcceptanceControls() {
   elements.acceptanceReconcileButton.disabled =
     !control.canReconcile;
   elements.acceptanceLocalStatus.textContent =
-    `${control.localLabel}${
+    `${localizeControlLabel(control.localLabel)}${
       control.dashboardTruthPending
-        ? " · awaiting refresh"
+        ? ` · ${t("dashboard.acceptance.awaitingRefresh")}`
         : ""
     }`;
   elements.acceptanceLinearStatus.textContent =
-    `${control.linearLabel}${
+    `${localizeControlLabel(control.linearLabel)}${
       control.linearStale
-        ? " · stale view"
+        ? ` · ${t("dashboard.acceptance.stale")}`
         : ""
     }`;
   elements.acceptanceLinearStatus.dataset.tone =
     control.linearTone;
   elements.acceptanceOperator.textContent =
     control.operatorId
-      ? `Current operator · ${control.operatorId}`
-      : "Current operator unavailable";
+      ? t("dashboard.acceptance.currentOperator", { operator: control.operatorId })
+      : t("dashboard.acceptance.operatorUnavailable");
   renderAcceptanceAudit(control);
-  elements.acceptanceReason.disabled =
-    !latestSnapshot.capabilities
-      ?.decideAcceptance ||
-    busy ||
-    control.dashboardTruthPending ||
-    !control.reviewRevision ||
-    control.localLabel !==
-      "Awaiting human decision";
+  const formAvailable = control.decisionFormAvailable === true;
+  elements.acceptanceControls.dataset.blockReason = formAvailable
+    ? ""
+    : control.decisionBlockReason ?? "review-unavailable";
+  elements.acceptanceDecisionForm.hidden = !formAvailable;
+  elements.acceptanceUnavailable.hidden = formAvailable;
+  elements.acceptanceReason.disabled = !formAvailable;
+  if (!formAvailable) {
+    const reasonKey = {
+      "operator-unavailable": "dashboard.acceptance.unavailable.operator",
+      "review-unavailable": "dashboard.acceptance.unavailable.review",
+      "decomposition-blocked": "dashboard.acceptance.unavailable.decomposition",
+      "decision-recorded": "dashboard.acceptance.unavailable.recorded",
+      busy: "dashboard.acceptance.unavailable.busy"
+    }[control.decisionBlockReason] ?? "dashboard.acceptance.unavailable.review";
+    elements.acceptanceUnavailableMessage.textContent = t(reasonKey);
+    elements.acceptanceSettingsLink.hidden = control.decisionBlockReason !== "operator-unavailable";
+  }
+}
+
+function localizeProviderPanelMessage(state) {
+  const messageKey = {
+    "provider-refresh-older": "dashboard.provider.refreshOlder",
+    "provider-refresh-failed": "dashboard.provider.refreshFailed",
+    "provider-unavailable": "dashboard.provider.unavailable"
+  }[state?.messageCode];
+  return messageKey
+    ? t(messageKey)
+    : state?.phase === "error"
+      ? t("dashboard.provider.unavailable")
+      : state?.message ?? "";
+}
+
+function localizeProviderAccessibleSummary(state) {
+  if (state?.phase === "idle" || state?.phase === "loading") {
+    return t("dashboard.provider.loadingTitle");
+  }
+  if (state?.phase === "error") {
+    return t("dashboard.provider.unavailableTitle");
+  }
+  if (state?.phase === "empty") {
+    return t("dashboard.provider.emptyTitle");
+  }
+  return createProviderAccessibleSummary(state);
 }
 
 function renderAcceptanceAudit(control) {
@@ -2365,10 +2535,9 @@ function renderAcceptanceAudit(control) {
   const currentMarkup = current
     ? `
         <div class="acceptance-current-decision">
-          <span class="detail-label">CURRENT DECISION</span>
+          <span class="detail-label">${escapeHtml(t("dashboard.acceptance.currentDecision"))}</span>
           <strong>
-            ${escapeHtml(formatAcceptanceDecision(current))} by
-            ${escapeHtml(current.actor)}
+            ${escapeHtml(formatAcceptanceDecision(current, current.actor))}
           </strong>
           <time datetime="${escapeAttribute(current.decidedAt)}">
             ${escapeHtml(formatObservationTime(current.decidedAt))}
@@ -2380,13 +2549,13 @@ function renderAcceptanceAudit(control) {
           )}</code>
         </div>
       `
-    : `<p>No current acceptance decision.</p>`;
+    : `<p>${escapeHtml(t("dashboard.acceptance.noCurrent"))}</p>`;
   const historyMarkup =
     history.length > 0
       ? `
           <details class="acceptance-history">
             <summary>
-              Decision history · ${history.length}
+              ${escapeHtml(t("dashboard.acceptance.history", { count: history.length }))}
             </summary>
             <ol>
               ${history
@@ -2410,8 +2579,7 @@ function renderAcceptanceHistoryEntry(
   return `
     <li>
       <strong>
-        ${escapeHtml(formatAcceptanceDecision(decision))} by
-        ${escapeHtml(decision.actor)}
+        ${escapeHtml(formatAcceptanceDecision(decision, decision.actor))}
       </strong>
       <time datetime="${escapeAttribute(decision.decidedAt)}">
         ${escapeHtml(formatObservationTime(decision.decidedAt))}
@@ -2426,12 +2594,15 @@ function renderAcceptanceHistoryEntry(
 }
 
 function formatAcceptanceDecision(
-  decision
+  decision,
+  actor
 ) {
-  return decision.decision ===
-    "accepted"
-    ? "Accepted"
-    : "Rejected";
+  return t(
+    decision.decision === "accepted"
+      ? "dashboard.acceptance.acceptedBy"
+      : "dashboard.acceptance.rejectedBy",
+    { actor }
+  );
 }
 
 function setAcceptanceReasonError() {
@@ -2442,7 +2613,7 @@ function setAcceptanceReasonError() {
   elements.acceptanceReasonHelp.dataset.tone =
     "danger";
   elements.acceptanceReasonHelp.textContent =
-    "Enter a review reason before accepting or rejecting.";
+    t("dashboard.acceptance.reasonError");
 }
 
 function clearAcceptanceReasonError() {
@@ -2452,7 +2623,7 @@ function clearAcceptanceReasonError() {
   delete elements.acceptanceReasonHelp.dataset
     .tone;
   elements.acceptanceReasonHelp.textContent =
-    "Required for both accepting and rejecting a delivery.";
+    t("dashboard.acceptance.reasonHelp");
 }
 
 function initializePrompt(workItem) {
@@ -2568,48 +2739,6 @@ function requireAcceptanceDraft(
   return draft;
 }
 
-function createAttemptTimeline(workItems) {
-  const attempts = workItems
-    .flatMap((workItem) =>
-      workItem.attempts.map((attempt) => ({
-        workItem,
-        attempt
-      }))
-    )
-    .toSorted(
-      (left, right) =>
-        Date.parse(left.attempt.startedAt) -
-        Date.parse(right.attempt.startedAt)
-    );
-
-  if (attempts.length === 0) {
-    return [
-      {
-        number: 1,
-        source: "TaskSeal",
-        label: "Waiting for the first Codex attempt",
-        completed: false,
-        active: true
-      }
-    ];
-  }
-
-  return attempts.map(({ workItem, attempt }, index) => ({
-    number: index + 1,
-    source: attempt.agentId,
-    label: [
-      `${workItem.id} · ${attempt.id} · ${
-        statusLabels[attempt.status] ?? attempt.status
-      }`,
-      attempt.summary
-    ]
-      .filter(Boolean)
-      .join(" — "),
-    completed: attempt.status !== "running",
-    active: attempt.status === "running"
-  }));
-}
-
 function revealRuntimeError(errors) {
   const entries = Object.entries(errors ?? {});
 
@@ -2650,7 +2779,7 @@ function renderWorkItems(workItems) {
         class="empty-state"
         data-work-items-empty
         tabindex="-1"
-        aria-label="No work items available"
+        aria-label="${escapeAttribute(t("dashboard.work.emptyLabel"))}"
       >
         <strong>No work items yet</strong>
         <p>Run the first event to ingest a task.</p>
@@ -2703,7 +2832,7 @@ function renderWorkItem(item) {
   return `
     <article
       class="work-item-card${isSelected ? " is-selected" : ""}"
-      aria-label="Work item ${escapeAttribute(item.id)}"
+      aria-label="${escapeAttribute(t("dashboard.work.itemLabel", { id: item.id }))}"
     >
       <div class="work-item-header">
         <div>
@@ -2722,7 +2851,7 @@ function renderWorkItem(item) {
             aria-pressed="${String(isSelected)}"
             ${busy ? "disabled" : ""}
           >
-            ${isSelected ? "Selected" : "Select"}
+            ${escapeHtml(t(isSelected ? "dashboard.work.selected" : "dashboard.work.select"))}
           </button>
         </div>
       </div>
@@ -2731,22 +2860,22 @@ function renderWorkItem(item) {
 
       <div class="work-detail-grid">
         <div class="detail-block">
-          <span class="detail-label">Assigned agent</span>
+          <span class="detail-label">${escapeHtml(t("dashboard.work.assignedAgent"))}</span>
           ${
             currentAttempt
               ? `<strong>${escapeHtml(currentAttempt.agentId)}</strong>
-                 <small>${escapeHtml(currentAttempt.status)}</small>`
-              : `<strong>Waiting for dispatch</strong>
-                 <small>No active attempt</small>`
+                 <small>${escapeHtml(statusLabels[currentAttempt.status] ?? currentAttempt.status)}</small>`
+              : `<strong>${escapeHtml(t("dashboard.work.waitingDispatch"))}</strong>
+                 <small>${escapeHtml(t("dashboard.work.noActiveAttempt"))}</small>`
           }
         </div>
         <div class="detail-block">
-          <span class="detail-label">Current artifact</span>
+          <span class="detail-label">${escapeHtml(t("dashboard.work.currentArtifact"))}</span>
           ${
             currentArtifact
               ? renderArtifact(currentArtifact)
-              : `<strong>Not submitted</strong>
-                 <small>Evidence gate is waiting</small>`
+              : `<strong>${escapeHtml(t("dashboard.work.notSubmitted"))}</strong>
+                 <small>${escapeHtml(t("dashboard.work.evidenceWaiting"))}</small>`
           }
         </div>
       </div>
@@ -2754,7 +2883,7 @@ function renderWorkItem(item) {
       ${renderAttemptHistory(item.attempts)}
 
       <div class="evidence-row">
-        <span class="detail-label">Required evidence</span>
+        <span class="detail-label">${escapeHtml(t("dashboard.work.requiredEvidence"))}</span>
         <div class="evidence-list">
           ${item.requiredEvidence
             .map((criterion) =>
@@ -2778,16 +2907,16 @@ function renderWorkItem(item) {
 function renderAttemptHistory(attempts) {
   if (attempts.length === 0) {
     return `
-      <section class="attempt-history" aria-label="Attempt history">
-        <span class="detail-label">Attempt history</span>
-        <p>No attempts have been dispatched.</p>
+      <section class="attempt-history" aria-label="${escapeAttribute(t("dashboard.work.attemptHistory"))}">
+        <span class="detail-label">${escapeHtml(t("dashboard.work.attemptHistory"))}</span>
+        <p>${escapeHtml(t("dashboard.work.noAttempts"))}</p>
       </section>
     `;
   }
 
   return `
-    <section class="attempt-history" aria-label="Attempt history">
-      <span class="detail-label">Attempt history</span>
+    <section class="attempt-history" aria-label="${escapeAttribute(t("dashboard.work.attemptHistory"))}">
+      <span class="detail-label">${escapeHtml(t("dashboard.work.attemptHistory"))}</span>
       <ol>
         ${attempts
           .toReversed()
@@ -2834,9 +2963,9 @@ function renderEvidence(criterion, evidence) {
   ).at(-1);
   const outcome = latest?.outcome ?? "missing";
   const outcomeLabel = {
-    passed: "passed",
-    failed: "failed",
-    missing: "missing"
+    passed: t("dashboard.work.evidence.passed"),
+    failed: t("dashboard.work.evidence.failed"),
+    missing: t("dashboard.work.evidence.missing")
   }[outcome] ?? outcome;
 
   return `
@@ -2873,27 +3002,27 @@ function renderDeliveryProgress(progress) {
   return `
     <div
       class="progress-row"
-      aria-label="${
+      aria-label="${escapeAttribute(
         accepted
-          ? "Delivery accepted with verified evidence"
-          : `${passed} of ${total} required evidence checks passed; completion remains uncertain`
-      }"
+          ? t("dashboard.work.progressAccepted")
+          : t("dashboard.work.progressCount", { passed, total })
+      )}"
     >
       <div>
-        <span class="detail-label">Evidence-bound progress</span>
+        <span class="detail-label">${escapeHtml(t("dashboard.work.progress"))}</span>
         <strong>${
           accepted
-            ? "Human acceptance verified"
-            : `${passed} / ${total} evidence passed`
+            ? escapeHtml(t("dashboard.work.progressAccepted"))
+            : escapeHtml(t("dashboard.work.progressCount", { passed, total }))
         }</strong>
         <small>${
           accepted
-            ? "Completion is a verified decision."
-            : `${failed} failed · ${missing} missing · no completion estimate`
+            ? escapeHtml(t("dashboard.work.progressAcceptedHint"))
+            : escapeHtml(t("dashboard.work.progressPendingHint", { failed, missing }))
         }</small>
       </div>
       <span class="progress-certainty">
-        ${accepted ? "Verified" : "Uncertain"}
+        ${escapeHtml(t(accepted ? "dashboard.work.verified" : "dashboard.work.uncertain"))}
       </span>
     </div>
   `;
@@ -2922,7 +3051,7 @@ function getDecisionView(decision) {
     return {
       className: "decision-ready",
       icon: "✓",
-      title: "Owner accepted delivery",
+      title: t("dashboard.work.ownerAccepted"),
       description: escapeHtml(decision.reason)
     };
   }
@@ -2931,7 +3060,7 @@ function getDecisionView(decision) {
     return {
       className: "decision-rejected",
       icon: "×",
-      title: "Owner rejected delivery",
+      title: t("dashboard.work.ownerRejected"),
       description: escapeHtml(decision.reason)
     };
   }
@@ -2939,9 +3068,9 @@ function getDecisionView(decision) {
   return {
     className: "",
     icon: "○",
-    title: "Acceptance pending",
+    title: t("dashboard.work.acceptancePending"),
     description:
-      "Artifact, evidence, and accountable approval are required."
+      t("dashboard.work.acceptanceRequired")
   };
 }
 
@@ -2958,11 +3087,39 @@ function renderTimeline(timeline) {
       (step) => `
         <li class="${step.completed ? "completed" : ""} ${
           step.active ? "active" : ""
-        }">
+        } ${step.latest ? "latest" : ""}"${
+          step.latest ? ' aria-current="true"' : ""
+        }>
           <span class="timeline-node">${step.completed ? "✓" : step.number}</span>
           <div>
-            <small>${escapeHtml(step.source)}</small>
+            <div class="timeline-meta">
+              <small>${escapeHtml(step.source)}</small>
+              ${
+                step.latest
+                  ? `<span class="timeline-latest">${escapeHtml(
+                      t("dashboard.timeline.latest")
+                    )}</span>`
+                  : ""
+              }
+              ${
+                step.startedAt
+                  ? `<time datetime="${escapeAttribute(
+                      step.startedAt
+                    )}">${escapeHtml(formatTime(step.startedAt))}</time>`
+                  : ""
+              }
+            </div>
             <strong>${escapeHtml(step.label)}</strong>
+            ${
+              step.summary
+                ? `<details class="timeline-summary">
+                    <summary>${escapeHtml(
+                      t("dashboard.timeline.summary")
+                    )}</summary>
+                    <p>${escapeHtml(step.summary)}</p>
+                  </details>`
+                : ""
+            }
           </div>
         </li>
       `
@@ -2988,26 +3145,33 @@ function announceSnapshot(snapshot) {
                 (evidence) => evidence.outcome === "passed"
               ).length;
               const artifactSummary = workItem.artifact
-                ? `${workItem.artifact.kind} artifact linked`
-                : "artifact pending";
+                ? t("dashboard.announcement.artifactLinked", {
+                    kind: workItem.artifact.kind
+                  })
+                : t("dashboard.announcement.artifactPending");
 
-              return `${workItem.id} is ${
-                statusLabels[workItem.status] ?? workItem.status
-              }, ${artifactSummary}, ${passedEvidence} of ${
-                workItem.evidence.length
-              } evidence checks passed`;
+              return t("dashboard.announcement.workItem", {
+                workItem: workItem.id,
+                status: statusLabels[workItem.status] ?? workItem.status,
+                artifact: artifactSummary,
+                passed: passedEvidence,
+                total: workItem.evidence.length
+              });
             }
           )
-          .join(". ")
-      : "No work items";
+          .join(t("common.separator.sentence"))
+      : t("dashboard.announcement.noWorkItems");
   const demoSummary = state.demo
-    ? `Demo step ${state.demo.currentStep} of ${state.demo.totalSteps}${
-        state.demo.activeLabel
-          ? `, ${state.demo.activeLabel}`
-          : ""
-      }. `
+    ? `${t("dashboard.announcement.demo", {
+        current: state.demo.currentStep,
+        total: state.demo.totalSteps,
+        label: state.demo.activeLabel ?? "—"
+      })} `
     : "";
-  elements.liveStatus.textContent = `${demoSummary}${workSummary}. ${state.activeAgents} active agents.`;
+  elements.liveStatus.textContent = `${demoSummary}${t("dashboard.announcement.summary", {
+    work: workSummary,
+    agents: state.activeAgents
+  })}`;
 }
 
 function setBusy(isBusy) {
@@ -3053,7 +3217,7 @@ function showToast(message) {
 }
 
 function formatTime(value) {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(currentLocale(), {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit"
@@ -3062,7 +3226,7 @@ function formatTime(value) {
 
 function formatDateTime(value) {
   return new Intl.DateTimeFormat(
-    undefined,
+    currentLocale(),
     {
       dateStyle: "medium",
       timeStyle: "short"
@@ -3074,15 +3238,22 @@ function formatObservationTime(value) {
   const timestamp = Date.parse(value);
   const elapsed = Math.max(0, Date.now() - timestamp);
   const minutes = Math.floor(elapsed / 60_000);
+  const relativeFormatter = new Intl.RelativeTimeFormat(
+    currentLocale(),
+    {
+      numeric: "auto",
+      style: "short"
+    }
+  );
   const relative =
     minutes < 1
-      ? "just now"
+      ? relativeFormatter.format(0, "second")
       : minutes < 60
-        ? `${minutes}m ago`
+        ? relativeFormatter.format(-minutes, "minute")
         : minutes < 1_440
-          ? `${Math.floor(minutes / 60)}h ago`
-          : `${Math.floor(minutes / 1_440)}d ago`;
-  const absolute = new Intl.DateTimeFormat(undefined, {
+          ? relativeFormatter.format(-Math.floor(minutes / 60), "hour")
+          : relativeFormatter.format(-Math.floor(minutes / 1_440), "day");
+  const absolute = new Intl.DateTimeFormat(currentLocale(), {
     dateStyle: "medium",
     timeStyle: "short"
   }).format(new Date(timestamp));

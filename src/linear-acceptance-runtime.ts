@@ -3,7 +3,8 @@ import {
 } from "./application/acceptance-delivery-coordinator.ts";
 import type {
   AcceptanceDeliveryCommandPort,
-  AcceptanceDeliveryServicePort
+  AcceptanceDeliveryServicePort,
+  AcceptanceDeliveryTransitionPort
 } from "./application/acceptance-delivery-coordinator.ts";
 import {
   LinearTransitionCoordinator
@@ -215,13 +216,25 @@ export async function createLocalLinearAcceptanceRuntime({
       },
       clock
     });
+  // Open once during startup to validate the current scope; each admitted
+  // operation below resolves and pins its own configuration revision.
+  void transition;
+  const operationBoundTransition =
+    createOperationBoundLinearTransition({
+      cwd,
+      environment,
+      fetchImpl,
+      journal,
+      service,
+      clock
+    });
 
   return Object.freeze({
     acceptance:
       new AcceptanceDeliveryCoordinator({
         acceptance: service,
         actor,
-        transition
+        transition: operationBoundTransition
       }),
     providerOperations:
       projectOperationQuery(journal),
@@ -232,6 +245,106 @@ export async function createLocalLinearAcceptanceRuntime({
     }),
     operatorId: actor
   });
+}
+
+function createOperationBoundLinearTransition({
+  cwd,
+  environment,
+  fetchImpl,
+  journal,
+  service,
+  clock
+}: {
+  readonly cwd: string;
+  readonly environment: NodeJS.ProcessEnv;
+  readonly fetchImpl: typeof globalThis.fetch;
+  readonly journal: ProviderOperationJournal;
+  readonly service: LocalLinearAcceptanceServicePort;
+  readonly clock: () => unknown;
+}): AcceptanceDeliveryTransitionPort {
+  const bound = new Map<string, AcceptanceDeliveryTransitionPort>();
+  const resolve = async (): Promise<AcceptanceDeliveryTransitionPort> => {
+    const configuration = await readProjectConfiguration({ cwd });
+    const coordinates = getLinearAcceptanceCoordinates(configuration);
+    if (!coordinates.enabled) {
+      throw runtimeError(
+        "LINEAR_TRANSITION_DISABLED",
+        "Linear acceptance is disabled for the current configuration."
+      );
+    }
+    const exchange = createLinearGraphqlHttpExchange({
+      apiKey: environment.LINEAR_API_KEY,
+      accessToken: environment.LINEAR_ACCESS_TOKEN,
+      fetchImpl
+    });
+    const scope = await resolveLinearAcceptanceScope({
+      configuredTarget: {
+        workspace: coordinates.workspace,
+        team: coordinates.team,
+        project: coordinates.project,
+        expectedState: coordinates.expectedState,
+        targetState: coordinates.targetState
+      },
+      exchange: (request: unknown) => exchange(request)
+    });
+    const transport = new InjectedLinearTransitionTransport({
+      exchange: (request: unknown) => exchange(request)
+    });
+    return LinearTransitionCoordinator.open({
+      journal,
+      transport,
+      workItems: service,
+      configuredTarget: {
+        workspace: coordinates.workspace,
+        team: coordinates.team,
+        project: coordinates.project,
+        expectedState: coordinates.expectedState,
+        targetState: coordinates.targetState
+      },
+      resolvedTarget: {
+        organizationId: scope.organizationId,
+        teamId: scope.teamId,
+        projectId: scope.projectId,
+        expectedStateId: scope.expectedStateId,
+        targetStateId: scope.targetStateId
+      },
+      clock
+    });
+  };
+  const transitionFor = async (operationKey: string) => {
+    const existing = bound.get(operationKey);
+    if (existing !== undefined) {
+      return existing;
+    }
+    const created = await resolve();
+    bound.set(operationKey, created);
+    return created;
+  };
+  return {
+    async prepare(input) {
+      const transition = await resolve();
+      const prepared = await transition.prepare(input);
+      bound.set(prepared.plan.operationKey, transition);
+      return prepared;
+    },
+    async approve(input) {
+      return (await transitionFor(input.operationKey)).approve(input);
+    },
+    async submit(input) {
+      const transition = await transitionFor(input.operationKey);
+      try {
+        return await transition.submit(input);
+      } finally {
+        bound.delete(input.operationKey);
+      }
+    },
+    async reconcile(input) {
+      return (await transitionFor(input.operationKey)).reconcile!(input);
+    },
+    async get(operationKey) {
+      return (await resolve()).get!(operationKey);
+    }
+  };
 }
 
 function projectOperationQuery(

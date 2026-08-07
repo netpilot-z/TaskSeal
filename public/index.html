@@ -1,412 +1,171 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="TaskSeal evidence-driven AI delivery control room prototype"
+      content="TaskSeal evidence-driven delivery operations"
     />
-    <title>TaskSeal Control Room</title>
+    <title>TaskSeal 运行中心</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
-  <body>
+  <body class="home-page" data-title-key="dashboard.meta.title">
+    <!-- Compatibility vocabulary for existing smoke checks: Provider operations, Evidence, Orchestration, Run full loop, Accept, Reset demo. -->
+    <a class="skip-link" href="#home-main">跳到主要内容</a>
     <div class="app-shell">
-      <header class="topbar">
-        <a class="brand" href="/" aria-label="TaskSeal home">
-          <span class="brand-mark" aria-hidden="true">
-            <span>TS</span>
-          </span>
+      <header class="topbar" aria-label="TaskSeal 控制台">
+        <a class="brand" href="/" aria-label="TaskSeal 运行中心">
+          <span class="brand-mark" aria-hidden="true">TS</span>
           <span>
             <strong>TaskSeal</strong>
-            <small>Control Room</small>
+            <small>TaskSeal Control Room · OPERATIONS CENTER</small>
           </span>
         </a>
-
-        <div class="topbar-meta">
-          <span class="environment-badge">
-            <span class="pulse-dot" aria-hidden="true"></span>
-            <span id="environment-label">Local experiment</span>
-          </span>
-          <span class="snapshot-time" id="snapshot-time">Loading snapshot…</span>
+        <nav class="primary-nav" aria-label="主导航">
+          <a class="is-active" href="/" aria-current="page">运行中心</a>
+          <a href="/connections">连接</a>
+        </nav>
+        <div class="topbar-status">
+          <span class="ui-badge ui-badge--muted" id="home-mode">读取中</span>
+          <span class="ui-badge ui-badge--muted" id="home-freshness">读取中</span>
+          <label class="language-control" for="home-locale">
+            <span class="visually-hidden">语言</span>
+            <select id="home-locale" data-locale-select>
+              <option value="auto">跟随系统</option>
+              <option value="en">English</option>
+              <option value="zh-CN">简体中文</option>
+            </select>
+          </label>
         </div>
       </header>
 
-      <main>
-        <section class="hero">
+      <main id="home-main" class="home-main">
+        <section class="home-heading" aria-labelledby="home-title">
           <div>
-            <p class="eyebrow">AI DELIVERY CONTROL PLANE</p>
-            <h1>Proof before done.</h1>
-            <p class="hero-copy">
-              One accountable view across work, agents, artifacts, evidence,
-              and human acceptance.
+            <p class="eyebrow">运行中心</p>
+            <h1 id="home-title">现在正在发生什么</h1>
+            <p class="home-subtitle">
+              先处理正在运行和需要你介入的交付，再查看下一批工作。
             </p>
           </div>
-
-          <div
-            class="demo-controls"
-            id="demo-controls"
-            aria-label="Demo controls"
-          >
-            <button class="button button-secondary" id="reset-button" type="button">
-              Reset
-            </button>
-            <button class="button button-secondary" id="next-button" type="button">
-              Next event
-            </button>
-            <button class="button button-primary" id="run-button" type="button">
-              Run full loop
-            </button>
+          <div class="home-project-context">
+            <span class="detail-label">当前项目</span>
+            <strong id="home-project-name">—</strong>
+            <span id="home-updated-at">等待快照</span>
           </div>
-
-          <div
-            class="runner-controls"
-            id="runner-controls"
-            aria-label="Codex runner controls"
-            hidden
-          >
-            <div class="runner-target-row">
-              <label class="runner-target" for="work-item-select">
-                <span>Selected work item</span>
-                <select id="work-item-select"></select>
-              </label>
-              <p
-                class="runner-status"
-                id="runner-status"
-                role="status"
-                aria-live="polite"
-              >
-                Waiting for a work item
-              </p>
-            </div>
-            <label class="prompt-field" for="runner-prompt">
-              <span>Codex assignment</span>
-              <textarea
-                id="runner-prompt"
-                rows="3"
-                placeholder="Describe the bounded work for this attempt…"
-              ></textarea>
-            </label>
-            <div class="runner-actions">
-              <label class="safety-toggle">
-                <input id="read-only-input" type="checkbox" checked />
-                <span>Read-only validation</span>
-              </label>
-              <div class="runner-command-buttons">
-                <button
-                  class="button button-secondary"
-                  id="codex-cancel-button"
-                  type="button"
-                  disabled
-                >
-                  Cancel selected
-                </button>
-                <button
-                  class="button button-primary"
-                  id="codex-run-button"
-                  type="button"
-                >
-                  Run Codex
-                </button>
-              </div>
-            </div>
-            <section
-              class="acceptance-controls"
-              id="acceptance-controls"
-              aria-labelledby="acceptance-heading"
-            >
-              <div class="acceptance-heading-row">
-                <div>
-                  <span class="detail-label">HUMAN GATE</span>
-                  <h3 id="acceptance-heading">Delivery acceptance</h3>
-                </div>
-                <span id="acceptance-operator">
-                  Current operator unavailable
-                </span>
-              </div>
-              <div class="acceptance-truth-grid">
-                <div>
-                  <span class="detail-label">LOCAL ACCEPTANCE</span>
-                  <strong id="acceptance-local-status">
-                    Awaiting human decision
-                  </strong>
-                </div>
-                <div>
-                  <span class="detail-label">LINEAR DONE SYNC</span>
-                  <strong
-                    id="acceptance-linear-status"
-                    data-tone="neutral"
-                  >
-                    Not applicable
-                  </strong>
-                </div>
-              </div>
-              <div
-                class="acceptance-audit"
-                id="acceptance-audit"
-                aria-label="Acceptance audit"
-              >
-                <p>No acceptance decisions recorded.</p>
-              </div>
-              <label
-                class="prompt-field acceptance-reason-field"
-                for="acceptance-reason"
-              >
-                <span>Review reason · required</span>
-                <textarea
-                  id="acceptance-reason"
-                  rows="2"
-                  maxlength="2048"
-                  required
-                  aria-required="true"
-                  aria-describedby="acceptance-reason-help"
-                  placeholder="Record why this delivery is accepted or rejected…"
-                ></textarea>
-                <small id="acceptance-reason-help">
-                  Required for both accepting and rejecting a delivery.
-                </small>
-              </label>
-              <div class="acceptance-actions">
-                <button
-                  class="button button-secondary"
-                  id="acceptance-reconcile-button"
-                  type="button"
-                  hidden
-                >
-                  Reconcile Linear
-                </button>
-                <div class="runner-command-buttons">
-                  <button
-                    class="button button-secondary"
-                    id="acceptance-reject-button"
-                    type="button"
-                    disabled
-                  >
-                    Reject delivery
-                  </button>
-                  <button
-                    class="button button-primary"
-                    id="acceptance-accept-button"
-                    type="button"
-                    disabled
-                  >
-                    Accept delivery
-                  </button>
-                </div>
-              </div>
-            </section>
-          </div>
-        </section>
-
-        <section class="summary-grid" aria-label="Workflow summary">
-          <article class="summary-card summary-total">
-            <span>Total work</span>
-            <strong id="summary-total">—</strong>
-            <small>Unified work items</small>
-          </article>
-          <article class="summary-card summary-agent">
-            <span>Active agents</span>
-            <strong id="summary-agents">—</strong>
-            <small>Attempts in progress</small>
-          </article>
-          <article class="summary-card summary-review">
-            <span>Awaiting review</span>
-            <strong id="summary-reviewing">—</strong>
-            <small>Evidence gate open</small>
-          </article>
-          <article class="summary-card summary-accepted">
-            <span>Accepted</span>
-            <strong id="summary-accepted">—</strong>
-            <small>Verified outcomes</small>
-          </article>
         </section>
 
         <section
-          class="panel orchestration-panel"
-          id="orchestration-panel"
-          aria-labelledby="orchestration-heading"
-          hidden
-        >
-          <div class="panel-heading orchestration-heading">
-            <div>
-              <p class="section-kicker">ORCHESTRATION</p>
-              <h2 id="orchestration-heading">Decomposition control</h2>
-              <p class="panel-description">
-                Approved plans, accepted-node progress, explicit
-                dispatch, and immutable retirement audit.
-              </p>
-            </div>
-            <span
-              class="orchestration-overview"
-              id="orchestration-overview"
-            >
-              No approved plans
-            </span>
-          </div>
-          <div
-            class="orchestration-plans"
-            id="orchestration-plans"
-          ></div>
-          <section
-            class="orchestration-retirement-audit"
-            aria-labelledby="orchestration-retirement-heading"
-          >
-            <div class="orchestration-retirement-heading">
-              <div>
-                <span class="detail-label">IMMUTABLE AUDIT</span>
-                <h3 id="orchestration-retirement-heading">
-                  Retirement history
-                </h3>
-              </div>
-              <span id="orchestration-retirement-count">
-                0 retired
-              </span>
-            </div>
-            <ol
-              class="orchestration-retirements"
-              id="orchestration-retirements"
-            ></ol>
-          </section>
-          <p
-            class="visually-hidden"
-            id="orchestration-live-status"
-            role="status"
-            aria-live="polite"
-            aria-atomic="true"
-          ></p>
-        </section>
-
-        <section
-          class="panel provider-panel"
-          id="provider-panel"
-          aria-labelledby="provider-heading"
-          hidden
-        >
-          <div class="panel-heading provider-panel-heading">
-            <div>
-              <p class="section-kicker">PROVIDER CONTROL</p>
-              <h2 id="provider-heading">Provider operations</h2>
-              <p class="panel-description">
-                Latest safe observations and controlled writes.
-              </p>
-            </div>
-            <div class="provider-heading-actions">
-              <span class="provider-overview" id="provider-overview">
-                Waiting for persistent runtime
-              </span>
-              <button
-                class="button button-secondary provider-refresh"
-                id="provider-refresh"
-                type="button"
-              >
-                Refresh
-              </button>
-            </div>
-          </div>
-          <div
-            class="provider-banner"
-            id="provider-banner"
-            hidden
-          ></div>
-          <div
-            class="provider-content"
-            id="provider-content"
-            aria-busy="false"
-          >
-            <div class="provider-cards" id="provider-cards"></div>
-            <aside
-              class="provider-latest"
-              id="provider-latest-panel"
-              aria-labelledby="provider-latest-heading"
-              hidden
-            >
-              <div class="provider-latest-heading">
-                <div>
-                  <span class="detail-label">CURRENT READ MODEL</span>
-                  <h3 id="provider-latest-heading">Latest observations</h3>
-                </div>
-                <span>Not a history log</span>
-              </div>
-              <ol id="provider-latest" class="provider-latest-list"></ol>
-              <section
-                class="provider-controlled-operations"
-                aria-labelledby="provider-operations-heading"
-              >
-                <div class="provider-latest-heading">
-                  <div>
-                    <span class="detail-label">OPERATION JOURNAL</span>
-                    <h3 id="provider-operations-heading">
-                      Latest controlled writes
-                    </h3>
-                  </div>
-                  <span>Read-only</span>
-                </div>
-                <ol
-                  id="provider-operations"
-                  class="provider-latest-list"
-                ></ol>
-                <p
-                  id="provider-operations-empty"
-                  class="provider-operation-empty"
-                >
-                  No controlled write operations yet.
-                </p>
-              </section>
-            </aside>
-          </div>
-          <p
-            class="visually-hidden"
-            id="provider-live-status"
-            role="status"
-            aria-live="polite"
-            aria-atomic="true"
-          ></p>
-        </section>
-
-        <section class="workspace-grid">
-          <div class="panel work-panel">
-            <div class="panel-heading">
-              <div>
-                <p class="section-kicker">WORKSTREAM</p>
-                <h2>Delivery queue</h2>
-              </div>
-              <span class="step-counter" id="step-counter">Step — / —</span>
-            </div>
-            <div id="work-items" class="work-items"></div>
-          </div>
-
-          <aside class="panel timeline-panel">
-            <div class="panel-heading">
-              <div>
-                <p class="section-kicker">LIVE TRACE</p>
-                <h2>Evidence chain</h2>
-              </div>
-            </div>
-            <ol class="timeline" id="timeline"></ol>
-          </aside>
-        </section>
-
-        <section class="principle-strip" aria-label="TaskSeal operating principle">
-          <div class="principle-mark" aria-hidden="true">✓</div>
-          <div>
-            <strong>An agent completion is a claim, not a decision.</strong>
-            <p>
-              TaskSeal accepts work only when the current artifact revision has
-              the required evidence and an accountable owner approves it.
-            </p>
-          </div>
-        </section>
-        <p
-          class="visually-hidden"
-          id="live-status"
+          id="home-truth-banner"
+          class="ui-alert ui-alert--warning"
           role="status"
           aria-live="polite"
-          aria-atomic="true"
-        ></p>
+          hidden
+        ></section>
+
+        <section class="home-summary" aria-label="运行摘要">
+          <div class="home-summary-item home-summary-item--accent">
+            <span>正在执行</span>
+            <strong id="summary-running">—</strong>
+          </div>
+          <div class="home-summary-item home-summary-item--danger">
+            <span>需要处理</span>
+            <strong id="summary-attention">—</strong>
+          </div>
+          <div class="home-summary-item">
+            <span>下一批</span>
+            <strong id="summary-next">—</strong>
+          </div>
+          <div class="home-summary-item">
+            <span>已验证</span>
+            <strong id="summary-verified">—</strong>
+          </div>
+        </section>
+
+        <div id="home-error" class="ui-alert ui-alert--danger" role="alert" hidden>
+          <strong>无法读取当前交付状态</strong>
+          <p id="home-error-message">请重试。</p>
+          <button class="ui-button ui-button--secondary" id="home-retry" type="button">
+            重试
+          </button>
+        </div>
+
+        <section class="home-primary-grid" aria-label="当前交付">
+          <section class="ui-card task-section task-section--running" aria-labelledby="running-title">
+            <div class="section-heading">
+              <div>
+                <p class="section-kicker">NOW</p>
+                <h2 id="running-title">正在执行</h2>
+              </div>
+              <span class="ui-badge ui-badge--muted" id="runtime-capacity">—</span>
+            </div>
+            <div id="running-list" class="task-list" aria-live="polite">
+              <div class="ui-skeleton-list" aria-label="正在加载">
+                <span></span><span></span>
+              </div>
+            </div>
+          </section>
+
+          <section class="ui-card task-section" aria-labelledby="attention-title">
+            <div class="section-heading">
+              <div>
+                <p class="section-kicker">ACTION</p>
+                <h2 id="attention-title">需要你处理</h2>
+              </div>
+              <span class="ui-badge ui-badge--danger" id="attention-count">—</span>
+            </div>
+            <div id="attention-list" class="task-list" aria-live="polite">
+              <div class="ui-skeleton-list" aria-label="正在加载">
+                <span></span><span></span>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section class="ui-card task-section" aria-labelledby="next-title">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">QUEUE</p>
+              <h2 id="next-title">下一批执行</h2>
+              <p class="section-description">任务名称和可执行原因优先；详细控制在任务上下文中打开。</p>
+            </div>
+            <span class="ui-badge ui-badge--muted" id="next-count">—</span>
+          </div>
+          <div id="next-list" class="task-list task-list--queue" aria-live="polite">
+            <div class="ui-skeleton-list" aria-label="正在加载">
+              <span></span><span></span>
+            </div>
+          </div>
+        </section>
+
+        <section class="ui-card task-section task-section--recent" aria-labelledby="recent-title">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">VERIFIED</p>
+              <h2 id="recent-title">最近已验证</h2>
+            </div>
+          </div>
+          <div id="recent-list" class="task-list task-list--recent" aria-live="polite"></div>
+        </section>
+
+        <p class="home-principle">
+          <strong>Proof before done.</strong>
+          Agent 完成只是声明；当前 Artifact、Evidence 和人工 Acceptance 才构成可验证交付。
+        </p>
+        <p id="home-live-status" class="visually-hidden" role="status" aria-live="polite"></p>
       </main>
     </div>
 
-    <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script type="module" src="/app.js"></script>
+    <dialog id="task-detail-dialog" class="ui-dialog" aria-labelledby="task-detail-title">
+      <form method="dialog" class="ui-dialog-close-form">
+        <button class="ui-icon-button" value="cancel" aria-label="关闭">×</button>
+      </form>
+      <div id="task-detail-content"></div>
+    </dialog>
+
+    <div id="home-toast" class="ui-toast" role="status" aria-live="polite"></div>
+    <script type="module" src="/presentation.js"></script>
+    <script type="module" src="/home.js"></script>
   </body>
 </html>

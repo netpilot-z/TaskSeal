@@ -9,17 +9,9 @@ import {
 } from "node:path";
 
 import {
-  getFeishuConfiguration,
-  getGiteeCoordinates,
-  getGitHubDeliveryCoordinates,
-  getGitHubCoordinates,
-  getLinearAcceptanceCoordinates,
-  getLinearBootstrapCoordinates,
-  getLinearCoordinates,
-  getLinearProjectCoordinates,
-  getLinearReadyWorkCoordinates,
-  readProjectConfiguration
-} from "../config/project-config.ts";
+  inspectConfiguration,
+  resolveUserConfigurationPath
+} from "./configuration-control.ts";
 import type {
   CodexAppServerInvocation
 } from "../runners/codex-app-server-client.ts";
@@ -76,6 +68,7 @@ export interface AssessRuntimeReadinessOptions {
   readonly commandRunner?: CommandRunner | undefined;
   readonly nodeVersion?: unknown;
   readonly environment?: NodeJS.ProcessEnv | undefined;
+  readonly userConfigurationPath?: string | null | undefined;
 }
 
 interface ResolveCodexInvocationOptions {
@@ -94,7 +87,8 @@ export async function assessRuntimeReadiness({
   cwd,
   commandRunner = runCommand,
   nodeVersion = process.versions.node,
-  environment = process.env
+  environment = process.env,
+  userConfigurationPath
 }: AssessRuntimeReadinessOptions): Promise<RuntimeReadiness> {
   const parsedNodeVersion =
     parseNodeVersion(nodeVersion);
@@ -120,8 +114,15 @@ export async function assessRuntimeReadiness({
         ? "requires Node >=24.12.0 <25"
         : `requires Node ${MINIMUM_NODE_VERSION_LABEL} or newer`
   };
-  const projectInspection =
-    await inspectProjectConfiguration(cwd);
+  const configurationView =
+    await inspectConfiguration({
+      cwd,
+      environment,
+      userConfigurationPath:
+        userConfigurationPath === undefined
+          ? resolveUserConfigurationPath({ environment })
+          : userConfigurationPath
+    });
   let codex:
     RuntimeReadiness["codex"];
 
@@ -193,14 +194,14 @@ export async function assessRuntimeReadiness({
     node,
     project: {
       ready:
-        projectInspection.ready
+        configurationView.ready
     },
     capabilities:
-      projectInspection.capabilities,
+      configurationView.capabilities,
     codex,
     ready:
       node.ready &&
-      projectInspection.ready &&
+      configurationView.ready &&
       codex.available &&
       codex.loggedIn
   };
@@ -381,160 +382,6 @@ export function runCommand(
       });
     });
   });
-}
-
-async function inspectProjectConfiguration(
-  cwd: string
-): Promise<{
-  ready: boolean;
-  capabilities:
-    RuntimeReadiness["capabilities"];
-}> {
-  let configuration;
-  try {
-    configuration =
-      await readProjectConfiguration({
-        cwd
-      });
-  } catch {
-    return {
-      ready: false,
-      capabilities: {
-        github: "invalid",
-        linear: "invalid",
-        gitee: "invalid",
-        feishu: "invalid"
-      }
-    };
-  }
-
-  const capabilities:
-    RuntimeReadiness["capabilities"] = {
-    github:
-      inspectConfiguredCapability(
-        configuration.github,
-        () => {
-          assertOnlyKeys(
-            configuration.github!,
-            [
-              "repository",
-              "delivery"
-            ]
-          );
-          getGitHubCoordinates(
-            configuration
-          );
-          if (
-            configuration.github
-              ?.delivery !== undefined
-          ) {
-            getGitHubDeliveryCoordinates(
-              configuration
-            );
-          }
-        }
-      ),
-    linear:
-      inspectConfiguredCapability(
-        configuration.linear,
-        () => {
-          assertOnlyKeys(
-            configuration.linear!,
-            [
-              "workspace",
-              "team",
-              "project",
-              "backlogState",
-              "readyWork",
-              "acceptance"
-            ]
-          );
-          getLinearCoordinates(
-            configuration
-          );
-          if (
-            configuration.linear
-              ?.project !== undefined
-          ) {
-            getLinearProjectCoordinates(
-              configuration
-            );
-          }
-          if (
-            configuration.linear
-              ?.backlogState !==
-            undefined
-          ) {
-            getLinearBootstrapCoordinates(
-              configuration
-            );
-          }
-          if (
-            configuration.linear
-              ?.readyWork !==
-            undefined
-          ) {
-            getLinearReadyWorkCoordinates(
-              configuration
-            );
-          }
-          if (
-            configuration.linear
-              ?.acceptance !==
-            undefined
-          ) {
-            getLinearAcceptanceCoordinates(
-              configuration
-            );
-          }
-        }
-      ),
-    gitee:
-      inspectConfiguredCapability(
-        configuration.gitee,
-        () =>
-          getGiteeCoordinates(
-            configuration
-          )
-      ),
-    feishu:
-      inspectConfiguredCapability(
-        configuration.feishu,
-        () =>
-          getFeishuConfiguration(
-            configuration
-          )
-      )
-  };
-
-  return {
-    ready:
-      !Object.values(
-        capabilities
-      ).includes("invalid"),
-    capabilities
-  };
-}
-
-function inspectConfiguredCapability(
-  configuration:
-    | Readonly<Record<string, unknown>>
-    | undefined,
-  inspect: () => unknown
-):
-  | "ready"
-  | "disabled"
-  | "invalid" {
-  if (configuration === undefined) {
-    return "disabled";
-  }
-
-  try {
-    inspect();
-    return "ready";
-  } catch {
-    return "invalid";
-  }
 }
 
 async function discoverCodexAppExecutables(
@@ -728,22 +575,6 @@ function readCommandResult(
   };
 }
 
-function assertOnlyKeys(
-  value: Readonly<
-    Record<string, unknown>
-  >,
-  allowed: readonly string[]
-): void {
-  if (
-    !Object.keys(value).every(
-      (key) => allowed.includes(key)
-    )
-  ) {
-    throw new TypeError(
-      "TaskSeal project configuration contains unsupported fields."
-    );
-  }
-}
 
 function formatDiagnostic(
   ready: boolean,

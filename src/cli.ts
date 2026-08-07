@@ -56,6 +56,39 @@ import {
   resolveCodexInvocation,
   runCommand
 } from "./application/runtime-readiness.ts";
+import {
+  DEFAULT_CONTROL_ROOM_PORT,
+  inspectConfiguration,
+  resolveUserConfigurationPath
+} from "./application/configuration-control.ts";
+import {
+  editConfigurationDraft,
+  launchConfigurationEditor
+} from "./application/configuration-editor.ts";
+import {
+  createLocalConfigurationAuthority,
+  resolveConfigurationAuthority
+} from "./application/configuration-authority.ts";
+import type {
+  ConfigurationChangeInput,
+  ConfigurationFieldView,
+  InspectConfigurationOptions,
+  ConfigurationView
+} from "./application/configuration-control.ts";
+import type {
+  ConfigurationEditor
+} from "./application/configuration-editor.ts";
+import type {
+  ConfigurationAuthority
+} from "./application/configuration-authority.ts";
+import {
+  createPresentation,
+  resolveLocale
+} from "./presentation/i18n.ts";
+import type {
+  LocalizedPresentation,
+  SupportedLocale
+} from "./presentation/i18n.ts";
 import type {
   AssessRuntimeReadinessOptions,
   CommandRunner,
@@ -97,6 +130,7 @@ import type {
 } from "./application/managed-attempt-runner.ts";
 import type {
   PersistentAcceptancePort,
+  PersistentConfigurationPort,
   PersistentDecompositionControlPort,
   PersistentServicePort,
   RunWorkItemOptions
@@ -331,6 +365,7 @@ type ProviderObservationCoordinatorFactory = (options: {
 interface StartControlRoomOptions {
   cwd: string;
   output: OutputPort;
+  environment?: NodeJS.ProcessEnv | undefined;
 }
 
 type StartControlRoom = (
@@ -351,6 +386,9 @@ export interface RunCliOptions {
   now?: (() => Date) | undefined;
   commandRunner?: CommandRunner | undefined;
   nodeVersion?: unknown;
+  environment?: NodeJS.ProcessEnv | undefined;
+  userConfigurationPath?: string | null | undefined;
+  detectedLocales?: readonly string[] | undefined;
   startControlRoom?: StartControlRoom | undefined;
   runWorkItem?: RunCliWorkItem | undefined;
   inspectGitHubIssue?: InspectGitHubIssue | undefined;
@@ -373,6 +411,7 @@ export interface RunCliOptions {
   checkPluginManifest?:
     | CheckPluginManifest
     | undefined;
+  configurationEditor?: ConfigurationEditor | undefined;
 }
 
 interface RunLocalCodexWorkItemOptions {
@@ -429,6 +468,52 @@ interface ParsedRunArguments {
     | "read-only"
     | "workspace-write";
 }
+
+interface ParsedGlobalArguments {
+  readonly args: string[];
+  readonly language:
+    | "auto"
+    | SupportedLocale
+    | undefined;
+}
+
+type ParsedConfigurationCommand =
+  | {
+      readonly action: "list" | "validate";
+      readonly json: boolean;
+    }
+  | {
+      readonly action: "template";
+      readonly provider: ProviderTemplateName;
+      readonly json: boolean;
+    }
+  | {
+      readonly action: "get";
+      readonly field: string;
+      readonly json: boolean;
+    }
+  | {
+      readonly action: "set";
+      readonly field: string;
+      readonly value: string;
+      readonly json: boolean;
+    }
+  | {
+      readonly action: "unset";
+      readonly field: string;
+      readonly json: boolean;
+    }
+  | {
+      readonly action: "edit";
+      readonly scope: "user" | "project" | "local";
+      readonly json: boolean;
+    };
+
+type ProviderTemplateName =
+  | "github"
+  | "linear"
+  | "feishu"
+  | "gitee";
 
 interface ParsedVersionedArguments {
   values: Record<string, string>;
@@ -507,6 +592,9 @@ interface StartPersistentControlRoomOptions {
         | ControlRoomLock
         | Promise<ControlRoomLock>)
     | undefined;
+  resolveAuthority?:
+    | typeof resolveConfigurationAuthority
+    | undefined;
   runtimeFactory?:
     | ((
         options: CreateLocalCodexRuntimeOptions
@@ -557,6 +645,7 @@ interface StartPersistentControlRoomOptions {
           acceptanceCapabilities:
             LocalLinearAcceptanceRuntime["capabilities"];
           operatorId: string | null;
+          configuration?: PersistentConfigurationPort | null | undefined;
           decomposition?:
             | PersistentDecompositionControlPort
             | null
@@ -589,9 +678,17 @@ const processSignalSource: SignalSourcePort = {
 };
 
 const USAGE = `Usage:
+  taskseal help [command]
   taskseal init
   taskseal demo init
   taskseal doctor
+  taskseal config list [--json] [--lang auto|en|zh-CN]
+  taskseal config get <field> [--json] [--lang auto|en|zh-CN]
+  taskseal config validate [--json] [--lang auto|en|zh-CN]
+  taskseal config set <field> <value> [--json] [--lang auto|en|zh-CN]
+  taskseal config unset <field> [--json] [--lang auto|en|zh-CN]
+  taskseal config edit <user|project|local> [--json] [--lang auto|en|zh-CN]
+  taskseal config template <github|linear|feishu|gitee> [--json]
   taskseal start
   taskseal plugin check <manifest.json>
   taskseal run <work-item-id> [--prompt <text>] [--read-only|--workspace-write]
@@ -610,6 +707,82 @@ const USAGE = `Usage:
   taskseal sync linear --dry-run [--source <repository-relative-path>]
 `;
 
+const CONFIGURATION_HELP_NOTE = `
+Provider templates are safe configuration fragments for config/project.json.
+They do not read the current project and do not include credentials.
+`;
+
+const HELP_TOPICS = new Set([
+  "init",
+  "demo",
+  "doctor",
+  "config",
+  "start",
+  "plugin",
+  "run",
+  "inspect",
+  "ready",
+  "reconcile",
+  "sync"
+]);
+
+const PROVIDER_CONFIGURATION_TEMPLATES: Record<
+  ProviderTemplateName,
+  Record<string, unknown>
+> = {
+  github: {
+    github: {
+      repository: "owner/repository",
+      delivery: {
+        enabled: false,
+        mappingIndex: "config/github-delivery-map.json"
+      }
+    }
+  },
+  linear: {
+    linear: {
+      workspace: "workspace-key",
+      team: "team-key",
+      project: "Project Name",
+      backlogState: "Backlog",
+      readyWork: {
+        enabled: false,
+        readyState: "Todo",
+        completedState: "Done",
+        dependencyIndex: "config/linear-dependency-map.json"
+      },
+      acceptance: {
+        enabled: false
+      }
+    }
+  },
+  feishu: {
+    feishu: {
+      enabled: true,
+      tableScopeKey: `feishu:table:sha256:${"0".repeat(64)}`
+    }
+  },
+  gitee: {
+    gitee: {
+      repository: "owner/repository"
+    }
+  }
+};
+
+const PROVIDER_TEMPLATE_PLACEHOLDERS: Record<
+  ProviderTemplateName,
+  readonly string[]
+> = {
+  github: ["github.repository"],
+  linear: [
+    "linear.workspace",
+    "linear.team",
+    "linear.project"
+  ],
+  feishu: ["feishu.tableScopeKey"],
+  gitee: ["gitee.repository"]
+};
+
 export async function runCli({
   args = process.argv.slice(2),
   cwd = process.cwd(),
@@ -617,6 +790,9 @@ export async function runCli({
   now = () => new Date(),
   commandRunner = runCommand,
   nodeVersion = process.versions.node,
+  environment = process.env,
+  userConfigurationPath = null,
+  detectedLocales = ["en"],
   startControlRoom = startPersistentControlRoom,
   runWorkItem,
   inspectGitHubIssue,
@@ -630,16 +806,45 @@ export async function runCli({
   executeLinearReadyWork,
   executeGitHubReconciliation,
   providerObservationCoordinatorFactory,
-  checkPluginManifest
+  checkPluginManifest,
+  configurationEditor
 }: RunCliOptions = {}): Promise<CliExitCode> {
+  const globalArguments = parseGlobalArguments(args);
+  if (globalArguments === null) {
+    output.write(USAGE);
+    return 2;
+  }
+  args = globalArguments.args;
   const command = args[0] ?? "start";
 
   if (
     command === "help" ||
     command === "--help"
   ) {
-    output.write(USAGE);
-    return 0;
+    if (command === "--help" || args.length === 1) {
+      output.write(USAGE);
+      return 0;
+    }
+    if (args.length !== 2) {
+      output.write(USAGE);
+      return 2;
+    }
+    const topic = args[1];
+    const help =
+      typeof topic === "string"
+        ? renderCommandHelp(topic)
+        : null;
+    output.write(help ?? USAGE);
+    return help === null ? 2 : 0;
+  }
+
+  if (
+    args.length === 2 &&
+    (args[1] === "--help" || args[1] === "-h")
+  ) {
+    const help = renderCommandHelp(command);
+    output.write(help ?? USAGE);
+    return help === null ? 2 : 0;
   }
 
   if (command === "--version") {
@@ -647,6 +852,76 @@ export async function runCli({
       `${TASKSEAL_PACKAGE_VERSION}\n`
     );
     return 0;
+  }
+
+  if (command === "config") {
+    const configurationCommand =
+      parseConfigurationCommand(args.slice(1));
+    if (configurationCommand === null) {
+      output.write(renderCommandHelp("config")!);
+      return 2;
+    }
+
+    if (configurationCommand.action === "template") {
+      output.write(renderProviderConfigurationTemplate(
+        configurationCommand.provider,
+        configurationCommand.json
+      ));
+      return 0;
+    }
+
+    const context = {
+      cwd,
+      userConfigurationPath:
+        userConfigurationPath === undefined
+          ? resolveUserConfigurationPath({ environment })
+          : userConfigurationPath,
+      environment
+    } as const;
+    try {
+      const authority = await resolveConfigurationAuthority(context);
+      const view = await authority.inspect();
+      const presentation = createPresentation(
+        resolveLocale({
+          command: globalArguments.language,
+          user: readConfigurationLocale(view),
+          detected: detectedLocales
+        })
+      );
+      return runConfigurationCommand({
+        command: configurationCommand,
+        view,
+        output,
+        presentation,
+        context,
+        authority,
+        editor:
+          configurationEditor ??
+          ((request) => launchConfigurationEditor({
+            ...request,
+            environment
+          }))
+      });
+    } catch (error) {
+      const code = readConfigurationErrorCode(error);
+      if (configurationCommand.json) {
+        output.write(`${JSON.stringify({
+          schemaVersion: "configuration-error/v1",
+          code
+        }, null, 2)}\n`);
+      } else {
+        const presentation = createPresentation(
+          resolveLocale({
+            command: globalArguments.language,
+            detected: detectedLocales
+          })
+        );
+        output.write(`${presentation.message("config.write.failed", {
+          code
+        })}\n`);
+      }
+      return 1;
+    }
   }
 
   if (command === "plugin") {
@@ -716,20 +991,77 @@ export async function runCli({
   }
 
   if (command === "doctor") {
+    const resolvedUserConfigurationPath =
+      userConfigurationPath === undefined
+        ? resolveUserConfigurationPath({ environment })
+        : userConfigurationPath;
     const diagnostics = await assessRuntimeReadiness({
       cwd,
       commandRunner,
-      nodeVersion
+      nodeVersion,
+      environment,
+      userConfigurationPath: resolvedUserConfigurationPath
     });
+    const configurationView = await inspectConfiguration({
+      cwd,
+      environment,
+      userConfigurationPath: resolvedUserConfigurationPath
+    });
+    const presentation = createPresentation(
+      resolveLocale({
+        command: globalArguments.language,
+        user: readConfigurationLocale(configurationView),
+        detected: detectedLocales
+      })
+    );
     output.write(
-      renderRuntimeReadiness(diagnostics)
+      presentation.locale === "en"
+        ? renderRuntimeReadiness(diagnostics)
+        : renderLocalizedRuntimeReadiness(
+            diagnostics,
+            presentation
+          )
     );
     return diagnostics.ready ? 0 : 1;
   }
 
   if (command === "start") {
-    await startControlRoom({ cwd, output });
-    return 0;
+    try {
+      await startControlRoom({ cwd, output, environment });
+      return 0;
+    } catch (error) {
+      let presentation = createPresentation(
+        resolveLocale({
+          command: globalArguments.language,
+          detected: detectedLocales
+        })
+      );
+      try {
+        const configurationView = await inspectConfiguration({
+          cwd,
+          environment,
+          userConfigurationPath:
+            userConfigurationPath === undefined
+              ? resolveUserConfigurationPath({ environment })
+              : userConfigurationPath
+        });
+        presentation = createPresentation(
+          resolveLocale({
+            command: globalArguments.language,
+            user: readConfigurationLocale(configurationView),
+            detected: detectedLocales
+          })
+        );
+      } catch {
+        // The start error remains authoritative and safely renderable.
+      }
+      output.write(renderStartError(error, presentation));
+      return isRecord(error) &&
+        error.code === "CONTROL_ROOM_ALREADY_RUNNING" &&
+        error.verified === true
+        ? 0
+        : 1;
+    }
   }
 
   if (command === "run") {
@@ -1480,6 +1812,427 @@ function captureConfigurationSeedTimestamp(
   return new Date(value.getTime() - 1).toISOString();
 }
 
+function parseGlobalArguments(
+  input: readonly string[]
+): ParsedGlobalArguments | null {
+  const args: string[] = [];
+  let language:
+    | ParsedGlobalArguments["language"];
+
+  for (let index = 0; index < input.length; index += 1) {
+    const argument = input[index]!;
+    if (argument !== "--lang") {
+      args.push(argument);
+      continue;
+    }
+
+    const value = input[index + 1];
+    if (
+      language !== undefined ||
+      (value !== "auto" && value !== "en" && value !== "zh-CN")
+    ) {
+      return null;
+    }
+    language = value;
+    index += 1;
+  }
+
+  return { args, language };
+}
+
+function renderCommandHelp(topic: string): string | null {
+  if (!HELP_TOPICS.has(topic)) {
+    return null;
+  }
+  const commandPrefix = `  taskseal ${topic}`;
+  const commandLines = USAGE
+    .split("\n")
+    .filter((line) => line.startsWith(commandPrefix));
+  const note = topic === "config"
+    ? CONFIGURATION_HELP_NOTE
+    : "\nRun `taskseal help` to see all commands.\n";
+  return `Usage:\n${commandLines.join("\n")}\n${note}`;
+}
+
+function renderProviderConfigurationTemplate(
+  provider: ProviderTemplateName,
+  json: boolean
+): string {
+  const fragment = PROVIDER_CONFIGURATION_TEMPLATES[provider];
+  if (json) {
+    return `${JSON.stringify({
+      schemaVersion: "configuration-template/v1",
+      provider,
+      credentialPolicy: "not-included",
+      replaceBeforeUse: PROVIDER_TEMPLATE_PLACEHOLDERS[provider],
+      fragment
+    }, null, 2)}\n`;
+  }
+  return [
+    `# ${provider} provider configuration template`,
+    "# Merge this fragment into config/project.json.",
+    `# Replace before use: ${PROVIDER_TEMPLATE_PLACEHOLDERS[provider].join(", ")}.`,
+    "# Credentials are not included; keep them in supported environment bindings.",
+    JSON.stringify(fragment, null, 2),
+    ""
+  ].join("\n");
+}
+
+function parseConfigurationCommand(
+  input: readonly string[]
+): ParsedConfigurationCommand | null {
+  const jsonCount = input.filter((value) => value === "--json").length;
+  if (jsonCount > 1) {
+    return null;
+  }
+  const args = input.filter((value) => value !== "--json");
+  const json = jsonCount === 1;
+
+  if (
+    args.length === 1 &&
+    (args[0] === "list" || args[0] === "validate")
+  ) {
+    return { action: args[0], json };
+  }
+  if (
+    args.length === 2 &&
+    args[0] === "template" &&
+    (args[1] === "github" ||
+      args[1] === "linear" ||
+      args[1] === "feishu" ||
+      args[1] === "gitee")
+  ) {
+    return {
+      action: "template",
+      provider: args[1],
+      json
+    };
+  }
+  if (
+    args.length === 2 &&
+    (args[0] === "get" || args[0] === "unset") &&
+    typeof args[1] === "string" &&
+    /^[a-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)*$/.test(args[1])
+  ) {
+    return { action: args[0], field: args[1], json };
+  }
+  if (
+    args.length === 2 &&
+    args[0] === "edit" &&
+    (args[1] === "user" ||
+      args[1] === "project" ||
+      args[1] === "local")
+  ) {
+    return { action: "edit", scope: args[1], json };
+  }
+  if (
+    args.length === 3 &&
+    args[0] === "set" &&
+    typeof args[1] === "string" &&
+    typeof args[2] === "string" &&
+    /^[a-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)*$/.test(args[1])
+  ) {
+    return {
+      action: "set",
+      field: args[1],
+      value: args[2],
+      json
+    };
+  }
+  return null;
+}
+
+async function runConfigurationCommand({
+  command,
+  view,
+  output,
+  presentation,
+  context,
+  authority,
+  editor
+}: {
+  readonly command: ParsedConfigurationCommand;
+  readonly view: ConfigurationView;
+  readonly output: OutputPort;
+  readonly presentation: LocalizedPresentation;
+  readonly context: InspectConfigurationOptions;
+  readonly authority: ConfigurationAuthority;
+  readonly editor: ConfigurationEditor;
+}): Promise<CliExitCode> {
+  if (command.action === "list") {
+    if (command.json) {
+      output.write(`${JSON.stringify(view, null, 2)}\n`);
+      return 0;
+    }
+    const lines = [
+      presentation.message(
+        view.ready ? "config.list.ready" : "config.list.invalid"
+      ),
+      ...view.fields.map((field) =>
+        renderConfigurationField(field, presentation)
+      ),
+      ...view.diagnostics.map((diagnostic) =>
+        presentation.message(diagnostic.messageKey)
+      )
+    ];
+    output.write(`${lines.join("\n")}\n`);
+    return 0;
+  }
+
+  if (command.action === "get") {
+    const field = view.fields.find(
+      (candidate) => candidate.key === command.field
+    );
+    if (field === undefined) {
+      if (command.json) {
+        output.write(`${JSON.stringify({
+          schemaVersion: "configuration-field/v1",
+          field: command.field,
+          found: false,
+          code: "CONFIG_FIELD_NOT_FOUND"
+        }, null, 2)}\n`);
+      } else {
+        output.write(`${presentation.message("config.field.notFound", {
+          field: command.field
+        })}\n`);
+      }
+      return 1;
+    }
+    if (command.json) {
+      output.write(`${JSON.stringify({
+        schemaVersion: "configuration-field/v1",
+        found: true,
+        field
+      }, null, 2)}\n`);
+    } else {
+      output.write(`${renderConfigurationField(field, presentation)}\n`);
+    }
+    return 0;
+  }
+
+  if (command.action === "edit") {
+    try {
+      const receipt = await editConfigurationDraft({
+        context,
+        scope: command.scope,
+        editor,
+        authority
+      });
+      if (command.json) {
+        output.write(`${JSON.stringify(receipt, null, 2)}\n`);
+      } else {
+        const lines = [
+          presentation.message(
+            receipt.replayed
+              ? "config.edit.replayed"
+              : "config.edit.applied",
+            {
+              scope: presentation.message(
+                `config.scope.${command.scope}`
+              )
+            }
+          ),
+          ...(receipt.restartRequired
+            ? [presentation.message("config.write.restartRequired")]
+            : [])
+        ];
+        output.write(`${lines.join("\n")}\n`);
+      }
+      return 0;
+    } catch (error) {
+      const code = readConfigurationErrorCode(error);
+      if (command.json) {
+        output.write(`${JSON.stringify({
+          schemaVersion: "configuration-error/v1",
+          code
+        }, null, 2)}\n`);
+      } else {
+        output.write(`${presentation.message("config.write.failed", {
+          code
+        })}\n`);
+      }
+      return 1;
+    }
+  }
+
+  if (
+    command.action === "set" ||
+    command.action === "unset"
+  ) {
+    const change: ConfigurationChangeInput =
+      command.action === "set"
+        ? {
+            operation: "set",
+            key: command.field,
+            value: parseConfigurationCliValue(
+              command.field,
+              command.value
+            )
+          }
+        : {
+            operation: "unset",
+            key: command.field
+          };
+    try {
+      const receipt = await authority.applyChange(
+        change,
+        view.revision
+      );
+      if (command.json) {
+        output.write(`${JSON.stringify(receipt, null, 2)}\n`);
+      } else {
+        const lines = [
+          presentation.message(
+            receipt.replayed
+              ? "config.write.replayed"
+              : command.action === "set"
+                ? "config.write.set"
+                : "config.write.unset",
+            { field: command.field }
+          ),
+          ...(receipt.restartRequired
+            ? [presentation.message("config.write.restartRequired")]
+            : [])
+        ];
+        output.write(`${lines.join("\n")}\n`);
+      }
+      return 0;
+    } catch (error) {
+      const code = readConfigurationErrorCode(error);
+      if (command.json) {
+        output.write(`${JSON.stringify({
+          schemaVersion: "configuration-error/v1",
+          code
+        }, null, 2)}\n`);
+      } else {
+        output.write(`${presentation.message("config.write.failed", {
+          code
+        })}\n`);
+      }
+      return 1;
+    }
+  }
+
+  const validation = {
+    schemaVersion: "configuration-validation/v1",
+    valid: view.ready,
+    revision: view.revision,
+    diagnostics: view.diagnostics
+  } as const;
+  if (command.json) {
+    output.write(`${JSON.stringify(validation, null, 2)}\n`);
+  } else {
+    const lines = [
+      presentation.message(
+        view.ready
+          ? "config.validation.ready"
+          : "config.validation.invalid"
+      ),
+      ...view.diagnostics.map((diagnostic) =>
+        presentation.message(diagnostic.messageKey)
+      )
+    ];
+    output.write(`${lines.join("\n")}\n`);
+  }
+  return view.ready ? 0 : 1;
+}
+
+function parseConfigurationCliValue(
+  key: string,
+  value: string
+): string | number | boolean {
+  if (key === "runtime.port") {
+    return /^\d+$/.test(value)
+      ? Number(value)
+      : value;
+  }
+  if (
+    key.endsWith(".enabled") &&
+    (value === "true" || value === "false")
+  ) {
+    return value === "true";
+  }
+  return value;
+}
+
+function readConfigurationErrorCode(error: unknown): string {
+  return error instanceof Error &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    (/^CONFIG_[A-Z_]+$/.test(error.code) ||
+      error.code === "CONTROL_ROOM_HANDOFF_UNAVAILABLE")
+    ? error.code
+    : "CONFIG_WRITE_FAILED";
+}
+
+function renderConfigurationField(
+  field: ConfigurationFieldView,
+  presentation: LocalizedPresentation
+): string {
+  return presentation.message("config.field.value", {
+    field: field.key,
+    value: String(field.value),
+    source: field.source
+  });
+}
+
+function readConfigurationLocale(
+  view: ConfigurationView
+): unknown {
+  return view.fields.find((field) => field.key === "ui.locale")?.value;
+}
+
+function renderLocalizedRuntimeReadiness(
+  readiness: RuntimeReadiness,
+  presentation: LocalizedPresentation
+): string {
+  const capabilityNames = {
+    github: presentation.message("doctor.integration.github"),
+    linear: presentation.message("doctor.integration.linear"),
+    gitee: presentation.message("doctor.integration.gitee"),
+    feishu: presentation.message("doctor.integration.feishu")
+  } as const;
+  const lines = [
+    presentation.message(
+      readiness.node.ready
+        ? "doctor.node.ready"
+        : "doctor.node.invalid",
+      {
+        version: readiness.node.version,
+        failure: readiness.node.failure
+      }
+    ),
+    presentation.message(
+      readiness.project.ready
+        ? "doctor.project.ready"
+        : "doctor.project.invalid"
+    ),
+    presentation.message(
+      readiness.codex.available
+        ? "doctor.codex.ready"
+        : "doctor.codex.invalid",
+      { version: readiness.codex.version ?? "" }
+    ),
+    presentation.message(
+      readiness.codex.loggedIn
+        ? "doctor.login.ready"
+        : "doctor.login.invalid"
+    ),
+    ...(
+      Object.keys(capabilityNames) as Array<keyof typeof capabilityNames>
+    ).map((provider) =>
+      presentation.message(
+        `doctor.capability.${readiness.capabilities[provider]}` as
+          | "doctor.capability.ready"
+          | "doctor.capability.disabled"
+          | "doctor.capability.invalid",
+        { name: capabilityNames[provider] }
+      )
+    )
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
 function parseRunArguments(
   args: readonly string[]
 ): ParsedRunArguments | null {
@@ -2203,6 +2956,27 @@ function renderGitHubReconciliationError(
   return "TaskSeal reconcile failed [GITHUB_RECONCILE_FAILED]: GitHub delivery reconciliation failed.\n";
 }
 
+function renderStartError(
+  error: unknown,
+  presentation: LocalizedPresentation
+): string {
+  if (
+    isRecord(error) &&
+    error.code === "CONTROL_ROOM_PORT_UNAVAILABLE"
+  ) {
+    return `${presentation.message("start.portUnavailable")}\n`;
+  }
+  if (
+    isRecord(error) &&
+    error.code === "CONTROL_ROOM_ALREADY_RUNNING"
+  ) {
+    return `${presentation.message("start.alreadyRunning")}\n`;
+  }
+  return `${presentation.message("start.failed", {
+    code: renderErrorCode(error)
+  })}\n`;
+}
+
 function renderErrorCode(error: unknown): string {
   return isRecord(error) &&
     typeof error.code === "string" &&
@@ -2231,6 +3005,8 @@ export async function startPersistentControlRoom({
   initialize = initializeProject,
   acquireLock =
     acquireControlRoomLock,
+  resolveAuthority =
+    resolveConfigurationAuthority,
   runtimeFactory = createLocalCodexRuntime,
   providerObservationRuntimeFactory =
     createLocalProviderObservationRuntime,
@@ -2243,7 +3019,10 @@ export async function startPersistentControlRoom({
   ControlRoomServerPort
 > {
   const host = environment.HOST ?? "127.0.0.1";
-  const port = Number(environment.PORT ?? 4317);
+  const environmentPort =
+    environment.PORT === undefined
+      ? null
+      : Number(environment.PORT);
   const maxConcurrentRuns =
     readMaxConcurrentRuns(
       environment.TASKSEAL_MAX_CONCURRENT_RUNS
@@ -2252,14 +3031,33 @@ export async function startPersistentControlRoom({
   if (
     typeof host !== "string" ||
     !["127.0.0.1", "localhost", "::1"].includes(host.toLowerCase()) ||
-    !Number.isInteger(port) ||
-    port < 0 ||
-    port > 65_535
+    (environmentPort !== null &&
+      (!Number.isInteger(environmentPort) ||
+        environmentPort < 0 ||
+        environmentPort > 65_535))
   ) {
     throw new TypeError(
       "TaskSeal HOST must be loopback and PORT must be valid."
     );
   }
+
+  const configurationView =
+    environmentPort === null
+      ? await inspectConfiguration({
+          cwd,
+          environment,
+          userConfigurationPath:
+            resolveUserConfigurationPath({ environment })
+        })
+      : null;
+  const configuredPort =
+    configurationView?.fields.find(
+      (field) => field.key === "runtime.port"
+    )?.value;
+  const port = environmentPort ??
+    (typeof configuredPort === "number"
+      ? configuredPort
+      : DEFAULT_CONTROL_ROOM_PORT);
 
   const readiness =
     await assessReadiness({
@@ -2277,8 +3075,45 @@ export async function startPersistentControlRoom({
   }
 
   await initialize({ cwd });
-  const lock =
-    await acquireLock({ cwd });
+  let lock: ControlRoomLock;
+  try {
+    lock = await acquireLock({
+      cwd,
+      ...(port === 0
+        ? {}
+        : { endpoint: { host: host.toLowerCase(), port } })
+    });
+  } catch (error) {
+    let verifiedRunningInstance = false;
+    if (
+      isRecord(error) &&
+      error.code === "CONTROL_ROOM_ALREADY_RUNNING"
+    ) {
+      try {
+        const authority = await resolveAuthority({
+          cwd,
+          environment,
+          userConfigurationPath:
+            resolveUserConfigurationPath({ environment })
+        });
+        if (authority.kind === "running-instance") {
+          await authority.inspect();
+          verifiedRunningInstance = true;
+        }
+      } catch {
+        // An unverified lock remains a hard startup failure.
+      }
+    }
+    if (verifiedRunningInstance) {
+      throw Object.assign(
+        error instanceof Error
+          ? error
+          : new Error("The TaskSeal Control Room is already running."),
+        { verified: true }
+      );
+    }
+    throw error;
+  }
   try {
     const {
       readModel:
@@ -2327,9 +3162,32 @@ export async function startPersistentControlRoom({
           acceptanceRuntime
             .providerOperations
       });
+    const localConfigurationAuthority =
+      createLocalConfigurationAuthority({
+        cwd,
+        environment,
+        userConfigurationPath:
+          resolveUserConfigurationPath({ environment })
+      });
+    const activeConfigurationView =
+      configurationView ??
+      await localConfigurationAuthority.inspect();
+    const configuration: PersistentConfigurationPort | null =
+      lock.instanceId === undefined
+        ? null
+        : {
+            instanceId: lock.instanceId,
+            activeRuntimeRevision:
+              activeConfigurationView.runtimeRevision,
+            inspect: localConfigurationAuthority.inspect,
+            readDraft: localConfigurationAuthority.readDraft,
+            applyChange: localConfigurationAuthority.applyChange,
+            applyDraft: localConfigurationAuthority.applyDraft
+          };
     const server = serverFactory({
       service,
       providerStatus,
+      configuration,
       acceptance:
         acceptanceRuntime.acceptance,
       acceptanceCapabilities:
@@ -2372,20 +3230,32 @@ export async function startPersistentControlRoom({
       }
     });
 
-    await new Promise<void>(
-      (resolve, reject) => {
-        server.once(
-          "error",
-          (error) =>
-            reject(error)
-        );
-        server.listen(
-          port,
-          host,
-          () => resolve()
+    try {
+      await new Promise<void>(
+        (resolve, reject) => {
+          server.once(
+            "error",
+            (error) => reject(error)
+          );
+          server.listen(
+            port,
+            host,
+            () => resolve()
+          );
+        }
+      );
+    } catch (error) {
+      if (
+        isRecord(error) &&
+        (error.code === "EACCES" || error.code === "EADDRINUSE")
+      ) {
+        throw Object.assign(
+          new Error("The Control Room port is unavailable."),
+          { code: "CONTROL_ROOM_PORT_UNAVAILABLE" }
         );
       }
-    );
+      throw error;
+    }
 
     installShutdownHandlers({
       server,
@@ -2576,7 +3446,14 @@ const isMain =
   import.meta.url === pathToFileURL(invokedPath).href;
 
 export async function runTaskSealCli(): Promise<CliExitCode> {
+  const environment = process.env;
   return runCli({
+    environment,
+    userConfigurationPath:
+      resolveUserConfigurationPath({ environment }),
+    detectedLocales: [
+      Intl.DateTimeFormat().resolvedOptions().locale
+    ],
     providerObservationCoordinatorFactory: async ({
       cwd,
       clock

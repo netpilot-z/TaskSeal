@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="TaskSeal provider connections" />
+    <title>TaskSeal 连接</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="home-page connections-page" data-title-key="settings.meta.title">
+    <a class="skip-link" href="#connections-main">跳到主要内容</a>
+    <div class="app-shell">
+      <header class="topbar" aria-label="TaskSeal 控制台">
+        <a class="brand" href="/" aria-label="TaskSeal 运行中心">
+          <span class="brand-mark" aria-hidden="true">TS</span>
+          <span><strong>TaskSeal</strong><small>TaskSeal Control Room</small></span>
+        </a>
+        <nav class="primary-nav" aria-label="主导航">
+          <a href="/">运行中心</a>
+          <a class="is-active" href="/connections" aria-current="page">连接</a>
+          <a href="/settings">设置</a>
+        </nav>
+        <label class="language-control" for="connections-locale">
+          <span class="visually-hidden">语言</span>
+          <select id="connections-locale" data-locale-select>
+            <option value="auto">跟随系统</option>
+            <option value="en">English</option>
+            <option value="zh-CN">简体中文</option>
+          </select>
+        </label>
+      </header>
+      <main id="connections-main" class="home-main">
+        <section class="home-heading">
+          <div>
+            <p class="eyebrow">CONNECTIONS</p>
+            <h1>连接真相</h1>
+            <p class="home-subtitle">只显示配置来源、凭据存在性和最近观察；不会把 Secret 带到浏览器。</p>
+          </div>
+          <div class="home-project-context"><span class="detail-label">配置 revision</span><strong id="connections-revision">—</strong><span id="connections-updated">读取中</span></div>
+        </section>
+        <div id="connections-error" class="ui-alert ui-alert--danger" role="alert" hidden><strong>无法读取连接状态</strong><p id="connections-error-message"></p><button class="ui-button ui-button--secondary" id="connections-retry" type="button">重试</button></div>
+        <section id="connections-list" class="connection-grid" aria-live="polite"><div class="ui-skeleton-list"><span></span><span></span></div></section>
+        <p class="home-principle"><strong>Secret stays out.</strong> 连接页只负责帮助你配置和判断，不代表任何外部写入权限。</p>
+      </main>
+    </div>
+    <script type="module" src="/presentation.js"></script>
+    <script type="module" src="/connections.js"></script>
+  </body>
+</html>

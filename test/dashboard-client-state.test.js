@@ -6,6 +6,7 @@ import {
   createAccessibleOrchestrationState,
   createAccessibleSnapshotState,
   createAcceptanceControlState,
+  createAttemptTimeline,
   createOrchestrationPanelModel,
   createRunControlState,
   DashboardRequestGate,
@@ -16,6 +17,73 @@ import {
   shouldResetAcceptanceReasonError,
   shouldPollDashboard
 } from "../public/dashboard-state.js";
+
+test("live activity keeps the newest attempt first and its summary collapsed from the primary label", () => {
+  const timeline = createAttemptTimeline(
+    [
+      {
+        id: "TS-1",
+        attempts: [
+          {
+            id: "attempt-old",
+            agentId: "codex-app-server",
+            status: "failed",
+            startedAt: "2026-08-05T08:00:00.000Z",
+            summary: "Old diagnostic details"
+          },
+          {
+            id: "attempt-latest",
+            agentId: "codex-app-server",
+            status: "completed",
+            startedAt: "2026-08-05T08:02:00.000Z",
+            summary: "Latest delivery summary"
+          }
+        ]
+      },
+      {
+        id: "TS-2",
+        attempts: [
+          {
+            id: "attempt-running",
+            agentId: "codex-app-server",
+            status: "running",
+            startedAt: "2026-08-05T08:01:00.000Z"
+          }
+        ]
+      }
+    ],
+    {
+      completed: "已完成",
+      failed: "失败",
+      running: "执行中"
+    }
+  );
+
+  assert.deepEqual(
+    timeline.map((step) => ({
+      label: step.label,
+      summary: step.summary,
+      latest: step.latest
+    })),
+    [
+      {
+        label: "TS-1 · attempt-latest · 已完成",
+        summary: "Latest delivery summary",
+        latest: true
+      },
+      {
+        label: "TS-2 · attempt-running · 执行中",
+        summary: null,
+        latest: false
+      },
+      {
+        label: "TS-1 · attempt-old · 失败",
+        summary: "Old diagnostic details",
+        latest: false
+      }
+    ]
+  );
+});
 
 test("dashboard keeps polling until it identifies demo mode", () => {
   assert.equal(shouldPollDashboard(null, false), true);
@@ -859,6 +927,14 @@ test("acceptance controls bind the current review and exact transition decision"
     pending.operatorId,
     "operator.jeffrey"
   );
+  assert.equal(
+    pending.decisionFormAvailable,
+    true
+  );
+  assert.equal(
+    pending.decisionBlockReason,
+    null
+  );
 
   const awaitingFreshTruth =
     createAcceptanceControlState(
@@ -1027,6 +1103,43 @@ test("acceptance controls bind the current review and exact transition decision"
   assert.equal(
     awaitingProviderTruth.providerTruthPending,
     true
+  );
+});
+
+test("acceptance controls explain when the human decision form is unavailable", () => {
+  const control = createAcceptanceControlState(
+    {
+      mode: "persistent",
+      capabilities: {
+        decideAcceptance: false
+      },
+      security: {
+        operatorId: null
+      },
+      workItems: [{
+        id: "TS-8",
+        status: "reviewing",
+        acceptanceReviewRevision:
+          `sha256:${"8".repeat(64)}`,
+        acceptanceDecision: null,
+        activeAttempt: {
+          id: "attempt-8",
+          status: "completed",
+          runtimeOutcome: "completed"
+        },
+        activeArtifact: null,
+        requiredEvidence: ["tests"],
+        currentEvidence: []
+      }]
+    },
+    "TS-8",
+    null
+  );
+
+  assert.equal(control.decisionFormAvailable, false);
+  assert.equal(
+    control.decisionBlockReason,
+    "operator-unavailable"
   );
 });
 

@@ -494,7 +494,8 @@ export function createProviderPanelState() {
   return {
     phase: "idle",
     model: null,
-    message: null
+    message: null,
+    messageCode: null
   };
 }
 
@@ -546,7 +547,8 @@ export function reduceProviderPanelState(state, action) {
     return {
       phase: state.model ? "refreshing" : "loading",
       model: state.model ?? null,
-      message: null
+      message: null,
+      messageCode: null
     };
   }
 
@@ -566,7 +568,8 @@ export function reduceProviderPanelState(state, action) {
         phase: "stale",
         model: state.model,
         message:
-          "Refresh returned older Provider status. Showing the last known state."
+          "Refresh returned older Provider status. Showing the last known state.",
+        messageCode: "provider-refresh-older"
       };
     }
     return {
@@ -576,7 +579,8 @@ export function reduceProviderPanelState(state, action) {
           ? "empty"
           : "ready",
       model: action.model,
-      message: null
+      message: null,
+      messageCode: null
     };
   }
 
@@ -586,7 +590,10 @@ export function reduceProviderPanelState(state, action) {
       model: state.model ?? null,
       message: state.model
         ? "Refresh failed. Showing the last known Provider status."
-        : "Provider status is unavailable."
+        : "Provider status is unavailable.",
+      messageCode: state.model
+        ? "provider-refresh-failed"
+        : "provider-unavailable"
     };
   }
 
